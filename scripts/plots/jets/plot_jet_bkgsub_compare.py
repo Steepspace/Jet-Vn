@@ -27,28 +27,28 @@ KNOWN_VARIATIONS = {
         "marker": "s",
         "order": 1,
     },
-    "neg-thresh-1": {
-        "label": "Neg Thresh -1",
-        "color": "#377eb8",
-        "marker": "^",
+    "neg-thresh-5": {
+        "label": "Neg Thresh -5",
+        "color": "#984ea3",
+        "marker": "D",
         "order": 2,
-    },
-    "neg-thresh-2": {
-        "label": "Neg Thresh -2",
-        "color": "#4daf4a",
-        "marker": "v",
-        "order": 3,
     },
     "neg-thresh-3": {
         "label": "Neg Thresh -3",
         "color": "#ff7f00",
         "marker": "p",
+        "order": 3,
+    },
+    "neg-thresh-2": {
+        "label": "Neg Thresh -2",
+        "color": "#4daf4a",
+        "marker": "v",
         "order": 4,
     },
-    "neg-thresh-5": {
-        "label": "Neg Thresh -5",
-        "color": "#984ea3",
-        "marker": "D",
+    "neg-thresh-1": {
+        "label": "Neg Thresh -1",
+        "color": "#377eb8",
+        "marker": "^",
         "order": 5,
     },
 }
