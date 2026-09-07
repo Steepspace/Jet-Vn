@@ -166,7 +166,17 @@ def calc_ratio_errors(ratio, errs_num, errs_den, vals_den):
     return np.sqrt(errs_num ** 2 + (ratio * errs_den) ** 2) / np.abs(vals_den)
 
 
-def setup_ratio_panel(ax_ratio, xlabel, ylabel="Var / Default", ratio_ylim=None, all_ratios=None, margin_factor=1.35, min_margin=0.01, max_margin=None):
+def setup_ratio_panel(
+    ax_ratio,
+    xlabel,
+    ylabel="Var / Default",
+    ratio_ylim=None,
+    all_ratios=None,
+    margin_factor=1.35,
+    min_margin=0.01,
+    max_margin=None,
+    symmetric=False,
+):
     """Configures the ratio subplot panel with standard layout and dynamic limits."""
     ax_ratio.axhline(1.0, color="gray", linestyle="--", linewidth=1.0)
     ax_ratio.set_xlabel(xlabel)
@@ -179,12 +189,31 @@ def setup_ratio_panel(ax_ratio, xlabel, ylabel="Var / Default", ratio_ylim=None,
         arr_r = np.array(all_ratios)
         valid_r = arr_r[~np.isnan(arr_r)]
         if len(valid_r) > 0:
-            max_dev = np.max(np.abs(valid_r - 1.0))
-            margin = max(max_dev * margin_factor, min_margin)
-            if max_margin is not None:
-                margin = min(margin, max_margin)
+            r_min = float(np.min(valid_r))
+            r_max = float(np.max(valid_r))
+            dev_down = max(0.0, 1.0 - r_min)
+            dev_up = max(0.0, r_max - 1.0)
+
+            if symmetric or abs(dev_down - dev_up) < 0.01:
+                max_dev = max(dev_down, dev_up)
+                margin = max(max_dev * margin_factor, min_margin)
+                if max_margin is not None:
+                    margin = min(margin, max_margin)
                 margin = np.ceil(margin * 100.0) / 100.0
-            ax_ratio.set_ylim(1.0 - margin, 1.0 + margin)
+                ax_ratio.set_ylim(1.0 - margin, 1.0 + margin)
+            else:
+                margin_down = max(dev_down * margin_factor, min_margin)
+                margin_up = max(dev_up * margin_factor, min_margin)
+                if max_margin is not None:
+                    margin_down = min(margin_down, max_margin)
+                    margin_up = min(margin_up, max_margin)
+                margin_down = np.ceil(margin_down * 100.0) / 100.0
+                margin_up = np.ceil(margin_up * 100.0) / 100.0
+                y_min = 1.0 - margin_down
+                y_max = 1.0 + margin_up
+                if r_min >= 0:
+                    y_min = max(0.0, y_min)
+                ax_ratio.set_ylim(y_min, y_max)
         else:
             ax_ratio.set_ylim(1.0 - min_margin, 1.0 + min_margin)
     else:
@@ -377,7 +406,7 @@ def plot_1d_hist_overlay(run_number, hist_name, r_jet, variations, var_metadata,
     ax.set_yscale("log")
     ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
     ax.set_ylim(bottom=0.5, top=max_y_val * 10)
-    ax.set_xlim(left=0, right=pt_max if pt_max is not None else min(max(max_x_val, 60), 80))
+    ax.set_xlim(left=0, right=pt_max if pt_max is not None else max(max_x_val, 60))
     ax.set_ylabel("Counts")
 
     ax.text(1.0, 1.01, rf"Run: {run_number}, $R = {r_jet:g}$", transform=ax.transAxes, ha="right", va="bottom", fontsize=15)
@@ -385,7 +414,7 @@ def plot_1d_hist_overlay(run_number, hist_name, r_jet, variations, var_metadata,
     ax.legend(loc="upper right", bbox_to_anchor=(0.95, 0.65), frameon=False, fontsize=13)
 
     if ax_ratio is not None:
-        setup_ratio_panel(ax_ratio, xlabel=r"Jet $p_{T}$ [GeV]", ratio_ylim=ratio_ylim, all_ratios=all_ratios, min_margin=0.05)
+        setup_ratio_panel(ax_ratio, xlabel=r"Jet $p_{T}$ [GeV]", ratio_ylim=ratio_ylim, all_ratios=all_ratios, min_margin=0.06)
         plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
     else:
         ax.set_xlabel(r"Jet $p_{T}$ [GeV]")
@@ -394,6 +423,15 @@ def plot_1d_hist_overlay(run_number, hist_name, r_jet, variations, var_metadata,
 
     save_fig(fig, output_path, save_pdf)
     plt.close(fig)
+
+    # If auto x-max is above 60 and pt_max was not explicitly set, also make a version with x-max set to 60
+    if pt_max is None and max_x_val > 60:
+        pt60_path = output_path.with_name(f"{output_path.stem}_pt60{output_path.suffix}")
+        plot_1d_hist_overlay(
+            run_number, hist_name, r_jet, variations, var_metadata, pt60_path,
+            show_ratio=show_ratio, ratio_ylim=ratio_ylim, shift_step=shift_step,
+            pt_max=60, save_pdf=save_pdf,
+        )
 
 
 def plot_jet_eta_overlay(run_number, hist_name, r_jet, variations, var_metadata, output_path, show_ratio=False, ratio_ylim=None, shift_step=0.005, save_pdf=False):
@@ -786,7 +824,7 @@ def main():
         "--pt-max",
         type=float,
         default=None,
-        help="Maximum x-axis limit for Jet pT plots (default: auto)"
+        help="Maximum x-axis limit for Jet pT plots (default: auto; automatically generates an additional version with x-max=60 if auto-range > 60)"
     )
     parser.add_argument(
         "--save-pdf",
