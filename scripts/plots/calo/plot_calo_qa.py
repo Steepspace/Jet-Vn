@@ -21,6 +21,13 @@ from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+# Add script directory to sys.path to allow importing tower_info_defs
+_script_dir = Path(__file__).resolve().parent
+if str(_script_dir) not in sys.path:
+    sys.path.insert(0, str(_script_dir))
+
+from tower_info_defs import get_calo_tower_ieta_iphi
+
 def clean_root_latex(text):
     if not text:
         return ""
@@ -294,7 +301,11 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
             print(f"Warning: Tower index {tower_index} out of bounds (0, {values.shape[0]})")
             plt.close(fig)
             return
-        label_text = f"Tower Index: {tower_index}"
+        ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
+        if ieta is not None and iphi is not None:
+            label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi})"
+        else:
+            label_text = f"Tower Index: {tower_index}"
     else:
         proj_y = np.sum(values, axis=0)
         label_text = "All Good Towers"
@@ -318,7 +329,7 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
 
     ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
     if label_text:
-        ax.text(0.05, 0.95, label_text, transform=ax.transAxes, ha='left', va='top', fontsize=15)
+        ax.text(0.03, 1.01, label_text, transform=ax.transAxes, ha='left', fontsize=18)
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
@@ -441,7 +452,14 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
 
             outlier_towers = sorted(outlier_towers_set)
             if len(outlier_towers) > 0:
-                print(f"[{path.name}] Found {len(outlier_towers)} outlier tower(s) with energy < {energy_threshold} GeV: {outlier_towers[:max_outlier_towers]}")
+                tower_desc = []
+                for t in outlier_towers[:max_outlier_towers]:
+                    ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
+                    if ieta is not None and iphi is not None:
+                        tower_desc.append(f"{t} (ieta={ieta}, iphi={iphi})")
+                    else:
+                        tower_desc.append(str(t))
+                print(f"[{path.name}] Found {len(outlier_towers)} outlier tower(s) with energy < {energy_threshold} GeV: {tower_desc}")
                 if max_outlier_towers is not None and max_outlier_towers > 0 and len(outlier_towers) > max_outlier_towers:
                     print(f"[{path.name}] Limiting outlier tower 1D plots to first {max_outlier_towers} towers.")
                     outlier_towers = outlier_towers[:max_outlier_towers]
