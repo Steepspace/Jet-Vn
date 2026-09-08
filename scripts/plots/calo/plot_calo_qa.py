@@ -325,7 +325,23 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=True, do_logx=False):
+def find_outlier_towers(hist2d, threshold):
+    """
+    Find tower indices that have counts with energy below the given threshold.
+    """
+    values, xedges, yedges = hist2d.to_numpy()
+    # Mask bins where the upper bin edge is <= threshold
+    mask = yedges[1:] <= threshold
+    if not np.any(mask):
+        y_centers = 0.5 * (yedges[:-1] + yedges[1:])
+        mask = y_centers < threshold
+    if not np.any(mask):
+        return np.array([], dtype=int)
+
+    counts_below = np.sum(values[:, mask], axis=1)
+    return np.where(counts_below > 0)[0]
+
+def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=True, do_logx=False, energy_threshold=-10.0, max_outlier_towers=50):
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -414,6 +430,22 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
                 "h2EMCalEnergyTowerIndex",
                 "h2EMCalRawEnergyTowerIndex",
             ]
+
+            # Find any outlier towers with energy below threshold
+            outlier_towers_set = set()
+            for h2_energy_name in h2_energy_index_names:
+                if h2_energy_name in file:
+                    towers = find_outlier_towers(file[h2_energy_name], energy_threshold)
+                    if len(towers) > 0:
+                        outlier_towers_set.update(towers.tolist())
+
+            outlier_towers = sorted(outlier_towers_set)
+            if len(outlier_towers) > 0:
+                print(f"[{path.name}] Found {len(outlier_towers)} outlier tower(s) with energy < {energy_threshold} GeV: {outlier_towers[:max_outlier_towers]}")
+                if max_outlier_towers is not None and max_outlier_towers > 0 and len(outlier_towers) > max_outlier_towers:
+                    print(f"[{path.name}] Limiting outlier tower 1D plots to first {max_outlier_towers} towers.")
+                    outlier_towers = outlier_towers[:max_outlier_towers]
+
             for h2_energy_name in h2_energy_index_names:
                 if h2_energy_name in file:
                     hist2d = file[h2_energy_name]
@@ -430,17 +462,18 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
                             logy=True,
                         )
 
-                        # Y-projection for specific tower index 2654
-                        out_filename_2654 = f"run_{run_number}_{h2_energy_name}_tower2654.png"
-                        output_path_2654 = run_output_dir / out_filename_2654
-                        make_1d_yproj_plot(
-                            hist2d,
-                            run_number,
-                            output_path_2654,
-                            hist_name=h2_energy_name,
-                            tower_index=2654,
-                            logy=True,
-                        )
+                        # Y-projection for outlier towers below threshold
+                        for tower_idx in outlier_towers:
+                            out_filename_tower = f"run_{run_number}_{h2_energy_name}_tower{tower_idx}.png"
+                            output_path_tower = run_output_dir / out_filename_tower
+                            make_1d_yproj_plot(
+                                hist2d,
+                                run_number,
+                                output_path_tower,
+                                hist_name=h2_energy_name,
+                                tower_index=tower_idx,
+                                logy=True,
+                            )
 
             return None
     except Exception as e:
@@ -455,6 +488,8 @@ def main():
     parser.add_argument("--do-logy", type=int, default=1, help="Generate log-y scale plots (1=True, 0=False). Default: 1")
     parser.add_argument("--do-logxy", type=int, default=1, help="Generate log-xy scale plots (1=True, 0=False). Default: 1")
     parser.add_argument("--do-logx", type=int, default=0, help="Generate log-x scale plots (1=True, 0=False). Default: 0")
+    parser.add_argument("--energy-threshold", type=float, default=-10.0, help="Energy threshold below which 1D tower energy plots are generated (default: -10.0 GeV).")
+    parser.add_argument("--max-outlier-towers", type=int, default=50, help="Maximum number of outlier tower 1D plots to generate per run (default: 50).")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths")
     args = parser.parse_args()
 
@@ -490,6 +525,8 @@ def main():
         do_logy=bool(args.do_logy),
         do_logxy=bool(args.do_logxy),
         do_logx=bool(args.do_logx),
+        energy_threshold=args.energy_threshold,
+        max_outlier_towers=args.max_outlier_towers,
     )
     max_workers = min(os.cpu_count() or 4, 32)
 
