@@ -431,6 +431,198 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
+class FracBadChi2ScalarFormatter(ScalarFormatter):
+    """
+    Custom ScalarFormatter for frac badChi2 that shifts order of magnitude from 10^-4 to 10^-5
+    if 10^-4 happens to be chosen by default.
+    """
+    def _set_order_of_magnitude(self):
+        super()._set_order_of_magnitude()
+        if self._orderOfMagnitude == -4:
+            self._orderOfMagnitude = -5
+
+def make_1d_cdb_branch_plot(
+    values,
+    run_number,
+    output_path,
+    branch_name,
+    xlabel=None,
+    outlier_entries=None,
+    bins=100,
+    logy=True,
+    x_max_cutoff=None,
+):
+    hep.style.use("ATLAS")
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    clean_values = np.asarray(values, dtype=float)
+    clean_values = clean_values[~np.isnan(clean_values)]
+    if len(clean_values) == 0:
+        plt.close(fig)
+        return
+
+    if x_max_cutoff is not None:
+        x_min = float(np.min(clean_values))
+        x_max = float(x_max_cutoff)
+        if outlier_entries:
+            visible_outliers = []
+            for entry in outlier_entries:
+                v = entry[1]
+                if x_min <= v <= x_max:
+                    visible_outliers.append(entry)
+            outlier_entries = visible_outliers
+    else:
+        x_min = float(np.min(clean_values))
+        x_max = float(np.max(clean_values))
+        if outlier_entries:
+            for entry in outlier_entries:
+                v = entry[1]
+                x_min = min(x_min, float(v))
+                x_max = max(x_max, float(v))
+
+    if x_min == x_max:
+        bin_edges = np.linspace(x_min - 1.0, x_max + 1.0, bins + 1)
+    else:
+        bin_edges = np.linspace(x_min, x_max, bins + 1)
+
+    counts, _ = np.histogram(clean_values, bins=bin_edges)
+    hep.histplot((counts, bin_edges), ax=ax, histtype='step', color='navy', linewidth=2, label="All Towers")
+
+    if xlabel is None:
+        if branch_name == "FCEMC_sigma":
+            xlabel = "Z-score"
+        elif branch_name == "Ffraction":
+            xlabel = "frac badChi2"
+        else:
+            xlabel = branch_name
+
+    ax.set_xlabel(xlabel, loc='center')
+    ax.set_ylabel("Counts", loc='center')
+
+    if logy:
+        ax.set_yscale('log')
+        ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
+        max_val = np.max(counts) if counts.size > 0 else 1
+        ax.set_ylim(bottom=0.5, top=max(max_val * 5, 10))
+
+    span = bin_edges[-1] - bin_edges[0]
+    if span > 0:
+        ax.set_xlim(left=bin_edges[0] - 0.03 * span, right=bin_edges[-1] + 0.03 * span)
+
+    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+
+    # For Z-score plot, shade z-score < -5 in light blue and z-score > 5 in light red
+    if branch_name == "FCEMC_sigma" or xlabel == "Z-score":
+        x_left, x_right = ax.get_xlim()
+        n_low = int(np.count_nonzero(clean_values < -5))
+        n_high = int(np.count_nonzero(clean_values > 5))
+        if x_left < -5:
+            ax.axvspan(x_left, -5, color='dodgerblue', alpha=0.15, zorder=0, label=rf"$Z < -5$ (N={n_low})")
+        if x_right > 5:
+            ax.axvspan(5, x_right, color='red', alpha=0.15, zorder=0, label=rf"$Z > 5$ (N={n_high})")
+
+    # For frac badChi2 plot, shade region > 0.01 in light red if x-axis goes above 0.01
+    if branch_name == "Ffraction" or xlabel == "frac badChi2":
+        x_left, x_right = ax.get_xlim()
+        if x_right > 0.01:
+            n_high = int(np.count_nonzero(clean_values > 0.01))
+            ax.axvspan(max(0.01, x_left), x_right, color='red', alpha=0.15, zorder=0, label=rf"$> 0.01$ (N={n_high})")
+        fmt = FracBadChi2ScalarFormatter(useMathText=True)
+        ax.xaxis.set_major_formatter(fmt)
+
+    # Vertical lines for outlier towers
+    if outlier_entries:
+        colors = ['red', 'darkorange', 'purple', 'magenta', 'cyan', 'green']
+        if len(outlier_entries) <= 6:
+            for idx, entry in enumerate(outlier_entries):
+                color = colors[idx % len(colors)]
+                if len(entry) >= 4:
+                    t, val, ieta, iphi = entry[:4]
+                else:
+                    t, val = entry[0], entry[1]
+                    ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
+
+                if ieta is not None and iphi is not None:
+                    tower_str = rf"$i\eta$: {ieta}, $i\phi$: {iphi}"
+                else:
+                    tower_str = f"Tower {t}"
+
+                if (branch_name == "Ffraction" or xlabel == "frac badChi2") and 0 < abs(val) < 0.01:
+                    v_str = f"{val:.2e}"
+                elif branch_name == "Ffraction" or xlabel == "frac badChi2":
+                    v_str = f"{val:.2f}"
+                else:
+                    v_str = f"{val:+.2f}"
+                ax.axvline(x=val, color=color, linestyle='--', linewidth=1.8, label=rf"{tower_str} ({v_str})")
+        else:
+            first = True
+            for entry in outlier_entries:
+                val = entry[1]
+                lbl = f"Outliers (N={len(outlier_entries)})" if first else None
+                ax.axvline(x=val, color='red', linestyle='--', linewidth=1.5, alpha=0.7, label=lbl)
+                first = False
+
+    ax.legend(frameon=True, fontsize=12, loc='best')
+
+    fig.tight_layout()
+    plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+def find_high_outlier_zoom_max(values):
+    """
+    Detect if there is a clear outlier at very high x-value compared to the average / bulk
+    of the main distribution. Returns the suggested maximum x-value for zooming in, or None
+    if no zoom is needed.
+    """
+    clean_values = np.asarray(values, dtype=float)
+    clean_values = clean_values[~np.isnan(clean_values)]
+    if len(clean_values) < 20:
+        return None
+
+    s_vals = np.sort(clean_values)
+    min_val = s_vals[0]
+    max_val = s_vals[-1]
+    total_span = max_val - min_val
+    if total_span <= 0:
+        return None
+
+    p995 = np.percentile(clean_values, 99.5)
+    pos_vals = clean_values[clean_values > 0]
+    if len(pos_vals) > 0 and p995 == 0:
+        ref_bulk = np.percentile(pos_vals, 95)
+    else:
+        ref_bulk = p995
+
+    if ref_bulk <= 0:
+        return None
+
+    # Ratio check: max must be at least 10x higher than bulk reference
+    if max_val < 10.0 * ref_bulk:
+        return None
+
+    # Search for the jump in the upper tail (top 2% or up to 200 towers)
+    n_tail = max(10, min(int(0.02 * len(s_vals)), 200))
+    tail_vals = s_vals[-n_tail:]
+    diffs = np.diff(tail_vals)
+
+    max_gap_idx = np.argmax(diffs)
+    max_gap = diffs[max_gap_idx]
+
+    val_before = tail_vals[max_gap_idx]
+
+    bulk_span = max(val_before - min_val, ref_bulk - min_val)
+
+    # Gap must be substantial: at least 30% of total span or >= 5x bulk span
+    if max_gap >= 0.30 * total_span or (bulk_span > 0 and max_gap >= 5.0 * bulk_span):
+        return val_before
+
+    # If the ratio is extreme (>20x) even if gaps are somewhat spaced
+    if max_val >= 20.0 * ref_bulk:
+        return ref_bulk * 1.15
+
+    return None
+
 def find_outlier_towers(hist2d, threshold):
     """
     Find tower indices that have counts with energy below the given threshold.
@@ -559,11 +751,11 @@ def process_file(
             outlier_towers = sorted(outlier_towers_set)
             bad_tower_map = {}
             frac_bad_chi2_map = {}
-            if len(outlier_towers) > 0:
-                if use_cdb:
-                    bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
-                    frac_bad_chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=cdbtag)
+            if use_cdb:
+                bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
+                frac_bad_chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=cdbtag)
 
+            if len(outlier_towers) > 0:
                 tower_desc = []
                 for t in outlier_towers[:max_outlier_towers]:
                     ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
@@ -584,6 +776,69 @@ def process_file(
                 if max_outlier_towers is not None and max_outlier_towers > 0 and len(outlier_towers) > max_outlier_towers:
                     print(f"[{path.name}] Limiting outlier tower 1D plots to first {max_outlier_towers} towers.")
                     outlier_towers = outlier_towers[:max_outlier_towers]
+
+            # Generate 1D CDB plots (Z-score and frac badChi2) for the run
+            if run_output_dir is not None:
+                # 1D plot of FCEMC_sigma branch (Z-score)
+                if bad_tower_map:
+                    all_sigmas = [v["sigma"] for v in bad_tower_map.values() if v.get("sigma") is not None and not np.isnan(v["sigma"])]
+                    if len(all_sigmas) > 0:
+                        outlier_sigmas = []
+                        for t in outlier_towers:
+                            t_key = get_calo_tower_key(t, det="EMCal")
+                            s_val = bad_tower_map.get(t_key, {}).get("sigma")
+                            if s_val is not None and not np.isnan(s_val):
+                                ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
+                                outlier_sigmas.append((t, s_val, ieta, iphi))
+
+                        out_filename_sigma = f"run_{run_number}_FCEMC_sigma.png"
+                        output_path_sigma = run_output_dir / out_filename_sigma
+                        make_1d_cdb_branch_plot(
+                            all_sigmas,
+                            run_number,
+                            output_path_sigma,
+                            branch_name="FCEMC_sigma",
+                            xlabel="Z-score",
+                            outlier_entries=outlier_sigmas if len(outlier_sigmas) > 0 else None,
+                        )
+
+                # 1D plot of Ffraction branch (frac badChi2)
+                if frac_bad_chi2_map:
+                    all_fracs = [v for v in frac_bad_chi2_map.values() if v is not None and not np.isnan(v)]
+                    if len(all_fracs) > 0:
+                        outlier_fracs = []
+                        for t in outlier_towers:
+                            t_key = get_calo_tower_key(t, det="EMCal")
+                            f_val = frac_bad_chi2_map.get(t_key)
+                            if f_val is not None and not np.isnan(f_val):
+                                ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
+                                outlier_fracs.append((t, f_val, ieta, iphi))
+
+                        out_filename_frac = f"run_{run_number}_Ffraction.png"
+                        output_path_frac = run_output_dir / out_filename_frac
+                        make_1d_cdb_branch_plot(
+                            all_fracs,
+                            run_number,
+                            output_path_frac,
+                            branch_name="Ffraction",
+                            xlabel="frac badChi2",
+                            outlier_entries=outlier_fracs if len(outlier_fracs) > 0 else None,
+                        )
+
+                        # Check if a zoomed version on the x-axis is needed for clear high outliers
+                        zoom_max = find_high_outlier_zoom_max(all_fracs)
+                        if zoom_max is not None:
+                            out_filename_frac_zoom = f"run_{run_number}_Ffraction_zoom.png"
+                            output_path_frac_zoom = run_output_dir / out_filename_frac_zoom
+                            make_1d_cdb_branch_plot(
+                                all_fracs,
+                                run_number,
+                                output_path_frac_zoom,
+                                branch_name="Ffraction",
+                                xlabel="frac badChi2",
+                                outlier_entries=outlier_fracs if len(outlier_fracs) > 0 else None,
+                                x_max_cutoff=zoom_max,
+                            )
 
             for h2_energy_name in h2_energy_index_names:
                 if h2_energy_name in file:
