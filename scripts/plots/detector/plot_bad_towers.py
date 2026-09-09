@@ -73,12 +73,12 @@ def process_item(item_data):
                 bad_towers_count = np.count_nonzero(values != 0)
                 dead_towers_count = np.count_nonzero(values == 1)
                 hot_towers_count = np.count_nonzero(values == 2)
-                
+
                 eta_indices, phi_indices = np.nonzero(values != 0)
                 bad_tower_keys = phi_indices + (eta_indices << 16)
                 bad_tower_statuses = values[eta_indices, phi_indices].astype(int)
                 tower_status_map = dict(zip(bad_tower_keys.astype(int), bad_tower_statuses))
-                
+
                 return run_number, bad_towers_count, dead_towers_count, hot_towers_count, tower_status_map, None
             elif "Multiple;1" in file or "Multiple" in file:
                 tree = file["Multiple"]
@@ -91,7 +91,7 @@ def process_item(item_data):
                 bad_towers_count = np.count_nonzero(statuses != 0)
                 dead_towers_count = np.count_nonzero(statuses == 1)
                 hot_towers_count = np.count_nonzero(statuses == 2)
-                
+
                 bad_mask = statuses != 0
                 tower_status_map = dict(zip(iids[bad_mask].astype(int), statuses[bad_mask].astype(int)))
             else:
@@ -209,7 +209,47 @@ def plot_towers(run_numbers, towers_count, output_dir, name, ylabel="Number of B
 plot_bad_towers = plot_towers
 
 
-def plot_frequently_hot_towers(tower_status_per_run, output_dir, name, total_runs=None):
+def _get_target_sigmas_for_run(args):
+    run_num, item_data, target_keys = args
+    item, is_run, cdbtag = item_data
+    path = None
+    if is_run:
+        if get_cdb_calibration_url is not None:
+            try:
+                url = get_cdb_calibration_url("CEMC_BadTowerMap", run_num, dbtag=cdbtag)
+                if url: path = url
+            except Exception:
+                pass
+    else:
+        path = Path(item)
+
+    if not path:
+        return run_num, {tk: np.nan for tk in target_keys}
+
+    sigmas = {tk: np.nan for tk in target_keys}
+    try:
+        with uproot.open(path) as file:
+            if "Multiple;1" in file or "Multiple" in file:
+                tree = file["Multiple"]
+                sigma_branch = next((b for b in tree.keys() if b.endswith("_sigma")), None)
+                if sigma_branch and "Istatus" in tree.keys():
+                    data = tree.arrays(["IID", "Istatus", sigma_branch], library="np")
+                    iids = data["IID"].astype(int)
+                    statuses = data["Istatus"].astype(int)
+                    all_sigmas = data[sigma_branch].astype(float)
+
+                    for tk in target_keys:
+                        idx = np.where(iids == tk)[0]
+                        if len(idx) > 0:
+                            idx = idx[0]
+                            if statuses[idx] == 0:
+                                sigmas[tk] = all_sigmas[idx]
+    except Exception as e:
+        print(f"Warning: error reading sigma for run {run_num}: {e}")
+
+    return run_num, sigmas
+
+def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run_numbers, output_dir, name, total_runs=None, no_cache=False):
     """Analyze frequently hot towers across runs, save CSV, and produce 1D/2D plots."""
     if not tower_status_per_run:
         return None
@@ -358,6 +398,117 @@ def plot_frequently_hot_towers(tower_status_per_run, output_dir, name, total_run
         plt.close(fig)
         print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
 
+        # Plot 4: 1D Z-score distributions for towers hot in >50% runs
+        sigmas_cache_path = output_dir / f".{name}_hot_sigmas_cache.pkl"
+        run_sigmas_map = {}
+        if not no_cache and sigmas_cache_path.exists():
+            try:
+                with sigmas_cache_path.open("rb") as f:
+                    run_sigmas_map = pickle.load(f)
+                if not isinstance(run_sigmas_map, dict):
+                    run_sigmas_map = {}
+            except Exception as e:
+                print(f"Warning: Could not read sigmas cache {sigmas_cache_path}: {e}")
+                run_sigmas_map = {}
+
+        runs_to_process = []
+        for r_idx, run_status in enumerate(tower_status_per_run):
+            run_num = run_numbers[r_idx]
+            item_data = original_items_per_run[r_idx]
+            cached_sigmas = run_sigmas_map.get(run_num, {})
+
+            missing_keys = []
+            for tk in target_keys:
+                if run_status.get(tk, 0) == 0 and tk not in cached_sigmas:
+                    missing_keys.append(tk)
+
+            if missing_keys:
+                runs_to_process.append((run_num, item_data, missing_keys))
+
+        if runs_to_process:
+            print(f"Extracting z-scores for >50% hot towers from {len(runs_to_process)} runs ({len(run_numbers) - len(runs_to_process)} loaded from cache)...")
+            max_workers = min(os.cpu_count() or 4, 32)
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                for run_num, sigmas in tqdm.tqdm(executor.map(_get_target_sigmas_for_run, runs_to_process), total=len(runs_to_process)):
+                    if run_num not in run_sigmas_map:
+                        run_sigmas_map[run_num] = {}
+                    run_sigmas_map[run_num].update(sigmas)
+
+            if not no_cache:
+                try:
+                    with sigmas_cache_path.open("wb") as f:
+                        pickle.dump(run_sigmas_map, f)
+                    print(f"Saved z-scores cache to {sigmas_cache_path}")
+                except Exception as e:
+                    print(f"Warning: Could not save sigmas cache {sigmas_cache_path}: {e}")
+        else:
+            print(f"Loaded all z-scores for >50% hot towers from cache ({sigmas_cache_path}).")
+
+        sigmas_to_plot = []
+        for i, (tidx, row) in enumerate(hot_50_df.iterrows()):
+            tkey = int(row['TowerKey'])
+            ieta = int(row['ieta'])
+            iphi = int(row['iphi'])
+
+            sigmas = []
+            for r_idx, run_status in enumerate(tower_status_per_run):
+                run_num = run_numbers[r_idx]
+                status = run_status.get(tkey, 0)
+                # Only plot for runs where the tower is Good (status 0)
+                if status == 0:
+                    val = run_sigmas_map.get(run_num, {}).get(tkey, np.nan)
+                    if not np.isnan(val):
+                        sigmas.append(val)
+            if sigmas:
+                # Compute status percentages across all runs
+                t_statuses = matrix_t[i, :]
+                n_tot = len(t_statuses)
+                status_labels = [(0, 'good'), (1, 'dead'), (2, 'hot'), (3, 'cold'), (4, 'bad chi2')]
+                type_pcts = []
+                for scode, slabel in status_labels:
+                    cnt = np.count_nonzero(t_statuses == scode)
+                    if cnt > 0:
+                        pct = (cnt / n_tot) * 100.0
+                        pct_str = f"{pct:.1f}%" if pct >= 0.1 else f"{pct:.2f}%"
+                        type_pcts.append(f"{slabel}: {pct_str}")
+                sigmas_to_plot.append((row, ieta, iphi, sigmas, type_pcts))
+
+        n_plots = len(sigmas_to_plot)
+        if n_plots > 0:
+            cols = 5
+            # Force at least 5 rows if n_plots <= 25 to match 5x5 request
+            rows = max(5, int(np.ceil(n_plots / cols))) if n_plots > 0 else 0
+
+            if rows > 0:
+                fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 4.5 * rows))
+                if n_plots == 1:
+                    axes = np.array([axes])
+                axes = axes.flatten()
+
+                for i, (row, ieta, iphi, sigmas, type_pcts) in enumerate(sigmas_to_plot):
+                    ax = axes[i]
+                    ax.hist(sigmas, bins=30, histtype='step', color='#1f77b4', linewidth=2, log=True)
+                    ax.set_ylim(bottom=0.5)
+
+                    if len(type_pcts) > 2:
+                        mid = (len(type_pcts) + 1) // 2
+                        pct_text = ", ".join(type_pcts[:mid]) + "\n" + ", ".join(type_pcts[mid:])
+                    else:
+                        pct_text = ", ".join(type_pcts)
+
+                    ax.set_title(f"Tower ({ieta}, {iphi})\n{pct_text}", fontsize=12)
+                    ax.set_xlabel("z-score", fontsize=14)
+                    ax.set_ylabel("Runs (where tower is good)", fontsize=14)
+
+                for i in range(n_plots, len(axes)):
+                    fig.delaxes(axes[i])
+
+                plt.tight_layout()
+                plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_zscore.pdf", bbox_inches='tight')
+                plt.savefig(image_dir / f"{name}_frequent_hot_50pct_zscore.png", dpi=300, bbox_inches='tight')
+                plt.close(fig)
+                print(f"Saved z-score distributions for {n_plots} towers to {image_dir / f'{name}_frequent_hot_50pct_zscore.png'}")
+
     return freq_df
 
 
@@ -420,15 +571,17 @@ def main():
             except ValueError:
                 print(f"Warning: Expected run number, got {run_str}. Skipping.")
                 continue
-            
+
             cache_key = f"run_{run_num}_{args.cdbtag}"
             mtime = 0
-            
+
             if not args.no_cache and cache_key in cache:
                 entry = cache[cache_key]
                 res = entry.get("result")
                 if entry.get("version") == 2 and isinstance(res, (tuple, list)) and len(res) == 6 and isinstance(res[4], dict):
-                    results.append(res)
+                    res_list = list(res)
+                    res_list.append((run_num, True, args.cdbtag))
+                    results.append(tuple(res_list))
                     continue
             files_to_process.append((run_num, True, args.cdbtag))
         else:
@@ -440,7 +593,9 @@ def main():
                 entry = cache[resolved_str]
                 res = entry.get("result")
                 if entry.get("version") == 2 and entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 6 and isinstance(res[4], dict):
-                    results.append(res)
+                    res_list = list(res)
+                    res_list.append((path, False, args.cdbtag))
+                    results.append(tuple(res_list))
                     continue
             files_to_process.append((path, False, args.cdbtag))
 
@@ -451,7 +606,9 @@ def main():
             new_results = list(tqdm.tqdm(executor.map(process_item, files_to_process), total=len(files_to_process)))
 
         for item_data, res in zip(files_to_process, new_results):
-            results.append(res)
+            res_list = list(res)
+            res_list.append(item_data)
+            results.append(tuple(res_list))
             item, is_run, cdbtag = item_data
             if is_run:
                 cache_key = f"run_{item}_{cdbtag}"
@@ -460,7 +617,7 @@ def main():
                 path = Path(item)
                 cache_key = str(path.resolve())
                 mtime = path.stat().st_mtime if path.exists() else 0
-                
+
             cache[cache_key] = {
                 "version": 2,
                 "mtime": mtime,
@@ -483,8 +640,9 @@ def main():
     dead_towers_list = []
     hot_towers_list = []
     tower_status_list = []
+    original_items = []
 
-    for run_num, bad_count, dead_count, hot_count, tower_status, err in results:
+    for run_num, bad_count, dead_count, hot_count, tower_status, err, item_data in results:
         if err:
             print(err)
         elif run_num is not None:
@@ -499,13 +657,15 @@ def main():
             else:
                 tower_status_list.append({})
 
+            original_items.append(item_data)
+
     if not run_numbers:
         print("No valid data found to plot.")
         return
 
     # Sort by run number
-    sorted_tuples = sorted(zip(run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list), key=lambda x: x[0])
-    run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list = zip(*sorted_tuples)
+    sorted_tuples = sorted(zip(run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list, original_items), key=lambda x: x[0])
+    run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list, original_items = zip(*sorted_tuples)
 
     counts_data = [
         {'Run': r, 'BadTowers': b, 'DeadTowers': d, 'HotTowers': h}
@@ -594,7 +754,10 @@ def main():
     )
 
     # Frequently Hot Towers Analysis
-    plot_frequently_hot_towers(tower_status_list, args.output_dir, args.name, total_runs=len(run_numbers))
+    plot_frequently_hot_towers(
+        tower_status_list, original_items, run_numbers, args.output_dir, args.name,
+        total_runs=len(run_numbers), no_cache=args.no_cache
+    )
 
 if __name__ == "__main__":
     main()
