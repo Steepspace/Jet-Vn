@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import mplhep as hep
 
 # Repository imports
@@ -23,9 +24,10 @@ if str(_calo_dir) not in sys.path:
     sys.path.insert(0, str(_calo_dir))
 
 try:
-    from tower_info_defs import get_cdb_calibration_url
+    from tower_info_defs import get_cdb_calibration_url, decode_emcal
 except ImportError:
     get_cdb_calibration_url = None
+    decode_emcal = None
 
 
 def process_item(item_data):
@@ -33,18 +35,18 @@ def process_item(item_data):
     if is_run:
         run_number = int(item)
         if get_cdb_calibration_url is None:
-            return run_number, None, None, None, "tower_info_defs module could not be imported"
+            return run_number, None, None, None, None, "tower_info_defs module could not be imported"
         try:
             url = get_cdb_calibration_url("CEMC_BadTowerMap", run_number, dbtag=cdbtag)
             if not url:
-                return run_number, None, None, None, f"Could not find CDB calibration for run {run_number}"
+                return run_number, None, None, None, None, f"Could not find CDB calibration for run {run_number}"
             path = url
         except Exception as e:
-            return run_number, None, None, None, f"Error getting CDB URL for run {run_number}: {e}"
+            return run_number, None, None, None, None, f"Error getting CDB URL for run {run_number}: {e}"
     else:
         path = Path(item)
         if not path.exists():
-            return None, None, None, None, f"File not found: {path}"
+            return None, None, None, None, None, f"File not found: {path}"
         try:
             # Try to extract run number from filename (e.g. EMCalHotMap_..._78348.root)
             match = re.search(r'_(\d+)\.root', path.name)
@@ -56,9 +58,9 @@ def process_item(item_data):
                 if match:
                     run_number = int(match.group())
                 else:
-                    return None, None, None, None, f"Could not parse run number from {path.name}"
+                    return None, None, None, None, None, f"Could not parse run number from {path.name}"
         except Exception as e:
-            return None, None, None, None, f"Error parsing run number from {path}: {e}"
+            return None, None, None, None, None, f"Error parsing run number from {path}: {e}"
 
     try:
         with uproot.open(path) as file:
@@ -68,22 +70,29 @@ def process_item(item_data):
                 bad_towers_count = np.count_nonzero(values != 0)
                 dead_towers_count = np.count_nonzero(values == 1)
                 hot_towers_count = np.count_nonzero(values == 2)
-                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, None
+                
+                eta_indices, phi_indices = np.nonzero(values == 2)
+                hot_tower_keys = phi_indices + (eta_indices << 16)
+                
+                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, hot_tower_keys, None
             elif "Multiple;1" in file or "Multiple" in file:
                 tree = file["Multiple"]
                 if "Istatus" in tree.keys():
-                    data = tree.arrays(["Istatus"], library="np")
+                    data = tree.arrays(["IID", "Istatus"], library="np")
                     statuses = data["Istatus"]
+                    iids = data["IID"]
                 else:
-                    return run_number, None, None, None, f"Istatus branch not found in {path}"
+                    return run_number, None, None, None, None, f"Istatus branch not found in {path}"
                 bad_towers_count = np.count_nonzero(statuses != 0)
                 dead_towers_count = np.count_nonzero(statuses == 1)
                 hot_towers_count = np.count_nonzero(statuses == 2)
-                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, None
+                
+                hot_tower_keys = iids[statuses == 2]
+                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, hot_tower_keys, None
             else:
-                return run_number, None, None, None, f"Neither h_hot nor Multiple tree found in {path}"
+                return run_number, None, None, None, None, f"Neither h_hot nor Multiple tree found in {path}"
     except Exception as e:
-        return run_number if 'run_number' in locals() else None, None, None, None, f"Error processing {path}: {e}"
+        return run_number if 'run_number' in locals() else None, None, None, None, None, f"Error processing {path}: {e}"
 
 
 def plot_towers(run_numbers, towers_count, output_dir, name, ylabel="Number of Bad Towers", suffix="", extra_text=None, ylim_bottom=None, legend_loc='lower left', legend_fontsize=18, sigma_threshold=None):
@@ -181,6 +190,86 @@ def plot_towers(run_numbers, towers_count, output_dir, name, ylabel="Number of B
 # Maintain backward compatibility for plot_bad_towers function name if imported elsewhere
 plot_bad_towers = plot_towers
 
+
+def plot_frequently_hot_towers(all_hot_tower_keys, output_dir, name, total_runs=None):
+    """Analyze frequently hot towers across runs, save CSV, and produce 1D/2D plots."""
+    if not all_hot_tower_keys:
+        return None
+
+    if total_runs is None or total_runs <= 0:
+        total_runs = len(all_hot_tower_keys) if all_hot_tower_keys else 1
+
+    all_keys = np.concatenate(all_hot_tower_keys)
+    unique_keys, counts = np.unique(all_keys, return_counts=True)
+
+    freq_data = []
+    for k, count in zip(unique_keys, counts):
+        ieta = k >> 16
+        iphi = k & 0xFFFF
+        try:
+            tidx = decode_emcal(k) if decode_emcal else -1
+        except Exception:
+            tidx = -1
+        freq_data.append({
+            'TowerIndex': tidx,
+            'ieta': ieta,
+            'iphi': iphi,
+            'TowerKey': k,
+            'HotRunCount': count,
+            'HotRunFraction': count / total_runs,
+        })
+
+    freq_df = pd.DataFrame(freq_data).sort_values(by="HotRunCount", ascending=False)
+    freq_csv_path = output_dir / f"{name}_frequent_hot_towers.csv"
+    freq_df.to_csv(freq_csv_path, index=False)
+    print(f"Saved frequently hot towers info ({len(freq_df)} towers) to {freq_csv_path}")
+
+    pdf_dir = output_dir / "pdf"
+    image_dir = output_dir / "images"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    # Plot 1: 1D Tower Index vs HotRunFraction (y-axis starting at 0)
+    fig, ax = plt.subplots(figsize=(12, 6))
+    ax.plot(freq_df['TowerIndex'], freq_df['HotRunFraction'], marker='.', linestyle='none', color='red', alpha=0.6)
+    ax.set_xlabel("Tower Index", loc='center', fontsize=18)
+    ax.set_ylabel("Fraction of runs flagged as hot", loc='center', fontsize=18)
+    ax.set_ylim(bottom=0)
+    ax.set_title("Frequently Hot Towers", fontsize=18, pad=12)
+    ax.tick_params(labelsize=18)
+    plt.tight_layout()
+    plt.savefig(pdf_dir / f"{name}_frequent_hot_1D.pdf", bbox_inches='tight')
+    plt.savefig(image_dir / f"{name}_frequent_hot_1D.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved frequently hot 1D plot to {image_dir / f'{name}_frequent_hot_1D.png'}")
+
+    # Plot 2: 2D ieta vs iphi map (aspect ratio matching 256 phi x 96 eta bins, z-scale as fraction)
+    fig, ax = plt.subplots(figsize=(8, 14))
+    map_2d = np.zeros((256, 96))  # EMCal is 256 phi bins (y-axis) x 96 eta bins (x-axis)
+    for _, row in freq_df.iterrows():
+        if 0 <= row['iphi'] < 256 and 0 <= row['ieta'] < 96:
+            map_2d[int(row['iphi']), int(row['ieta'])] = row['HotRunFraction']
+
+    c = ax.imshow(map_2d, aspect='equal', origin='lower', cmap='inferno', extent=[-0.5, 95.5, -0.5, 255.5], vmin=0)
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.2)
+    cbar = fig.colorbar(c, cax=cax)
+    cbar.set_label("Fraction of runs flagged as hot", loc='center', labelpad=15, fontsize=18)
+    cbar.ax.tick_params(labelsize=18)
+
+    ax.set_xlabel("ieta", fontsize=18)
+    ax.set_ylabel("iphi", loc='center', fontsize=18)
+    ax.set_title("Frequently Hot Towers Map", fontsize=18, pad=12)
+    ax.tick_params(which='both', labelsize=18, color='white', labelcolor='black')
+
+    plt.savefig(pdf_dir / f"{name}_frequent_hot_2D.pdf", bbox_inches='tight')
+    plt.savefig(image_dir / f"{name}_frequent_hot_2D.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved frequently hot 2D map to {image_dir / f'{name}_frequent_hot_2D.png'}")
+
+    return freq_df
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot Bad, Dead, and Hot Towers vs Run from a list of ROOT files.")
     parser.add_argument("-f", "--file", type=Path, help="Path to a text file containing ROOT file paths (one per line).")
@@ -247,7 +336,7 @@ def main():
             if not args.no_cache and cache_key in cache:
                 entry = cache[cache_key]
                 res = entry.get("result")
-                if isinstance(res, (tuple, list)) and len(res) == 5:
+                if isinstance(res, (tuple, list)) and len(res) == 6:
                     results.append(res)
                     continue
             files_to_process.append((run_num, True, args.cdbtag))
@@ -259,7 +348,7 @@ def main():
             if not args.no_cache and resolved_str in cache:
                 entry = cache[resolved_str]
                 res = entry.get("result")
-                if entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 5:
+                if entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 6:
                     results.append(res)
                     continue
             files_to_process.append((path, False, None))
@@ -301,8 +390,9 @@ def main():
     bad_towers_list = []
     dead_towers_list = []
     hot_towers_list = []
+    all_hot_tower_keys = []
 
-    for run_num, bad_count, dead_count, hot_count, err in results:
+    for run_num, bad_count, dead_count, hot_count, hot_keys, err in results:
         if err:
             print(err)
         elif run_num is not None:
@@ -310,6 +400,8 @@ def main():
             bad_towers_list.append(bad_count)
             dead_towers_list.append(dead_count)
             hot_towers_list.append(hot_count)
+            if hot_keys is not None and len(hot_keys) > 0:
+                all_hot_tower_keys.append(hot_keys)
 
     if not run_numbers:
         print("No valid data found to plot.")
@@ -404,6 +496,9 @@ def main():
         run_numbers, hot_towers_list, args.output_dir, hot_name,
         ylabel="Number of Hot Towers", suffix="", ylim_bottom=None, legend_loc='upper center', legend_fontsize=14
     )
+
+    # Frequently Hot Towers Analysis
+    plot_frequently_hot_towers(all_hot_tower_keys, args.output_dir, args.name, total_runs=len(run_numbers))
 
 if __name__ == "__main__":
     main()
