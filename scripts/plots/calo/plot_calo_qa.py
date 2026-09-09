@@ -30,6 +30,7 @@ from tower_info_defs import (
     get_bad_tower_map,
     get_calo_tower_ieta_iphi,
     get_calo_tower_key,
+    get_frac_bad_chi2_map,
 )
 
 def clean_root_latex(text):
@@ -292,7 +293,7 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, logy=True):
+def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, frac_bad_chi2=None, logy=True):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -307,11 +308,22 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
             return
         if label_text is None:
             ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
-            z_str = f", z-score: {z_score:+.2f}" if z_score is not None and not (isinstance(z_score, float) and np.isnan(z_score)) else ""
+            meta_parts = []
             if ieta is not None and iphi is not None:
-                label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi}{z_str})"
+                meta_parts.append(rf"$i\eta$: {ieta}, $i\phi$: {iphi}")
+            if z_score is not None and not (isinstance(z_score, float) and np.isnan(z_score)):
+                meta_parts.append(f"z-score: {z_score:+.2f}")
+            if frac_bad_chi2 is not None and not (isinstance(frac_bad_chi2, float) and np.isnan(frac_bad_chi2)):
+                if 0 < abs(frac_bad_chi2) < 0.01:
+                    frac_str = f"{frac_bad_chi2:.2e}"
+                else:
+                    frac_str = f"{frac_bad_chi2:.2f}"
+                meta_parts.append(f"frac badChi2: {frac_str}")
+
+            if meta_parts:
+                label_text = rf"Tower Index: {tower_index} (" + ", ".join(meta_parts) + ")"
             else:
-                label_text = f"Tower Index: {tower_index}" + (f" (z-score: {z_score:+.2f})" if z_str else "")
+                label_text = f"Tower Index: {tower_index}"
     elif exclude_towers is not None and len(exclude_towers) > 0:
         valid_excludes = [t for t in exclude_towers if 0 <= t < values.shape[0]]
         if len(valid_excludes) > 0:
@@ -353,7 +365,9 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
 
     ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
     if label_text:
-        if len(label_text) > 42:
+        if len(label_text) > 60:
+            fs = 11
+        elif len(label_text) > 42:
             fs = 13
         elif len(label_text) > 30:
             fs = 15
@@ -493,9 +507,11 @@ def process_file(
 
             outlier_towers = sorted(outlier_towers_set)
             bad_tower_map = {}
+            frac_bad_chi2_map = {}
             if len(outlier_towers) > 0:
                 if use_cdb:
                     bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
+                    frac_bad_chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=cdbtag)
 
                 tower_desc = []
                 for t in outlier_towers[:max_outlier_towers]:
@@ -503,10 +519,16 @@ def process_file(
                     t_key = get_calo_tower_key(t, det="EMCal")
                     z_val = bad_tower_map.get(t_key, {}).get("sigma") if bad_tower_map else None
                     z_txt = f", z-score={z_val:+.2f}" if z_val is not None else ""
-                    if ieta is not None and iphi is not None:
-                        tower_desc.append(f"{t} (ieta={ieta}, iphi={iphi}{z_txt})")
+                    chi2_val = frac_bad_chi2_map.get(t_key) if frac_bad_chi2_map else None
+                    if chi2_val is not None:
+                        c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
+                        chi2_txt = f", frac badChi2={c_str}"
                     else:
-                        tower_desc.append(f"{t}{z_txt}")
+                        chi2_txt = ""
+                    if ieta is not None and iphi is not None:
+                        tower_desc.append(f"{t} (ieta={ieta}, iphi={iphi}{z_txt}{chi2_txt})")
+                    else:
+                        tower_desc.append(f"{t}{z_txt}{chi2_txt}")
                 print(f"[{path.name}] Found {len(outlier_towers)} outlier tower(s) with energy < {energy_threshold} GeV: {tower_desc}")
                 if max_outlier_towers is not None and max_outlier_towers > 0 and len(outlier_towers) > max_outlier_towers:
                     print(f"[{path.name}] Limiting outlier tower 1D plots to first {max_outlier_towers} towers.")
@@ -548,6 +570,7 @@ def process_file(
                             output_path_tower = run_output_dir / out_filename_tower
                             tower_key = get_calo_tower_key(tower_idx, det=h2_energy_name)
                             z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                            frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
                             make_1d_yproj_plot(
                                 hist2d,
                                 run_number,
@@ -555,6 +578,7 @@ def process_file(
                                 hist_name=h2_energy_name,
                                 tower_index=tower_idx,
                                 z_score=z_score,
+                                frac_bad_chi2=frac_bad_chi2,
                                 logy=True,
                             )
 

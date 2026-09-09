@@ -391,6 +391,33 @@ def get_calo_tower_index(arg1, arg2=None, det="EMCal", use_pyroot=None):
 # ---------------------------------------------------------
 _CDB_URL_CACHE = {}
 _BAD_TOWER_CACHE = {}
+_cdb_initialized = False
+
+
+def _init_cdb():
+    """Lazily load libsphenixnpc and declare C++ singleton CDB helper."""
+    global _cdb_initialized, _ROOT
+    if _cdb_initialized:
+        return
+    import ROOT
+    _ROOT = ROOT
+    _ROOT.gSystem.Load("libsphenixnpc")
+    _ROOT.gInterpreter.Declare("""
+    #ifndef SPHENIX_CDB_HELPER
+    #define SPHENIX_CDB_HELPER
+    #include <sphenixnpc/SphenixClient.h>
+    #include <sphenixnpc/CDBUtils.h>
+    CDBUtils* g_sphenix_cdb = nullptr;
+    std::string get_sphenix_cdb_url(const std::string& pl_type, unsigned int runnumber, const std::string& tag="newcdbtag") {
+        if (!g_sphenix_cdb) {
+            g_sphenix_cdb = new CDBUtils();
+            g_sphenix_cdb->setGlobalTag(tag);
+        }
+        return g_sphenix_cdb->getUrl(pl_type, runnumber);
+    }
+    #endif
+    """)
+    _cdb_initialized = True
 
 
 def get_cdb_calibration_url(payload_type, run_number, dbtag="newcdbtag"):
@@ -404,21 +431,8 @@ def get_cdb_calibration_url(payload_type, run_number, dbtag="newcdbtag"):
         return _CDB_URL_CACHE[cache_key]
 
     try:
-        import ROOT
-        ROOT.gSystem.Load("libsphenixnpc.so")
-        ROOT.gInterpreter.Declare("""
-        #ifndef SPHENIX_CDB_HELPER
-        #define SPHENIX_CDB_HELPER
-        #include <sphenixnpc/SphenixClient.h>
-        #include <sphenixnpc/CDBUtils.h>
-        std::string get_sphenix_cdb_url(const std::string& pl_type, unsigned int runnumber, const std::string& tag="newcdbtag") {
-            static CDBUtils cdb;
-            cdb.setGlobalTag(tag);
-            return cdb.getUrl(pl_type, runnumber);
-        }
-        #endif
-        """)
-        url = str(ROOT.get_sphenix_cdb_url(str(payload_type), int(run_number), str(dbtag)))
+        _init_cdb()
+        url = str(_ROOT.get_sphenix_cdb_url(str(payload_type), int(run_number), str(dbtag)))
         if url.startswith("DataBaseException") or not url.endswith(".root"):
             url = None
     except Exception as e:
@@ -480,6 +494,57 @@ get_cemc_bad_tower_map = get_bad_tower_map
 
 
 # ---------------------------------------------------------
+# sPHENIX CDB Hot Towers fracBadChi2 Support
+# ---------------------------------------------------------
+_FRAC_BAD_CHI2_CACHE = {}
+
+
+def get_frac_bad_chi2_map(run_number, det="CEMC", dbtag="newcdbtag"):
+    """
+    Load the hot towers fracBadChi2 calibration tree for a given run and detector.
+    det: 'CEMC' (EMCal), 'HCALIN', or 'HCALOUT' (or full payload type like 'CEMC_hotTowers_fracBadChi2').
+    Returns a dict mapping towerKey (IID) -> float(Ffraction).
+    Cached per (det, run_number, dbtag).
+    """
+    cache_key = (str(det), int(run_number), str(dbtag))
+    if cache_key in _FRAC_BAD_CHI2_CACHE:
+        return _FRAC_BAD_CHI2_CACHE[cache_key]
+
+    if det.endswith("_hotTowers_fracBadChi2"):
+        pl_type = det
+    elif "EMCal" in det or det == "CEMC":
+        pl_type = "CEMC_hotTowers_fracBadChi2"
+    elif "HCALIN" in det:
+        pl_type = "HCALIN_hotTowers_fracBadChi2"
+    elif "HCALOUT" in det:
+        pl_type = "HCALOUT_hotTowers_fracBadChi2"
+    else:
+        pl_type = f"{det}_hotTowers_fracBadChi2"
+
+    url = get_cdb_calibration_url(pl_type, run_number, dbtag=dbtag)
+    if not url:
+        _FRAC_BAD_CHI2_CACHE[cache_key] = {}
+        return {}
+
+    try:
+        import uproot
+
+        with uproot.open(url) as f:
+            tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
+            data = tree.arrays(["IID", "Ffraction"], library="np")
+            result = {int(iid): float(fr) for iid, fr in zip(data["IID"], data["Ffraction"])}
+            _FRAC_BAD_CHI2_CACHE[cache_key] = result
+            return result
+    except Exception as e:
+        print(f"Warning: Failed to load hotTowers_fracBadChi2 from {url}: {e}")
+        _FRAC_BAD_CHI2_CACHE[cache_key] = {}
+        return {}
+
+
+get_cemc_frac_bad_chi2_map = get_frac_bad_chi2_map
+
+
+# ---------------------------------------------------------
 # Command-line Interface
 # ---------------------------------------------------------
 def main():
@@ -498,7 +563,7 @@ def main():
     parser.add_argument(
         "--run",
         type=int,
-        help="Optional run number to query CDB BadTowerMap for z-score.",
+        help="Optional run number to query CDB BadTowerMap & fracBadChi2.",
     )
     parser.add_argument(
         "--cdbtag",
@@ -515,17 +580,24 @@ def main():
     backend = "PyROOT (C++)" if args.use_pyroot else "Pure Python"
 
     cdb_info = {}
+    chi2_info = {}
     if args.run is not None:
         cdb_det = "CEMC" if "EMCal" in args.det else "HCALIN"
         cdb_info = get_bad_tower_map(args.run, det=cdb_det, dbtag=args.cdbtag)
+        chi2_info = get_frac_bad_chi2_map(args.run, det=cdb_det, dbtag=args.cdbtag)
 
     def _format_cdb_str(key_val):
-        if not cdb_info:
+        if not cdb_info and not chi2_info:
             return ""
+        parts = []
         info = cdb_info.get(key_val)
         if info is not None:
-            return f", z-score={info['sigma']:+.2f}, status={info['status']}"
-        return ", z-score=N/A"
+            parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
+        chi2_val = chi2_info.get(key_val)
+        if chi2_val is not None:
+            c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
+            parts.append(f"frac badChi2={c_str}")
+        return ", " + ", ".join(parts) if parts else ""
 
     if args.key is not None:
         eta, phi = get_calo_tower_key_coords(args.key)
