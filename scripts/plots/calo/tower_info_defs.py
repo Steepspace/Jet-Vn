@@ -552,7 +552,7 @@ def main():
         description="Convert between sPHENIX calorimeter tower index, (ieta, iphi), and tower key."
     )
     parser.add_argument("index", nargs="?", type=int, help="Tower index to convert.")
-    parser.add_argument("--det", choices=["EMCal", "HCal"], default="EMCal", help="Calorimeter detector (default: EMCal).")
+    parser.add_argument("--det", choices=["EMCal", "HCal", "IHCal", "OHCal"], default="EMCal", help="Calorimeter detector (default: EMCal).")
     parser.add_argument("--eta", type=int, help="ieta coordinate.")
     parser.add_argument("--phi", type=int, help="iphi coordinate.")
     parser.add_argument(
@@ -562,8 +562,10 @@ def main():
     )
     parser.add_argument(
         "--run",
-        type=int,
-        help="Optional run number to query CDB BadTowerMap & fracBadChi2.",
+        "--runs",
+        nargs="+",
+        action="extend",
+        help="Optional run number(s) to query CDB BadTowerMap & fracBadChi2 (accepts space- or comma-separated run numbers).",
     )
     parser.add_argument(
         "--cdbtag",
@@ -579,50 +581,83 @@ def main():
 
     backend = "PyROOT (C++)" if args.use_pyroot else "Pure Python"
 
-    cdb_info = {}
-    chi2_info = {}
-    if args.run is not None:
-        cdb_det = "CEMC" if "EMCal" in args.det else "HCALIN"
-        cdb_info = get_bad_tower_map(args.run, det=cdb_det, dbtag=args.cdbtag)
-        chi2_info = get_frac_bad_chi2_map(args.run, det=cdb_det, dbtag=args.cdbtag)
+    runs = []
+    if args.run:
+        for r_arg in args.run:
+            for r_str in str(r_arg).split(","):
+                r_str = r_str.strip()
+                if r_str:
+                    try:
+                        runs.append(int(r_str))
+                    except ValueError:
+                        print(f"Error: Invalid run number '{r_str}'")
+                        sys.exit(1)
+        runs = list(dict.fromkeys(runs))
 
-    def _format_cdb_str(key_val):
-        if not cdb_info and not chi2_info:
-            return ""
+    run_cdb_info = {}
+    run_chi2_info = {}
+    if runs:
+        if "EMCal" in args.det or "CEMC" in args.det:
+            cdb_det = "CEMC"
+        elif "OHCal" in args.det or "HCALOUT" in args.det:
+            cdb_det = "HCALOUT"
+        else:
+            cdb_det = "HCALIN"
+        for r in runs:
+            run_cdb_info[r] = get_bad_tower_map(r, det=cdb_det, dbtag=args.cdbtag)
+            run_chi2_info[r] = get_frac_bad_chi2_map(r, det=cdb_det, dbtag=args.cdbtag)
+
+    def _format_run_parts(r, key_val):
         parts = []
-        info = cdb_info.get(key_val)
+        info = run_cdb_info.get(r, {}).get(key_val)
         if info is not None:
             parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
-        chi2_val = chi2_info.get(key_val)
+        chi2_val = run_chi2_info.get(r, {}).get(key_val)
         if chi2_val is not None:
             c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
             parts.append(f"frac badChi2={c_str}")
-        return ", " + ", ".join(parts) if parts else ""
+        return ", ".join(parts)
+
+    def print_result(base_str, key_val):
+        if not runs:
+            print(base_str)
+            return
+
+        if len(runs) == 1:
+            parts_str = _format_run_parts(runs[0], key_val)
+            cdb_str = f", {parts_str}" if parts_str else ""
+            print(f"{base_str}{cdb_str}")
+        else:
+            print(base_str)
+            for r in runs:
+                parts_str = _format_run_parts(r, key_val)
+                out_str = parts_str if parts_str else "no CDB record"
+                print(f"  Run {r}: {out_str}")
 
     if args.key is not None:
         eta, phi = get_calo_tower_key_coords(args.key)
         idx = get_calo_tower_index(args.key, det=args.det, use_pyroot=args.use_pyroot)
-        cdb_str = _format_cdb_str(args.key)
-        print(
+        base = (
             f"[{backend}] {args.det} towerKey={args.key} (hex: {hex(args.key)}) -> "
-            f"(ieta={eta}, iphi={phi}), towerIndex={idx}{cdb_str}"
+            f"(ieta={eta}, iphi={phi}), towerIndex={idx}"
         )
+        print_result(base, args.key)
     elif args.eta is not None and args.phi is not None:
         idx = get_calo_tower_index(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
         key = get_calo_tower_key(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
-        cdb_str = _format_cdb_str(key)
-        print(
+        base = (
             f"[{backend}] {args.det} (ieta={args.eta}, iphi={args.phi}) -> "
-            f"towerIndex={idx}, towerKey={key} (hex: {hex(key)}){cdb_str}"
+            f"towerIndex={idx}, towerKey={key} (hex: {hex(key)})"
         )
+        print_result(base, key)
     elif args.index is not None:
         eta, phi = get_calo_tower_ieta_iphi(args.index, det=args.det, use_pyroot=args.use_pyroot)
         key = get_calo_tower_key(args.index, det=args.det, use_pyroot=args.use_pyroot)
-        cdb_str = _format_cdb_str(key)
-        print(
+        base = (
             f"[{backend}] {args.det} towerIndex={args.index} -> "
-            f"(ieta={eta}, iphi={phi}), towerKey={key} (hex: {hex(key)}){cdb_str}"
+            f"(ieta={eta}, iphi={phi}), towerKey={key} (hex: {hex(key)})"
         )
+        print_result(base, key)
     else:
         parser.print_help()
 
