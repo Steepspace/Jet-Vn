@@ -288,7 +288,7 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, logy=True):
+def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, logy=True):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -301,14 +301,33 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
             print(f"Warning: Tower index {tower_index} out of bounds (0, {values.shape[0]})")
             plt.close(fig)
             return
-        ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
-        if ieta is not None and iphi is not None:
-            label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi})"
+        if label_text is None:
+            ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
+            if ieta is not None and iphi is not None:
+                label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi})"
+            else:
+                label_text = f"Tower Index: {tower_index}"
+    elif exclude_towers is not None and len(exclude_towers) > 0:
+        valid_excludes = [t for t in exclude_towers if 0 <= t < values.shape[0]]
+        if len(valid_excludes) > 0:
+            mask = np.ones(values.shape[0], dtype=bool)
+            mask[valid_excludes] = False
+            proj_y = np.sum(values[mask, :], axis=0)
+            if label_text is None:
+                if len(valid_excludes) == 1:
+                    label_text = f"All Good Towers (Excl. Tower {valid_excludes[0]})"
+                elif len(valid_excludes) <= 3:
+                    label_text = f"All Good Towers (Excl. Towers {', '.join(map(str, valid_excludes))})"
+                else:
+                    label_text = f"All Good Towers (Excl. {len(valid_excludes)} Outliers)"
         else:
-            label_text = f"Tower Index: {tower_index}"
+            proj_y = np.sum(values, axis=0)
+            if label_text is None:
+                label_text = "All Good Towers"
     else:
         proj_y = np.sum(values, axis=0)
-        label_text = "All Good Towers"
+        if label_text is None:
+            label_text = "All Good Towers"
 
     _, ylabel = get_hist_axis_titles(hist2d, hist_name)
     if not ylabel:
@@ -329,7 +348,13 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
 
     ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
     if label_text:
-        ax.text(0.03, 1.01, label_text, transform=ax.transAxes, ha='left', fontsize=18)
+        if len(label_text) > 42:
+            fs = 13
+        elif len(label_text) > 30:
+            fs = 15
+        else:
+            fs = 18
+        ax.text(0.03, 1.01, label_text, transform=ax.transAxes, ha='left', va='bottom', fontsize=fs)
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
@@ -479,6 +504,20 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
                             tower_index=None,
                             logy=True,
                         )
+
+                        # Full y-projection excluding outlier towers below threshold
+                        if len(outlier_towers) > 0:
+                            out_filename_excl = f"run_{run_number}_{h2_energy_name}_excl_outliers.png"
+                            output_path_excl = run_output_dir / out_filename_excl
+                            make_1d_yproj_plot(
+                                hist2d,
+                                run_number,
+                                output_path_excl,
+                                hist_name=h2_energy_name,
+                                tower_index=None,
+                                exclude_towers=outlier_towers,
+                                logy=True,
+                            )
 
                         # Y-projection for outlier towers below threshold
                         for tower_idx in outlier_towers:
