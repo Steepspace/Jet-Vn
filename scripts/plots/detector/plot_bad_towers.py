@@ -1,56 +1,90 @@
 #!/usr/bin/env python3
 
+import argparse
+import concurrent.futures
+import os
+from pathlib import Path
+import pickle
+import re
+import sys
+import numpy as np
+import pandas as pd
+import tqdm
 import uproot
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import mplhep as hep
-import os
-import tqdm
-import concurrent.futures
-import argparse
-from pathlib import Path
-import numpy as np
-import re
-import pandas as pd
-import pickle
-import sys
-
 from matplotlib.lines import Line2D
+import mplhep as hep
 
-def process_file(path):
-    path = Path(path)
-    if not path.exists():
-        return None, None, None, None, f"File not found: {path}"
+# Repository imports
+_calo_dir = Path(__file__).resolve().parent.parent / "calo"
+if str(_calo_dir) not in sys.path:
+    sys.path.insert(0, str(_calo_dir))
+
+try:
+    from tower_info_defs import get_cdb_calibration_url
+except ImportError:
+    get_cdb_calibration_url = None
+
+
+def process_item(item_data):
+    item, is_run, cdbtag = item_data
+    if is_run:
+        run_number = int(item)
+        if get_cdb_calibration_url is None:
+            return run_number, None, None, None, "tower_info_defs module could not be imported"
+        try:
+            url = get_cdb_calibration_url("CEMC_BadTowerMap", run_number, dbtag=cdbtag)
+            if not url:
+                return run_number, None, None, None, f"Could not find CDB calibration for run {run_number}"
+            path = url
+        except Exception as e:
+            return run_number, None, None, None, f"Error getting CDB URL for run {run_number}: {e}"
+    else:
+        path = Path(item)
+        if not path.exists():
+            return None, None, None, None, f"File not found: {path}"
+        try:
+            # Try to extract run number from filename (e.g. EMCalHotMap_..._78348.root)
+            match = re.search(r'_(\d+)\.root', path.name)
+            if match:
+                run_number = int(match.group(1))
+            else:
+                # Fallback
+                match = re.search(r'\d+', path.name)
+                if match:
+                    run_number = int(match.group())
+                else:
+                    return None, None, None, None, f"Could not parse run number from {path.name}"
+        except Exception as e:
+            return None, None, None, None, f"Error parsing run number from {path}: {e}"
 
     try:
-        # Try to extract run number from filename (e.g. EMCalHotMap_..._78348.root)
-        match = re.search(r'_(\d+)\.root', path.name)
-        if match:
-            run_number = int(match.group(1))
-        else:
-            # Fallback
-            match = re.search(r'\d+', path.name)
-            if match:
-                run_number = int(match.group())
-            else:
-                return None, None, None, None, f"Could not parse run number from {path.name}"
-
         with uproot.open(path) as file:
-            if "h_hot" not in file:
-                return None, None, None, None, f"h_hot not found in {path}"
-
-            hist = file["h_hot"]
-            values = hist.values()
-
-            # Count bad (non-zero), dead (value == 1), and hot (value == 2) towers
-            bad_towers_count = np.count_nonzero(values != 0)
-            dead_towers_count = np.count_nonzero(values == 1)
-            hot_towers_count = np.count_nonzero(values == 2)
-
-            return run_number, bad_towers_count, dead_towers_count, hot_towers_count, None
+            if "h_hot" in file:
+                hist = file["h_hot"]
+                values = hist.values()
+                bad_towers_count = np.count_nonzero(values != 0)
+                dead_towers_count = np.count_nonzero(values == 1)
+                hot_towers_count = np.count_nonzero(values == 2)
+                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, None
+            elif "Multiple;1" in file or "Multiple" in file:
+                tree = file["Multiple"]
+                if "Istatus" in tree.keys():
+                    data = tree.arrays(["Istatus"], library="np")
+                    statuses = data["Istatus"]
+                else:
+                    return run_number, None, None, None, f"Istatus branch not found in {path}"
+                bad_towers_count = np.count_nonzero(statuses != 0)
+                dead_towers_count = np.count_nonzero(statuses == 1)
+                hot_towers_count = np.count_nonzero(statuses == 2)
+                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, None
+            else:
+                return run_number, None, None, None, f"Neither h_hot nor Multiple tree found in {path}"
     except Exception as e:
-        return None, None, None, None, f"Error processing {path}: {e}"
+        return run_number if 'run_number' in locals() else None, None, None, None, f"Error processing {path}: {e}"
+
 
 def plot_towers(run_numbers, towers_count, output_dir, name, ylabel="Number of Bad Towers", suffix="", extra_text=None, ylim_bottom=None, legend_loc='lower left', legend_fontsize=18, sigma_threshold=None):
     hep.style.use("ATLAS")
@@ -155,7 +189,9 @@ def main():
     parser.add_argument("-s", "--sigma-threshold", type=float, default=3, help="N-sigma threshold above average for identifying outlier runs (default: 3).")
     parser.add_argument("--cache-file", type=Path, default=None, help="Path to cache file for processed ROOT file data.")
     parser.add_argument("--no-cache", action="store_true", help="Disable caching and force re-processing of all ROOT files.")
-    parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths")
+    parser.add_argument("--runs", action="store_true", help="Treat inputs as run numbers and fetch EMCal Bad Tower Maps from CDB.")
+    parser.add_argument("--cdbtag", type=str, default="newcdbtag", help="CDB global tag to use when fetching from CDB (default: newcdbtag).")
+    parser.add_argument("files", nargs="*", type=str, help="List of ROOT file paths or run numbers")
     args = parser.parse_args()
 
     file_list = []
@@ -168,17 +204,17 @@ def main():
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith('#'):
-                        file_list.append(Path(line))
+                        file_list.append(line)
         except Exception as e:
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
 
     if not file_list:
-        print("Error: You must provide at least one ROOT file or a text file containing ROOT file paths.")
+        print("Error: You must provide at least one ROOT file/run number or a text file containing them.")
         parser.print_help()
         sys.exit(1)
 
-    print(f"Found {len(file_list)} input files.")
+    print(f"Found {len(file_list)} input items.")
 
     cache = {}
     default_cache_name = ".bad_towers_cache.pkl"
@@ -196,31 +232,56 @@ def main():
     files_to_process = []
     results = []
 
-    for path in file_list:
-        path = Path(path)
-        resolved_str = str(path.resolve())
-        mtime = path.stat().st_mtime if path.exists() else 0
-
-        if not args.no_cache and resolved_str in cache:
-            entry = cache[resolved_str]
-            res = entry.get("result")
-            if entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 5:
-                results.append(res)
+    for item in file_list:
+        if args.runs:
+            run_str = str(item)
+            try:
+                run_num = int(run_str)
+            except ValueError:
+                print(f"Warning: Expected run number, got {run_str}. Skipping.")
                 continue
-
-        files_to_process.append(path)
-
-    if files_to_process:
-        print(f"Processing {len(files_to_process)} files ({len(results)} loaded from cache)...")
-        max_workers = min(os.cpu_count() or 4, 32)
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            new_results = list(tqdm.tqdm(executor.map(process_file, files_to_process), total=len(files_to_process)))
-
-        for path, res in zip(files_to_process, new_results):
-            results.append(res)
+            
+            cache_key = f"run_{run_num}_{args.cdbtag}"
+            mtime = 0
+            
+            if not args.no_cache and cache_key in cache:
+                entry = cache[cache_key]
+                res = entry.get("result")
+                if isinstance(res, (tuple, list)) and len(res) == 5:
+                    results.append(res)
+                    continue
+            files_to_process.append((run_num, True, args.cdbtag))
+        else:
+            path = Path(item)
             resolved_str = str(path.resolve())
             mtime = path.stat().st_mtime if path.exists() else 0
-            cache[resolved_str] = {
+
+            if not args.no_cache and resolved_str in cache:
+                entry = cache[resolved_str]
+                res = entry.get("result")
+                if entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 5:
+                    results.append(res)
+                    continue
+            files_to_process.append((path, False, None))
+
+    if files_to_process:
+        print(f"Processing {len(files_to_process)} items ({len(results)} loaded from cache)...")
+        max_workers = min(os.cpu_count() or 4, 32)
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            new_results = list(tqdm.tqdm(executor.map(process_item, files_to_process), total=len(files_to_process)))
+
+        for item_data, res in zip(files_to_process, new_results):
+            results.append(res)
+            item, is_run, cdbtag = item_data
+            if is_run:
+                cache_key = f"run_{item}_{cdbtag}"
+                mtime = 0
+            else:
+                path = Path(item)
+                cache_key = str(path.resolve())
+                mtime = path.stat().st_mtime if path.exists() else 0
+                
+            cache[cache_key] = {
                 "mtime": mtime,
                 "result": res
             }
