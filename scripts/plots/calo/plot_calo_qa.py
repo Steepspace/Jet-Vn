@@ -26,7 +26,11 @@ _script_dir = Path(__file__).resolve().parent
 if str(_script_dir) not in sys.path:
     sys.path.insert(0, str(_script_dir))
 
-from tower_info_defs import get_calo_tower_ieta_iphi
+from tower_info_defs import (
+    get_bad_tower_map,
+    get_calo_tower_ieta_iphi,
+    get_calo_tower_key,
+)
 
 def clean_root_latex(text):
     if not text:
@@ -288,7 +292,7 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, logy=True):
+def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, logy=True):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -303,10 +307,11 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
             return
         if label_text is None:
             ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
+            z_str = f", z-score: {z_score:+.2f}" if z_score is not None and not (isinstance(z_score, float) and np.isnan(z_score)) else ""
             if ieta is not None and iphi is not None:
-                label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi})"
+                label_text = rf"Tower Index: {tower_index} ($i\eta$: {ieta}, $i\phi$: {iphi}{z_str})"
             else:
-                label_text = f"Tower Index: {tower_index}"
+                label_text = f"Tower Index: {tower_index}" + (f" (z-score: {z_score:+.2f})" if z_str else "")
     elif exclude_towers is not None and len(exclude_towers) > 0:
         valid_excludes = [t for t in exclude_towers if 0 <= t < values.shape[0]]
         if len(valid_excludes) > 0:
@@ -377,7 +382,18 @@ def find_outlier_towers(hist2d, threshold):
     counts_below = np.sum(values[:, mask], axis=1)
     return np.where(counts_below > 0)[0]
 
-def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=True, do_logx=False, energy_threshold=-10.0, max_outlier_towers=50):
+def process_file(
+    path,
+    output_dir=None,
+    do_nolog=True,
+    do_logy=True,
+    do_logxy=True,
+    do_logx=False,
+    energy_threshold=-10.0,
+    max_outlier_towers=50,
+    use_cdb=True,
+    cdbtag="newcdbtag",
+):
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -476,14 +492,21 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
                         outlier_towers_set.update(towers.tolist())
 
             outlier_towers = sorted(outlier_towers_set)
+            bad_tower_map = {}
             if len(outlier_towers) > 0:
+                if use_cdb:
+                    bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
+
                 tower_desc = []
                 for t in outlier_towers[:max_outlier_towers]:
                     ieta, iphi = get_calo_tower_ieta_iphi(t, "EMCal")
+                    t_key = get_calo_tower_key(t, det="EMCal")
+                    z_val = bad_tower_map.get(t_key, {}).get("sigma") if bad_tower_map else None
+                    z_txt = f", z-score={z_val:+.2f}" if z_val is not None else ""
                     if ieta is not None and iphi is not None:
-                        tower_desc.append(f"{t} (ieta={ieta}, iphi={iphi})")
+                        tower_desc.append(f"{t} (ieta={ieta}, iphi={iphi}{z_txt})")
                     else:
-                        tower_desc.append(str(t))
+                        tower_desc.append(f"{t}{z_txt}")
                 print(f"[{path.name}] Found {len(outlier_towers)} outlier tower(s) with energy < {energy_threshold} GeV: {tower_desc}")
                 if max_outlier_towers is not None and max_outlier_towers > 0 and len(outlier_towers) > max_outlier_towers:
                     print(f"[{path.name}] Limiting outlier tower 1D plots to first {max_outlier_towers} towers.")
@@ -523,12 +546,15 @@ def process_file(path, output_dir=None, do_nolog=True, do_logy=True, do_logxy=Tr
                         for tower_idx in outlier_towers:
                             out_filename_tower = f"run_{run_number}_{h2_energy_name}_tower{tower_idx}.png"
                             output_path_tower = run_output_dir / out_filename_tower
+                            tower_key = get_calo_tower_key(tower_idx, det=h2_energy_name)
+                            z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
                             make_1d_yproj_plot(
                                 hist2d,
                                 run_number,
                                 output_path_tower,
                                 hist_name=h2_energy_name,
                                 tower_index=tower_idx,
+                                z_score=z_score,
                                 logy=True,
                             )
 
@@ -547,6 +573,8 @@ def main():
     parser.add_argument("--do-logx", type=int, default=0, help="Generate log-x scale plots (1=True, 0=False). Default: 0")
     parser.add_argument("--energy-threshold", type=float, default=-10.0, help="Energy threshold below which 1D tower energy plots are generated (default: -10.0 GeV).")
     parser.add_argument("--max-outlier-towers", type=int, default=50, help="Maximum number of outlier tower 1D plots to generate per run (default: 50).")
+    parser.add_argument("--cdbtag", default="newcdbtag", help="CDB global tag to fetch BadTowerMap calibration (default: newcdbtag).")
+    parser.add_argument("--no-cdb", action="store_true", help="Disable CDB BadTowerMap query for outlier tower z-scores.")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths")
     args = parser.parse_args()
 
@@ -556,11 +584,11 @@ def main():
 
     if args.file:
         try:
-            with args.file.open('r') as f:
+            with open(args.file, "r") as f:
                 for line in f:
-                    line = line.strip()
-                    if line and not line.startswith('#'):
-                        file_list.append(Path(line))
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#"):
+                        file_list.append(Path(stripped))
         except Exception as e:
             print(f"Error reading file {args.file}: {e}")
             sys.exit(1)
@@ -584,6 +612,8 @@ def main():
         do_logx=bool(args.do_logx),
         energy_threshold=args.energy_threshold,
         max_outlier_towers=args.max_outlier_towers,
+        use_cdb=not args.no_cdb,
+        cdbtag=args.cdbtag,
     )
     max_workers = min(os.cpu_count() or 4, 32)
 

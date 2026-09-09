@@ -387,6 +387,99 @@ def get_calo_tower_index(arg1, arg2=None, det="EMCal", use_pyroot=None):
 
 
 # ---------------------------------------------------------
+# sPHENIX CDB Bad Tower Map Support
+# ---------------------------------------------------------
+_CDB_URL_CACHE = {}
+_BAD_TOWER_CACHE = {}
+
+
+def get_cdb_calibration_url(payload_type, run_number, dbtag="newcdbtag"):
+    """
+    Query the sPHENIX CDB for the calibration ROOT file path matching run_number and payload_type.
+    Uses sphenixnpc / CDBUtils via PyROOT.
+    Cached per (payload_type, run_number, dbtag).
+    """
+    cache_key = (str(payload_type), int(run_number), str(dbtag))
+    if cache_key in _CDB_URL_CACHE:
+        return _CDB_URL_CACHE[cache_key]
+
+    try:
+        import ROOT
+        ROOT.gSystem.Load("libsphenixnpc.so")
+        ROOT.gInterpreter.Declare("""
+        #ifndef SPHENIX_CDB_HELPER
+        #define SPHENIX_CDB_HELPER
+        #include <sphenixnpc/SphenixClient.h>
+        #include <sphenixnpc/CDBUtils.h>
+        std::string get_sphenix_cdb_url(const std::string& pl_type, unsigned int runnumber, const std::string& tag="newcdbtag") {
+            static CDBUtils cdb;
+            cdb.setGlobalTag(tag);
+            return cdb.getUrl(pl_type, runnumber);
+        }
+        #endif
+        """)
+        url = str(ROOT.get_sphenix_cdb_url(str(payload_type), int(run_number), str(dbtag)))
+        if url.startswith("DataBaseException") or not url.endswith(".root"):
+            url = None
+    except Exception as e:
+        print(f"Warning: Failed to query CDB for {payload_type} (run {run_number}): {e}")
+        url = None
+
+    _CDB_URL_CACHE[cache_key] = url
+    return url
+
+
+def get_bad_tower_map(run_number, det="CEMC", dbtag="newcdbtag"):
+    """
+    Load the bad tower map calibration tree for a given run and detector.
+    det: 'CEMC' (EMCal), 'HCALIN', or 'HCALOUT' (or full payload type like 'CEMC_BadTowerMap').
+    Returns a dict mapping towerKey (IID) -> {'sigma': float, 'status': int}.
+    Cached per (det, run_number, dbtag).
+    """
+    cache_key = (str(det), int(run_number), str(dbtag))
+    if cache_key in _BAD_TOWER_CACHE:
+        return _BAD_TOWER_CACHE[cache_key]
+
+    pl_type = det if det.endswith("_BadTowerMap") else f"{det}_BadTowerMap"
+    url = get_cdb_calibration_url(pl_type, run_number, dbtag=dbtag)
+    if not url:
+        _BAD_TOWER_CACHE[cache_key] = {}
+        return {}
+
+    try:
+        import uproot
+        import numpy as np
+
+        with uproot.open(url) as f:
+            tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
+            sigma_branch = next((b for b in tree.keys() if b.endswith("_sigma")), None)
+            branches = ["IID"]
+            if sigma_branch:
+                branches.append(sigma_branch)
+            if "Istatus" in tree:
+                branches.append("Istatus")
+
+            data = tree.arrays(branches, library="np")
+            iids = data["IID"]
+            sigmas = data[sigma_branch] if sigma_branch else np.full(len(iids), np.nan)
+            statuses = data["Istatus"] if "Istatus" in data else np.zeros(len(iids), dtype=int)
+
+            result = {}
+            for iid, s, st in zip(iids, sigmas, statuses):
+                result[int(iid)] = {"sigma": float(s), "status": int(st)}
+
+            _BAD_TOWER_CACHE[cache_key] = result
+            return result
+    except Exception as e:
+        print(f"Warning: Failed to load BadTowerMap from {url}: {e}")
+        _BAD_TOWER_CACHE[cache_key] = {}
+        return {}
+
+
+get_cemc_bad_tower_map = get_bad_tower_map
+
+
+# ---------------------------------------------------------
 # Command-line Interface
 # ---------------------------------------------------------
 def main():
@@ -403,6 +496,16 @@ def main():
         help="Tower key (decimal or 0x hex) to decode.",
     )
     parser.add_argument(
+        "--run",
+        type=int,
+        help="Optional run number to query CDB BadTowerMap for z-score.",
+    )
+    parser.add_argument(
+        "--cdbtag",
+        default="newcdbtag",
+        help="CDB global tag (default: newcdbtag).",
+    )
+    parser.add_argument(
         "--use-pyroot",
         action="store_true",
         help="Use C++ TowerInfoDefs via PyROOT instead of pure Python.",
@@ -411,26 +514,42 @@ def main():
 
     backend = "PyROOT (C++)" if args.use_pyroot else "Pure Python"
 
+    cdb_info = {}
+    if args.run is not None:
+        cdb_det = "CEMC" if "EMCal" in args.det else "HCALIN"
+        cdb_info = get_bad_tower_map(args.run, det=cdb_det, dbtag=args.cdbtag)
+
+    def _format_cdb_str(key_val):
+        if not cdb_info:
+            return ""
+        info = cdb_info.get(key_val)
+        if info is not None:
+            return f", z-score={info['sigma']:+.2f}, status={info['status']}"
+        return ", z-score=N/A"
+
     if args.key is not None:
         eta, phi = get_calo_tower_key_coords(args.key)
         idx = get_calo_tower_index(args.key, det=args.det, use_pyroot=args.use_pyroot)
+        cdb_str = _format_cdb_str(args.key)
         print(
             f"[{backend}] {args.det} towerKey={args.key} (hex: {hex(args.key)}) -> "
-            f"(ieta={eta}, iphi={phi}), towerIndex={idx}"
+            f"(ieta={eta}, iphi={phi}), towerIndex={idx}{cdb_str}"
         )
     elif args.eta is not None and args.phi is not None:
         idx = get_calo_tower_index(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
         key = get_calo_tower_key(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
+        cdb_str = _format_cdb_str(key)
         print(
             f"[{backend}] {args.det} (ieta={args.eta}, iphi={args.phi}) -> "
-            f"towerIndex={idx}, towerKey={key} (hex: {hex(key)})"
+            f"towerIndex={idx}, towerKey={key} (hex: {hex(key)}){cdb_str}"
         )
     elif args.index is not None:
         eta, phi = get_calo_tower_ieta_iphi(args.index, det=args.det, use_pyroot=args.use_pyroot)
         key = get_calo_tower_key(args.index, det=args.det, use_pyroot=args.use_pyroot)
+        cdb_str = _format_cdb_str(key)
         print(
             f"[{backend}] {args.det} towerIndex={args.index} -> "
-            f"(ieta={eta}, iphi={phi}), towerKey={key} (hex: {hex(key)})"
+            f"(ieta={eta}, iphi={phi}), towerKey={key} (hex: {hex(key)}){cdb_str}"
         )
     else:
         parser.print_help()
