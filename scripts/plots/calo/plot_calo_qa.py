@@ -293,12 +293,13 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, frac_bad_chi2=None, logy=True):
+def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, frac_bad_chi2=None, logy=True, auto_xlim=None):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
     values, xedges, yedges = hist2d.to_numpy()
 
+    tower_info_lines = []
     if tower_index is not None:
         if 0 <= tower_index < values.shape[0]:
             proj_y = values[tower_index, :]
@@ -307,23 +308,20 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
             plt.close(fig)
             return
         if label_text is None:
+            tower_info_lines.append(f"Tower Index: {tower_index}")
             ieta, iphi = get_calo_tower_ieta_iphi(tower_index, hist_name)
-            meta_parts = []
             if ieta is not None and iphi is not None:
-                meta_parts.append(rf"$i\eta$: {ieta}, $i\phi$: {iphi}")
+                tower_info_lines.append(rf"$i\eta$: {ieta}, $i\phi$: {iphi}")
             if z_score is not None and not (isinstance(z_score, float) and np.isnan(z_score)):
-                meta_parts.append(f"z-score: {z_score:+.2f}")
+                tower_info_lines.append(f"z-score: {z_score:+.2f}")
             if frac_bad_chi2 is not None and not (isinstance(frac_bad_chi2, float) and np.isnan(frac_bad_chi2)):
                 if 0 < abs(frac_bad_chi2) < 0.01:
                     frac_str = f"{frac_bad_chi2:.2e}"
                 else:
                     frac_str = f"{frac_bad_chi2:.2f}"
-                meta_parts.append(f"frac badChi2: {frac_str}")
-
-            if meta_parts:
-                label_text = rf"Tower Index: {tower_index} (" + ", ".join(meta_parts) + ")"
-            else:
-                label_text = f"Tower Index: {tower_index}"
+                tower_info_lines.append(f"frac badChi2: {frac_str}")
+        else:
+            tower_info_lines.append(label_text)
     elif exclude_towers is not None and len(exclude_towers) > 0:
         valid_excludes = [t for t in exclude_towers if 0 <= t < values.shape[0]]
         if len(valid_excludes) > 0:
@@ -361,13 +359,66 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
         max_val = np.max(proj_y) if proj_y.size > 0 else 1
         ax.set_ylim(bottom=0.5, top=max(max_val * 5, 10))
 
-    ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
+    if auto_xlim is None:
+        auto_xlim = ("h2EMCalEnergyTowerIndex" in hist_name)
+
+    if auto_xlim:
+        nonzero = np.where(proj_y > 0)[0]
+        if len(nonzero) > 0:
+            xmin = float(yedges[nonzero[0]])
+            xmax = float(yedges[nonzero[-1] + 1])
+            span = xmax - xmin
+            padding = max(span * 0.05, 1.0)
+            left = max(xmin - padding, float(np.min(yedges)))
+            right = min(xmax + padding, float(np.max(yedges)))
+            ax.set_xlim(left=left, right=right)
+        else:
+            ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
+    else:
+        ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
 
     ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
-    if label_text:
-        if len(label_text) > 60:
-            fs = 11
-        elif len(label_text) > 42:
+    if tower_index is not None and tower_info_lines:
+        tower_info_text = "\n".join(tower_info_lines)
+        text_obj = ax.text(0.95, 0.95, tower_info_text, transform=ax.transAxes, ha='right', va='top', fontsize=16, multialignment='left')
+
+        # If text is overlapped by data in the top-right, move it to the top-left (inside plot)
+        try:
+            renderer = fig.canvas.get_renderer()
+            bbox_axes = ax.transAxes.inverted().transform(text_obj.get_window_extent(renderer=renderer))
+            x_min, x_max = ax.get_xlim()
+            y_min, y_max = ax.get_ylim()
+            tx0 = bbox_axes[0, 0] - 0.02
+            tx1 = bbox_axes[1, 0] + 0.02
+            ty0 = bbox_axes[0, 1] - 0.02
+
+            overlap = False
+            for i in range(len(proj_y)):
+                if proj_y[i] <= 0:
+                    continue
+                bx0 = (yedges[i] - x_min) / (x_max - x_min) if (x_max - x_min) != 0 else 0
+                bx1 = (yedges[i + 1] - x_min) / (x_max - x_min) if (x_max - x_min) != 0 else 0
+                b_left = min(bx0, bx1)
+                b_right = max(bx0, bx1)
+                if logy:
+                    if proj_y[i] > 0 and y_min > 0 and y_max > y_min:
+                        by = (np.log10(proj_y[i]) - np.log10(y_min)) / (np.log10(y_max) - np.log10(y_min))
+                    else:
+                        by = 0
+                else:
+                    by = (proj_y[i] - y_min) / (y_max - y_min) if (y_max - y_min) != 0 else 0
+
+                if b_right >= tx0 and b_left <= tx1 and by >= ty0:
+                    overlap = True
+                    break
+
+            if overlap:
+                text_obj.set_position((0.05, 0.95))
+                text_obj.set_ha('left')
+        except Exception:
+            pass
+    elif label_text:
+        if len(label_text) > 42:
             fs = 13
         elif len(label_text) > 30:
             fs = 15
