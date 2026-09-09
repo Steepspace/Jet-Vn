@@ -16,7 +16,8 @@ import functools
 import sys
 import traceback
 
-from matplotlib.ticker import LogLocator, ScalarFormatter
+from matplotlib.ticker import LogLocator, ScalarFormatter, FormatStrFormatter
+import matplotlib.ticker as ticker
 from matplotlib.colors import LogNorm
 from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -290,6 +291,131 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+def make_1d_zs_ratio_plot(hist2d_zs, hist2d_total, run_number, output_path, hist_name="EMCal", use_cent_denom=False):
+    hep.style.use("ATLAS")
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    zs_vals, zs_edges_e, _ = hist2d_zs.to_numpy()
+    zs_e = np.sum(zs_vals, axis=1)
+
+    if use_cent_denom:
+        # hist2d_total is h2EMCalCent: axis 0 is energy (80 bins, 0.5 GeV width [-10, 30])
+        tot_vals, tot_edges_e, _ = hist2d_total.to_numpy()
+        tot_e = np.sum(tot_vals, axis=1)
+        bin_width = 0.5
+        rebin_factor = 50
+        e_lows = np.arange(-10.0, 0.0, bin_width)
+        valid_e = []
+        valid_r = []
+        valid_diff = []
+        valid_tot = []
+        valid_fail = []
+
+        zs_e_rebin = zs_e.reshape(-1, rebin_factor).sum(axis=1)
+        for i, e in enumerate(e_lows):
+            c_tot = tot_e[i]
+            c_zs = zs_e_rebin[i]
+            if c_tot > 0:
+                r = c_zs / c_tot
+                valid_e.append(e)
+                valid_r.append(r)
+                valid_diff.append(r - 1.0)
+                valid_tot.append(c_tot)
+                valid_fail.append(max(0.0, c_tot - c_zs))
+    else:
+        # hist2d_total is h2EMCalEnergyTowerIndex: axis 1 is energy (350 bins, 1.0 GeV width [-150, 200])
+        tot_vals, _, tot_edges_e = hist2d_total.to_numpy()
+        tot_e = np.sum(tot_vals, axis=0)
+        bin_width = 1.0
+        e_lows = np.arange(-10.0, 0.0, bin_width)
+        valid_e = []
+        valid_r = []
+        valid_diff = []
+        valid_tot = []
+        valid_fail = []
+
+        for e in e_lows:
+            i_tot_arr = np.where(np.isclose(tot_edges_e[:-1], e))[0]
+            if len(i_tot_arr) == 0:
+                continue
+            i_tot = i_tot_arr[0]
+            c_tot = tot_e[i_tot]
+
+            i_zs_start_arr = np.where(np.isclose(zs_edges_e[:-1], e))[0]
+            i_zs_end_arr = np.where(np.isclose(zs_edges_e, e + bin_width))[0]
+            if len(i_zs_start_arr) == 0 or len(i_zs_end_arr) == 0:
+                continue
+            c_zs = np.sum(zs_e[i_zs_start_arr[0]:i_zs_end_arr[0]])
+
+            if c_tot > 0:
+                r = c_zs / c_tot
+                valid_e.append(e)
+                valid_r.append(r)
+                valid_diff.append(r - 1.0)
+                valid_tot.append(c_tot)
+                valid_fail.append(max(0.0, c_tot - c_zs))
+
+    valid_e = np.array(valid_e)
+    valid_r = np.array(valid_r)
+    valid_diff = np.array(valid_diff)
+    valid_tot = np.array(valid_tot)
+    valid_fail = np.array(valid_fail)
+
+    # Dashed reference line at 1.0
+    ax.axhline(1.0, color='crimson', linestyle='--', linewidth=1.5, zorder=2)
+
+    # Step plot: draw horizontal segments and vertical transitions between adjacent valid bins
+    for i in range(len(valid_e)):
+        e = valid_e[i]
+        r = valid_r[i]
+        ax.plot([e, e + bin_width], [r, r], color='navy', linewidth=2.5, zorder=3)
+        if i + 1 < len(valid_e) and np.isclose(valid_e[i+1], e + bin_width):
+            ax.plot([e + bin_width, e + bin_width], [r, valid_r[i+1]], color='navy', linewidth=2.5, zorder=3)
+
+    # Markers at bin centers
+    ax.plot(valid_e + bin_width / 2.0, valid_r, 'o', color='navy', markersize=6, zorder=4)
+
+    ax.set_xlabel('Tower Energy [GeV]', loc='center')
+    ax.set_ylabel(r'$N_{\mathrm{ZS}} \,/\, N_{\mathrm{Total}}$', loc='center')
+    ax.set_xlim(-10, 0)
+
+    # Proper zoom logic
+    max_dev = np.max(np.abs(valid_r - 1.0)) if len(valid_r) > 0 else 0.0
+    if max_dev < 1e-12:
+        ax.set_ylim(0.99, 1.01)
+    else:
+        pad = max(max_dev * 0.25, 1e-5)
+        bottom = min(valid_r.min() - pad, 1.0 - 1.25 * max_dev)
+        top = max(valid_r.max() + pad, 1.0 + 0.25 * max_dev)
+        ax.set_ylim(bottom=bottom, top=top)
+
+        if max_dev < 0.005:
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.5f'))
+        elif max_dev < 0.05:
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.3f'))
+        else:
+            ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
+
+    ax.text(1.0, 1.01, rf'Run: {run_number}', transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(0.04, 0.94, f'{hist_name}', transform=ax.transAxes, ha='left', va='top', fontsize=14, fontweight='bold')
+
+    # Show summary of deviating bins placed in lower-left area
+    dev_str_list = []
+    for e, r, cf in zip(valid_e, valid_r, valid_fail):
+        dev = 1.0 - r
+        if abs(dev) > 1e-6:
+            dev_str_list.append(f'[{e:g}, {e+bin_width:g}] GeV: {dev:.2e} (N_fail={cf:.2e})')
+
+    if dev_str_list:
+        dev_box_text = 'Deviation (1.0 - Ratio):\n' + '\n'.join(dev_str_list)
+        ax.text(0.04, 0.05, dev_box_text, transform=ax.transAxes, ha='left', va='bottom', fontsize=16,
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='whitesmoke', alpha=0.9, edgecolor='darkgray'))
+
+    fig.tight_layout()
+    plt.subplots_adjust(left=0.18, bottom=0.13, top=0.93)
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
@@ -733,6 +859,44 @@ def process_file(
                         hist_name=h2_name,
                         logy=True
                     )
+
+            # 2b. 1D ZS Fraction Ratio Plot in Negative Energy Range
+            if run_output_dir is not None and "h2EMCalZSCent" in file and "h2EMCalEnergyTowerIndex" in file:
+                out_filename_ratio = f"run_{run_number}_EMCal_ZS_ratio.png"
+                output_path_ratio = run_output_dir / out_filename_ratio
+                make_1d_zs_ratio_plot(
+                    file["h2EMCalZSCent"],
+                    file["h2EMCalEnergyTowerIndex"],
+                    run_number,
+                    output_path_ratio,
+                    hist_name="EMCal"
+                )
+
+            # OHCal ZS Fraction Ratio Plot in Negative Energy Range
+            if run_output_dir is not None and "h2OHCalZSCent" in file and "h2OHCalCent" in file:
+                out_filename_ohcal_ratio = f"run_{run_number}_OHCal_ZS_ratio.png"
+                output_path_ohcal_ratio = run_output_dir / out_filename_ohcal_ratio
+                make_1d_zs_ratio_plot(
+                    file["h2OHCalZSCent"],
+                    file["h2OHCalCent"],
+                    run_number,
+                    output_path_ohcal_ratio,
+                    hist_name="OHCal",
+                    use_cent_denom=True
+                )
+
+            # IHCal ZS Fraction Ratio Plot in Negative Energy Range
+            if run_output_dir is not None and "h2IHCalZSCent" in file and "h2IHCalCent" in file:
+                out_filename_ihcal_ratio = f"run_{run_number}_IHCal_ZS_ratio.png"
+                output_path_ihcal_ratio = run_output_dir / out_filename_ihcal_ratio
+                make_1d_zs_ratio_plot(
+                    file["h2IHCalZSCent"],
+                    file["h2IHCalCent"],
+                    run_number,
+                    output_path_ihcal_ratio,
+                    hist_name="IHCal",
+                    use_cent_denom=True
+                )
 
             # 3. 1D Y-Projection QA Histograms for Tower Energy vs Index
             h2_energy_index_names = [
