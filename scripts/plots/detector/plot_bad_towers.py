@@ -15,6 +15,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.colors import ListedColormap, BoundaryNorm
+from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import mplhep as hep
 
@@ -24,10 +26,11 @@ if str(_calo_dir) not in sys.path:
     sys.path.insert(0, str(_calo_dir))
 
 try:
-    from tower_info_defs import get_cdb_calibration_url, decode_emcal
+    from tower_info_defs import get_cdb_calibration_url, decode_emcal, get_frac_bad_chi2_map
 except ImportError:
     get_cdb_calibration_url = None
     decode_emcal = None
+    get_frac_bad_chi2_map = None
 
 
 def process_item(item_data):
@@ -71,10 +74,12 @@ def process_item(item_data):
                 dead_towers_count = np.count_nonzero(values == 1)
                 hot_towers_count = np.count_nonzero(values == 2)
                 
-                eta_indices, phi_indices = np.nonzero(values == 2)
-                hot_tower_keys = phi_indices + (eta_indices << 16)
+                eta_indices, phi_indices = np.nonzero(values != 0)
+                bad_tower_keys = phi_indices + (eta_indices << 16)
+                bad_tower_statuses = values[eta_indices, phi_indices].astype(int)
+                tower_status_map = dict(zip(bad_tower_keys.astype(int), bad_tower_statuses))
                 
-                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, hot_tower_keys, None
+                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, tower_status_map, None
             elif "Multiple;1" in file or "Multiple" in file:
                 tree = file["Multiple"]
                 if "Istatus" in tree.keys():
@@ -87,10 +92,23 @@ def process_item(item_data):
                 dead_towers_count = np.count_nonzero(statuses == 1)
                 hot_towers_count = np.count_nonzero(statuses == 2)
                 
-                hot_tower_keys = iids[statuses == 2]
-                return run_number, bad_towers_count, dead_towers_count, hot_towers_count, hot_tower_keys, None
+                bad_mask = statuses != 0
+                tower_status_map = dict(zip(iids[bad_mask].astype(int), statuses[bad_mask].astype(int)))
             else:
                 return run_number, None, None, None, None, f"Neither h_hot nor Multiple tree found in {path}"
+
+        # Fetch and incorporate frac_bad_chi2 (second ROOT file per run)
+        if run_number is not None and get_frac_bad_chi2_map is not None:
+            try:
+                dbtag = cdbtag if cdbtag else "newcdbtag"
+                chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=dbtag)
+                for k, frac in chi2_map.items():
+                    if frac > 0.01 and int(k) not in tower_status_map:
+                        tower_status_map[int(k)] = 4
+            except Exception as e:
+                print(f"Warning: Could not load fracBadChi2 for run {run_number}: {e}")
+
+        return run_number, bad_towers_count, dead_towers_count, hot_towers_count, tower_status_map, None
     except Exception as e:
         return run_number if 'run_number' in locals() else None, None, None, None, None, f"Error processing {path}: {e}"
 
@@ -191,15 +209,27 @@ def plot_towers(run_numbers, towers_count, output_dir, name, ylabel="Number of B
 plot_bad_towers = plot_towers
 
 
-def plot_frequently_hot_towers(all_hot_tower_keys, output_dir, name, total_runs=None):
+def plot_frequently_hot_towers(tower_status_per_run, output_dir, name, total_runs=None):
     """Analyze frequently hot towers across runs, save CSV, and produce 1D/2D plots."""
-    if not all_hot_tower_keys:
+    if not tower_status_per_run:
         return None
 
     if total_runs is None or total_runs <= 0:
-        total_runs = len(all_hot_tower_keys) if all_hot_tower_keys else 1
+        total_runs = len(tower_status_per_run)
 
-    all_keys = np.concatenate(all_hot_tower_keys)
+    valid_hot_keys = []
+    for item in tower_status_per_run:
+        if isinstance(item, dict):
+            h_keys = [k for k, s in item.items() if s == 2]
+            if h_keys:
+                valid_hot_keys.append(np.array(h_keys, dtype=int))
+        elif item is not None and len(item) > 0:
+            valid_hot_keys.append(np.array(item, dtype=int))
+
+    if not valid_hot_keys:
+        return None
+
+    all_keys = np.concatenate(valid_hot_keys)
     unique_keys, counts = np.unique(all_keys, return_counts=True)
 
     freq_data = []
@@ -234,7 +264,7 @@ def plot_frequently_hot_towers(all_hot_tower_keys, output_dir, name, total_runs=
     ax.plot(freq_df['TowerIndex'], freq_df['HotRunFraction'], marker='.', linestyle='none', color='red', alpha=0.6)
     ax.set_xlabel("Tower Index", loc='center', fontsize=18)
     ax.set_ylabel("Fraction of runs flagged as hot", loc='center', fontsize=18)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=1)
     ax.set_title("Frequently Hot Towers", fontsize=18, pad=12)
     ax.tick_params(labelsize=18)
     plt.tight_layout()
@@ -266,6 +296,67 @@ def plot_frequently_hot_towers(all_hot_tower_keys, output_dir, name, total_runs=
     plt.savefig(image_dir / f"{name}_frequent_hot_2D.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved frequently hot 2D map to {image_dir / f'{name}_frequent_hot_2D.png'}")
+
+    # Plot 3: 2D Run Index vs Tower for towers hot in >50% of the runs
+    hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
+    if len(hot_50_df) == 0:
+        print("No towers were hot in >50% of the runs. Skipping 50% hot towers run index plot.")
+    else:
+        target_keys = hot_50_df['TowerKey'].values
+        n_towers = len(target_keys)
+        n_runs = len(tower_status_per_run)
+
+        # Matrix: shape (n_towers, n_runs), default 0 (Good)
+        matrix_t = np.zeros((n_towers, n_runs), dtype=int)
+        for r_idx, run_status in enumerate(tower_status_per_run):
+            if isinstance(run_status, dict):
+                for t_idx, k in enumerate(target_keys):
+                    matrix_t[t_idx, r_idx] = run_status.get(int(k), 0)
+            elif run_status is not None and len(run_status) > 0:
+                for t_idx, k in enumerate(target_keys):
+                    if k in run_status:
+                        matrix_t[t_idx, r_idx] = 2
+
+        tower_labels = [
+            f"({int(row['ieta'])}, {int(row['iphi'])})"
+            for _, row in hot_50_df.iterrows()
+        ]
+
+        fig_width = max(12, min(24, n_runs * 0.15 + 4))
+        fig_height = max(6, min(16, n_towers * 0.45 + 1))
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+        status_names = ['Good', 'Dead', 'Hot', 'Cold', 'Bad Chi2']
+        status_colors = ['#2ca02c', '#333333', '#d62728', '#1f77b4', '#6a0dad']
+        cmap = ListedColormap(status_colors)
+        norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], cmap.N)
+
+        c = ax.imshow(matrix_t, aspect='auto', origin='lower', cmap=cmap, norm=norm,
+                      extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
+                      interpolation='nearest')
+        ax.invert_yaxis()
+
+        divider = make_axes_locatable(ax)
+        cax = divider.append_axes('right', size=0.3, pad=0.25)
+        cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3, 4])
+        cbar.ax.set_yticklabels(status_names, fontsize=14)
+        cbar.ax.tick_params(size=0)
+
+        ax.set_yticks(range(n_towers))
+        ax.set_yticklabels(tower_labels, fontsize=13)
+        ax.set_ylabel("Tower (ieta, iphi) (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
+        ax.set_xlabel("Run Index", loc='center', fontsize=18)
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        ax.set_title("Hot Towers (>50% Runs) vs Run Index", fontsize=18, pad=12)
+        ax.tick_params(axis='x', labelsize=16)
+
+        for y in np.arange(0.5, n_towers - 0.5, 1.0):
+            ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
+
+        plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index.pdf", bbox_inches='tight')
+        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
 
     return freq_df
 
@@ -336,7 +427,7 @@ def main():
             if not args.no_cache and cache_key in cache:
                 entry = cache[cache_key]
                 res = entry.get("result")
-                if isinstance(res, (tuple, list)) and len(res) == 6:
+                if entry.get("version") == 2 and isinstance(res, (tuple, list)) and len(res) == 6 and isinstance(res[4], dict):
                     results.append(res)
                     continue
             files_to_process.append((run_num, True, args.cdbtag))
@@ -348,10 +439,10 @@ def main():
             if not args.no_cache and resolved_str in cache:
                 entry = cache[resolved_str]
                 res = entry.get("result")
-                if entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 6:
+                if entry.get("version") == 2 and entry.get("mtime") == mtime and isinstance(res, (tuple, list)) and len(res) == 6 and isinstance(res[4], dict):
                     results.append(res)
                     continue
-            files_to_process.append((path, False, None))
+            files_to_process.append((path, False, args.cdbtag))
 
     if files_to_process:
         print(f"Processing {len(files_to_process)} items ({len(results)} loaded from cache)...")
@@ -371,6 +462,7 @@ def main():
                 mtime = path.stat().st_mtime if path.exists() else 0
                 
             cache[cache_key] = {
+                "version": 2,
                 "mtime": mtime,
                 "result": res
             }
@@ -390,9 +482,9 @@ def main():
     bad_towers_list = []
     dead_towers_list = []
     hot_towers_list = []
-    all_hot_tower_keys = []
+    tower_status_list = []
 
-    for run_num, bad_count, dead_count, hot_count, hot_keys, err in results:
+    for run_num, bad_count, dead_count, hot_count, tower_status, err in results:
         if err:
             print(err)
         elif run_num is not None:
@@ -400,16 +492,20 @@ def main():
             bad_towers_list.append(bad_count)
             dead_towers_list.append(dead_count)
             hot_towers_list.append(hot_count)
-            if hot_keys is not None and len(hot_keys) > 0:
-                all_hot_tower_keys.append(hot_keys)
+            if isinstance(tower_status, dict):
+                tower_status_list.append(tower_status)
+            elif isinstance(tower_status, (np.ndarray, list)):
+                tower_status_list.append({int(k): 2 for k in tower_status})
+            else:
+                tower_status_list.append({})
 
     if not run_numbers:
         print("No valid data found to plot.")
         return
 
     # Sort by run number
-    sorted_tuples = sorted(zip(run_numbers, bad_towers_list, dead_towers_list, hot_towers_list))
-    run_numbers, bad_towers_list, dead_towers_list, hot_towers_list = zip(*sorted_tuples)
+    sorted_tuples = sorted(zip(run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list), key=lambda x: x[0])
+    run_numbers, bad_towers_list, dead_towers_list, hot_towers_list, tower_status_list = zip(*sorted_tuples)
 
     counts_data = [
         {'Run': r, 'BadTowers': b, 'DeadTowers': d, 'HotTowers': h}
@@ -498,7 +594,7 @@ def main():
     )
 
     # Frequently Hot Towers Analysis
-    plot_frequently_hot_towers(all_hot_tower_keys, args.output_dir, args.name, total_runs=len(run_numbers))
+    plot_frequently_hot_towers(tower_status_list, args.output_dir, args.name, total_runs=len(run_numbers))
 
 if __name__ == "__main__":
     main()
