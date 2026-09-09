@@ -23,6 +23,7 @@
 #include <treefiller/TreeFiller.h>
 
 #include <TTree.h>
+#include <TH2D.h>
 
 // c++
 #include <cmath>
@@ -80,46 +81,46 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                      bins_hcal_phi, 0, bins_hcal_phi,
                                      bins_hcal_eta, 0, bins_hcal_eta);
 
-    m_hists.h2EMCalCent = new TH2F("h2EMCalCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2EMCalCent = new TH2D("h2EMCalCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
                                    bins_energy, energy_low, energy_high,
                                    bins_cent, cent_low, cent_high);
 
     if (m_do_retower)
     {
-      m_hists.h2EMCalRetoweredCent = new TH2F("h2EMCalRetoweredCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+      m_hists.h2EMCalRetoweredCent = new TH2D("h2EMCalRetoweredCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
                                               bins_energy, energy_low, energy_high,
                                               bins_cent, cent_low, cent_high);
     }
 
-    m_hists.h2IHCalCent = new TH2F("h2IHCalCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2IHCalCent = new TH2D("h2IHCalCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
                                    bins_energy, energy_low, energy_high,
                                    bins_cent, cent_low, cent_high);
 
-    m_hists.h2OHCalCent = new TH2F("h2OHCalCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2OHCalCent = new TH2D("h2OHCalCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
                                    bins_energy, energy_low, energy_high,
                                    bins_cent, cent_low, cent_high);
 
-    m_hists.h2EMCalZSCent = new TH2F("h2EMCalZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2EMCalZSCent = new TH2D("h2EMCalZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
                                      bins_energy_zs, energy_zs_low, energy_zs_high,
                                      bins_cent, cent_low, cent_high);
 
-    m_hists.h2IHCalZSCent = new TH2F("h2IHCalZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2IHCalZSCent = new TH2D("h2IHCalZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
                                      bins_energy_zs, energy_zs_low, energy_zs_high,
                                      bins_cent, cent_low, cent_high);
 
-    m_hists.h2OHCalZSCent = new TH2F("h2OHCalZSCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2OHCalZSCent = new TH2D("h2OHCalZSCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
                                      bins_energy_zs, energy_zs_low, energy_zs_high,
                                      bins_cent, cent_low, cent_high);
 
-    m_hists.h2EMCalNoZSCent = new TH2F("h2EMCalNoZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2EMCalNoZSCent = new TH2D("h2EMCalNoZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
                                        bins_energy, energy_low, energy_high,
                                        bins_cent, cent_low, cent_high);
 
-    m_hists.h2IHCalNoZSCent = new TH2F("h2IHCalNoZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2IHCalNoZSCent = new TH2D("h2IHCalNoZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
                                        bins_energy, energy_low, energy_high,
                                        bins_cent, cent_low, cent_high);
 
-    m_hists.h2OHCalNoZSCent = new TH2F("h2OHCalNoZSCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
+    m_hists.h2OHCalNoZSCent = new TH2D("h2OHCalNoZSCent", "OHCal; Tower Energy [GeV]; Centrality [%]",
                                        bins_energy, energy_low, energy_high,
                                        bins_cent, cent_low, cent_high);
 
@@ -127,7 +128,7 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     double totalCaloE_low = 0;
     double totalCaloE_high = 2500;
 
-    m_hists.h2CentralityTotalCaloE = new TH2F("h2CentralityTotalCaloE", "|z| < 10 cm and MB; Total Calorimeter Energy [GeV]; Centrality [%]",
+    m_hists.h2CentralityTotalCaloE = new TH2D("h2CentralityTotalCaloE", "|z| < 10 cm and MB; Total Calorimeter Energy [GeV]; Centrality [%]",
                                               bins_totalCaloE, totalCaloE_low, totalCaloE_high,
                                               bins_cent_full, cent_low, cent_high);
 
@@ -136,7 +137,7 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     double energy_wide_low = -150;
     double energy_wide_high = 200;
 
-    m_hists.h2EMCalEnergyTowerIndex = new TH2F("h2EMCalEnergyTowerIndex", "EMCal; Tower Index; Tower Energy [GeV]",
+    m_hists.h2EMCalEnergyTowerIndex = new TH2D("h2EMCalEnergyTowerIndex", "EMCal; Tower Index; Tower Energy [GeV]",
                                                bins_emcal_towers, 0, bins_emcal_towers,
                                                bins_energy_wide, energy_wide_low, energy_wide_high);
 
@@ -150,7 +151,7 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
       double chi2_low = 0;
       double chi2_high = 100000;
 
-      m_hists.h2EMCalChi2Energy = new TH2F("h2EMCalChi2Energy", "EMCal; Tower Energy [ADC]; #chi^{2}",
+      m_hists.h2EMCalChi2Energy = new TH2D("h2EMCalChi2Energy", "EMCal; Tower Energy [ADC]; #chi^{2}",
                                            bins_adc, adc_low, adc_high,
                                            bins_chi2, chi2_low, chi2_high);
 
@@ -158,7 +159,7 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
       double adc_raw_low = -9000;
       double adc_raw_high = 13000;
 
-      m_hists.h2EMCalRawEnergyTowerIndex = new TH2F("h2EMCalRawEnergyTowerIndex", "EMCal; Tower Index; Raw Tower Energy [ADC]",
+      m_hists.h2EMCalRawEnergyTowerIndex = new TH2D("h2EMCalRawEnergyTowerIndex", "EMCal; Tower Index; Raw Tower Energy [ADC]",
                                                     bins_emcal_towers, 0, bins_emcal_towers,
                                                     bins_adc_raw, adc_raw_low, adc_raw_high);
     }
