@@ -337,11 +337,65 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
     plt.close(fig)
     print(f"Saved frequently hot 2D map to {image_dir / f'{name}_frequent_hot_2D.png'}")
 
-    # Plot 3: 2D Run Index vs Tower for towers hot in >50% of the runs
+    # 2D Map categorized by hot frequency classes: 0-10%, 10-30%, 30-50%, >50%
+    fig, ax = plt.subplots(figsize=(8, 14))
+    map_2d_classes = np.zeros((256, 96), dtype=int)
+    for _, row in freq_df.iterrows():
+        iphi = int(row['iphi'])
+        ieta = int(row['ieta'])
+        if 0 <= iphi < 256 and 0 <= ieta < 96:
+            frac = row['HotRunFraction']
+            if frac > 0.5:
+                map_2d_classes[iphi, ieta] = 3
+            elif frac > 0.1:
+                map_2d_classes[iphi, ieta] = 2
+            elif row['HotRunCount'] >= 1:
+                map_2d_classes[iphi, ieta] = 1
+
+    counts = [np.count_nonzero(map_2d_classes == i) for i in range(4)]
+    def _fmt_cnt(cnt):
+        return f"{cnt:,} tower" if cnt == 1 else f"{cnt:,} towers"
+
+    class_colors = ['white', '#1f77b4', '#6a0dad', '#d62728']
+    class_names = [
+        f"0%\n({_fmt_cnt(counts[0])})",
+        f">0% - 10%\n({_fmt_cnt(counts[1])})",
+        f"10% - 50%\n({_fmt_cnt(counts[2])})",
+        f">50%\n({_fmt_cnt(counts[3])})"
+    ]
+    cmap_classes = ListedColormap(class_colors)
+    norm_classes = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap_classes.N)
+
+    c = ax.imshow(map_2d_classes, aspect='equal', origin='lower', cmap=cmap_classes, norm=norm_classes,
+                  extent=[-0.5, 95.5, -0.5, 255.5], interpolation='nearest')
+
+    ax.set_xlim(-0.5, 95.5)
+    ax.set_ylim(-0.5, 255.5)
+    ax.set_xlabel("ieta", fontsize=18)
+    ax.set_ylabel("iphi", loc='center', fontsize=18)
+    ax.set_title("Hot Towers Frequency Map", fontsize=18, pad=12)
+    ax.tick_params(which='both', labelsize=18, color='black', labelcolor='black')
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.2)
+    cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3])
+    cbar.ax.set_yticklabels(class_names, fontsize=14)
+    cbar.ax.tick_params(size=0)
+
+    plt.tight_layout()
+    plt.savefig(pdf_dir / f"{name}_frequent_hot_classes_2D.pdf", bbox_inches='tight')
+    plt.savefig(image_dir / f"{name}_frequent_hot_classes_2D.png", dpi=300, bbox_inches='tight')
+    plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_2D.pdf", bbox_inches='tight')
+    plt.savefig(image_dir / f"{name}_frequent_hot_50pct_2D.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved hot towers categorized 2D map to {image_dir / f'{name}_frequent_hot_classes_2D.png'}")
+
+    # Plots for towers hot in >50% of the runs
     hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
     if len(hot_50_df) == 0:
-        print("No towers were hot in >50% of the runs. Skipping 50% hot towers run index plot.")
+        print("No towers were hot in >50% of the runs. Skipping 50% hot towers plots.")
     else:
+        # Plot 3: 2D Run Index vs Tower for towers hot in >50% of the runs
         target_keys = hot_50_df['TowerKey'].values
         n_towers = len(target_keys)
         n_runs = len(tower_status_per_run)
