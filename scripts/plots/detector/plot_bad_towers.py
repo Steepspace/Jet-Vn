@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import tqdm
 import uproot
+import psycopg2
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -450,7 +451,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
 
         plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index.pdf", bbox_inches='tight')
-        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=800, bbox_inches='tight')
+        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=400, bbox_inches='tight')
         plt.close(fig)
         print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
 
@@ -513,7 +514,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             ax_top.set_title("Hot Towers (>50% Runs) vs Run Index  (Gold boxes = Good in Annotated Run)", fontsize=16, pad=10)
 
             plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index_annotated.pdf", bbox_inches='tight')
-            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=800, bbox_inches='tight')
+            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=400, bbox_inches='tight')
             plt.close(fig)
             print(f"Saved hot towers (>50%) vs run index plot with annotated runs to {image_dir / f'{name}_frequent_hot_50pct_run_index_annotated.png'}")
 
@@ -784,6 +785,194 @@ def plot_status_run_fraction_distributions(tower_status_per_run, total_runs, out
         print(f"Saved {cfg['status_name']} towers fraction 1D plot (log, step) to {png_path}")
 
 
+def fetch_run_durations(run_numbers):
+    """
+    Fetch run begin (brtimestamp) and end (ertimestamp) from DAQ replica database 'daq'
+    and compute run duration in minutes, following the procedure in estimate_lumi.py.
+    Returns a dict {runnumber: {'duration_min': float or None, 'brtimestamp': datetime or None, 'ertimestamp': datetime or None}}.
+    """
+    if not run_numbers:
+        return {}
+
+    unique_runs = sorted(list({int(r) for r in run_numbers if r is not None}))
+    if not unique_runs:
+        return {}
+
+    run_durations = {r: {'duration_min': None, 'brtimestamp': None, 'ertimestamp': None} for r in unique_runs}
+
+    try:
+        conn = psycopg2.connect(
+            host="sphnxdaqdbreplica",
+            database="daq"
+        )
+        with conn.cursor() as cur:
+            query = """
+                SELECT runnumber, brtimestamp, ertimestamp
+                FROM run
+                WHERE runnumber IN %s;
+            """
+            cur.execute(query, (tuple(unique_runs),))
+            rows = cur.fetchall()
+        conn.close()
+
+        for r, br, er in rows:
+            r = int(r)
+            if br is not None and er is not None:
+                duration_min = (er - br).total_seconds() / 60.0
+                if duration_min >= 0:
+                    run_durations[r] = {
+                        'duration_min': duration_min,
+                        'brtimestamp': br,
+                        'ertimestamp': er,
+                    }
+        return run_durations
+    except Exception as e:
+        print(f"Warning: Could not fetch run durations from database: {e}")
+        return run_durations
+
+
+def plot_run_durations(run_numbers, output_dir, name, cache=None, cache_path=None, no_cache=False):
+    """
+    Plot 1D step distribution of run durations in minutes with logarithmic y-axis,
+    annotating the fraction of runs above 30 min and 10 min duration.
+    Caches run duration data so repeated runs are fast.
+    """
+    if not run_numbers:
+        return
+
+    hep.style.use("ATLAS")
+
+    # Resolve cache location
+    standalone_cache = False
+    if cache is None:
+        cache = {}
+        if cache_path is None:
+            cache_path = output_dir / f".{name}_run_durations_cache.pkl"
+            standalone_cache = True
+        if not no_cache and cache_path.exists():
+            try:
+                with cache_path.open("rb") as f:
+                    cache = pickle.load(f)
+            except Exception as e:
+                print(f"Warning: Could not read cache file {cache_path}: {e}")
+                cache = {}
+
+    cached_durations = cache.get("_run_durations", {}) if not standalone_cache else cache
+    if not isinstance(cached_durations, dict):
+        cached_durations = {}
+
+    unique_runs = sorted(list({int(r) for r in run_numbers if r is not None}))
+    if no_cache:
+        missing_runs = unique_runs
+    else:
+        missing_runs = [r for r in unique_runs if r not in cached_durations]
+
+    if missing_runs:
+        if len(unique_runs) - len(missing_runs) > 0:
+            print(f"Fetching run durations for {len(missing_runs)} runs from database ({len(unique_runs) - len(missing_runs)} loaded from cache)...")
+        else:
+            print(f"Fetching run durations for {len(missing_runs)} runs from database...")
+
+        new_durations = fetch_run_durations(missing_runs)
+        cached_durations.update(new_durations)
+        if not standalone_cache:
+            cache["_run_durations"] = cached_durations
+        else:
+            cache = cached_durations
+
+        if not no_cache and cache_path:
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                with cache_path.open("wb") as f:
+                    pickle.dump(cache, f)
+                print(f"Saved run durations to cache ({cache_path}).")
+            except Exception as e:
+                print(f"Warning: Could not write cache file {cache_path}: {e}")
+    else:
+        print(f"Loaded all {len(unique_runs)} run durations from cache ({cache_path}).")
+
+    dur_list = []
+    dur_data = []
+    for r in run_numbers:
+        d_info = cached_durations.get(r)
+        if d_info and d_info.get('duration_min') is not None:
+            dur_list.append(d_info['duration_min'])
+            dur_data.append({
+                'Run': r,
+                'Duration_min': round(d_info['duration_min'], 3),
+                'BeginTime': d_info.get('brtimestamp'),
+                'EndTime': d_info.get('ertimestamp'),
+            })
+
+    if not dur_list:
+        print("No valid run durations found for input runs.")
+        return
+
+    durations = np.array(dur_list)
+    total_runs = len(run_numbers)
+    n_valid = len(durations)
+    n_above_10 = int(np.sum(durations > 10.0))
+    n_above_30 = int(np.sum(durations > 30.0))
+    frac_above_10 = (n_above_10 / n_valid) if n_valid > 0 else 0.0
+    frac_above_30 = (n_above_30 / n_valid) if n_valid > 0 else 0.0
+
+    # Save run durations to CSV
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"{name}_run_durations.csv"
+    try:
+        pd.DataFrame(dur_data).to_csv(csv_path, index=False)
+        print(f"Saved run durations ({len(dur_data)} runs) to {csv_path}")
+    except Exception as e:
+        print(f"Warning: Could not save run durations CSV: {e}")
+
+    # Determine binning: 1 min bin width from 0 to max_bin
+    max_dur = float(np.max(durations)) if len(durations) > 0 else 60.0
+    max_bin = max(65, int(np.ceil((max_dur + 2.0) / 5.0) * 5))
+    bins = np.arange(0, max_bin + 1, 1)
+
+    pdf_dir = output_dir / "pdf"
+    image_dir = output_dir / "images"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    n, _, _ = ax.hist(durations, bins=bins, histtype='step', color='#0055a5', linewidth=2.0)
+    max_n = max(n) if len(n) > 0 and max(n) > 0 else 10
+
+    ax.set_yscale('log')
+    ax.set_xlabel("Run Duration [min]", loc='center', fontsize=18)
+    ax.set_ylabel("Number of Runs", loc='center', fontsize=18)
+    ax.set_xlim(0, max_bin)
+    ax.set_ylim(bottom=0.5, top=max(max_n * 5.0, 10))
+    ax.xaxis.set_major_locator(MultipleLocator(10))
+    ax.xaxis.set_minor_locator(MultipleLocator(2))
+    ax.tick_params(labelsize=16)
+    ax.set_title("Run Duration Distribution", fontsize=18, pad=12)
+
+    # Reference lines for 10 min and 30 min
+    ax.axvline(10, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
+    ax.axvline(30, color='gray', linestyle='--', linewidth=1.2, alpha=0.7)
+
+    stats_lines = [f"Total Runs = {total_runs}"]
+    if n_valid < total_runs:
+        stats_lines.append(f"Runs in DB = {n_valid}")
+    stats_lines.append(f"Frac > 30 min: {frac_above_30 * 100:.1f}% ({n_above_30})")
+    stats_lines.append(f"Frac > 10 min: {frac_above_10 * 100:.1f}% ({n_above_10})")
+    stats_text = "\n".join(stats_lines)
+
+    ax.text(0.68, 0.95, stats_text, transform=ax.transAxes, fontsize=14,
+            verticalalignment='top',
+            bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray'))
+
+    plt.tight_layout()
+    pdf_path = pdf_dir / f"{name}_run_duration.pdf"
+    png_path = image_dir / f"{name}_run_duration.png"
+    plt.savefig(pdf_path, bbox_inches='tight')
+    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved run duration plot (log, step) to {png_path} and {pdf_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot Bad, Dead, and Hot Towers vs Run from a list of ROOT files.")
     parser.add_argument("-f", "--file", type=Path, help="Path to a text file containing ROOT file paths (one per line).")
@@ -1034,6 +1223,12 @@ def main():
     # 1D Status Run Fraction Distributions (Hot, Cold, Bad Chi2)
     plot_status_run_fraction_distributions(
         tower_status_list, len(run_numbers), args.output_dir, args.name
+    )
+
+    # Run Duration Distribution
+    plot_run_durations(
+        run_numbers, args.output_dir, args.name,
+        cache=cache, cache_path=cache_path, no_cache=args.no_cache
     )
 
 if __name__ == "__main__":
