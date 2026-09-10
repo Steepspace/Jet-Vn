@@ -429,6 +429,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                       extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
                       interpolation='nearest')
         ax.invert_yaxis()
+        ax.set_xlim(0, n_runs - 1)
 
         divider = make_axes_locatable(ax)
         cax = divider.append_axes('right', size=0.3, pad=0.25)
@@ -451,6 +452,69 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
         plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=300, bbox_inches='tight')
         plt.close(fig)
         print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
+
+        # Plot 3b: Annotated version with vertical lines for specific runs (68144, 72020, 76020)
+        target_annotated_runs = [68144, 72020, 76020]
+        found_annotations = []
+        for ar in target_annotated_runs:
+            indices = [idx for idx, r_val in enumerate(run_numbers) if r_val == ar]
+            for idx in indices:
+                found_annotations.append((ar, idx))
+
+        if found_annotations:
+            fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            c = ax.imshow(matrix_t, aspect='auto', origin='lower', cmap=cmap, norm=norm,
+                          extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
+                          interpolation='nearest')
+            ax.invert_yaxis()
+            ax.set_xlim(0, n_runs - 1)
+
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes('right', size=0.3, pad=0.25)
+            cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3, 4])
+            cbar.ax.set_yticklabels(status_names, fontsize=14)
+            cbar.ax.tick_params(size=0)
+
+            ax.set_yticks(range(n_towers))
+            ax.set_yticklabels(tower_labels, fontsize=13)
+            ax.set_ylabel("Tower (ieta, iphi) (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
+            ax.set_xlabel("Run Index", loc='center', fontsize=18)
+            ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+            ax.tick_params(axis='x', labelsize=16)
+
+            for y in np.arange(0.5, n_towers - 0.5, 1.0):
+                ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
+
+            # Annotated vertical lines, top tick labels, and good tower highlights
+            top_tick_labels = []
+            for ar, idx in found_annotations:
+                ax.axvline(idx, color='white', linestyle='-', linewidth=2.5, zorder=5)
+                ax.axvline(idx, color='black', linestyle='--', linewidth=1.8, zorder=6)
+
+                good_t_indices = np.where(matrix_t[:, idx] == 0)[0]
+                n_good = len(good_t_indices)
+                top_tick_labels.append(f"Run {ar}\n({n_good}/{n_towers} Good)")
+
+                if n_good > 0:
+                    ax.scatter([idx] * n_good, good_t_indices, marker='s', s=100,
+                               facecolors='none', edgecolors='#ffd700', linewidth=2.5, zorder=12)
+                    good_labels = [tower_labels[t] for t in good_t_indices]
+                    print(f"Run {ar} (run index {idx}): {n_good}/{n_towers} towers flagged Good: {', '.join(good_labels)}")
+                else:
+                    print(f"Run {ar} (run index {idx}): 0/{n_towers} towers flagged Good.")
+
+            ax_top = ax.twiny()
+            ax_top.set_axes_locator(ax.get_axes_locator())
+            ax_top.set_xlim(ax.get_xlim())
+            ax_top.set_xticks([idx for ar, idx in found_annotations])
+            ax_top.set_xticklabels(top_tick_labels, fontsize=16, fontweight='bold')
+            ax_top.tick_params(axis='x', pad=4, length=6, width=1.5)
+            ax_top.set_title("Hot Towers (>50% Runs) vs Run Index  (Gold boxes = Good in Annotated Run)", fontsize=16, pad=10)
+
+            plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index_annotated.pdf", bbox_inches='tight')
+            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=300, bbox_inches='tight')
+            plt.close(fig)
+            print(f"Saved hot towers (>50%) vs run index plot with annotated runs to {image_dir / f'{name}_frequent_hot_50pct_run_index_annotated.png'}")
 
         # Plot 4: 1D Z-score distributions for towers hot in >50% runs
         sigmas_cache_path = output_dir / f".{name}_hot_sigmas_cache.pkl"
