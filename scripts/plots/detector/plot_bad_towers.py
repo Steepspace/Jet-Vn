@@ -18,6 +18,7 @@ from matplotlib.lines import Line2D
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib.ticker import MaxNLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from matplotlib.offsetbox import TextArea, HPacker, VPacker, AnnotationBbox
 import mplhep as hep
 
 # Repository imports
@@ -449,7 +450,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
 
         plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index.pdf", bbox_inches='tight')
-        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=300, bbox_inches='tight')
+        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=800, bbox_inches='tight')
         plt.close(fig)
         print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
 
@@ -512,7 +513,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             ax_top.set_title("Hot Towers (>50% Runs) vs Run Index  (Gold boxes = Good in Annotated Run)", fontsize=16, pad=10)
 
             plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index_annotated.pdf", bbox_inches='tight')
-            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=300, bbox_inches='tight')
+            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=800, bbox_inches='tight')
             plt.close(fig)
             print(f"Saved hot towers (>50%) vs run index plot with annotated runs to {image_dir / f'{name}_frequent_hot_50pct_run_index_annotated.png'}")
 
@@ -581,14 +582,20 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                 # Compute status percentages across all runs
                 t_statuses = matrix_t[i, :]
                 n_tot = len(t_statuses)
-                status_labels = [(0, 'good'), (1, 'dead'), (2, 'hot'), (3, 'cold'), (4, 'bad chi2')]
+                status_labels = [
+                    (0, 'good', '#2ca02c'),
+                    (1, 'dead', '#333333'),
+                    (2, 'hot', '#d62728'),
+                    (3, 'cold', '#1f77b4'),
+                    (4, 'bad chi2', '#6a0dad')
+                ]
                 type_pcts = []
-                for scode, slabel in status_labels:
+                for scode, slabel, scolor in status_labels:
                     cnt = np.count_nonzero(t_statuses == scode)
                     if cnt > 0:
                         pct = (cnt / n_tot) * 100.0
                         pct_str = f"{pct:.1f}%" if pct >= 0.1 else f"{pct:.2f}%"
-                        type_pcts.append(f"{slabel}: {pct_str}")
+                        type_pcts.append((f"{slabel}: {pct_str}", scolor))
                 sigmas_to_plot.append((row, ieta, iphi, sigmas, type_pcts))
 
         n_plots = len(sigmas_to_plot)
@@ -598,32 +605,56 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             rows = max(5, int(np.ceil(n_plots / cols))) if n_plots > 0 else 0
 
             if rows > 0:
-                fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 4.5 * rows))
+                fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 4.5 * rows), sharex=True)
                 if n_plots == 1:
                     axes = np.array([axes])
-                axes = axes.flatten()
+                axes_flat = axes.flatten()
 
                 for i, (row, ieta, iphi, sigmas, type_pcts) in enumerate(sigmas_to_plot):
-                    ax = axes[i]
-                    ax.hist(sigmas, bins=30, histtype='step', color='#1f77b4', linewidth=2, log=True)
+                    ax = axes_flat[i]
+                    ax.hist(sigmas, bins=30, range=(-5, 5), histtype='step', color='#1f77b4', linewidth=2, log=True)
                     ax.set_ylim(bottom=0.5)
+                    ax.set_xlim(-5, 5)
+
+                    title_box = TextArea(f"Tower ({ieta}, {iphi})", textprops=dict(fontsize=12, color='black'))
+                    vbox_children = [title_box]
 
                     if len(type_pcts) > 2:
                         mid = (len(type_pcts) + 1) // 2
-                        pct_text = ", ".join(type_pcts[:mid]) + "\n" + ", ".join(type_pcts[mid:])
+                        lines = [type_pcts[:mid], type_pcts[mid:]]
                     else:
-                        pct_text = ", ".join(type_pcts)
+                        lines = [type_pcts]
 
-                    ax.set_title(f"Tower ({ieta}, {iphi})\n{pct_text}", fontsize=12)
-                    ax.set_xlabel("z-score", fontsize=14)
+                    for line_items in lines:
+                        h_children = []
+                        for idx_item, (item_text, item_color) in enumerate(line_items):
+                            if idx_item > 0:
+                                h_children.append(TextArea(", ", textprops=dict(fontsize=11, color='black')))
+                            h_children.append(TextArea(item_text, textprops=dict(fontsize=11, color=item_color, fontweight='bold')))
+                        h_line = HPacker(children=h_children, align='baseline', pad=0, sep=1)
+                        vbox_children.append(h_line)
+
+                    vbox = VPacker(children=vbox_children, align='center', pad=0, sep=2)
+                    ann = AnnotationBbox(vbox, (0.5, 1.02), xycoords='axes fraction', box_alignment=(0.5, 0),
+                                         pad=0, frameon=False)
+                    ax.add_artist(ann)
                     ax.set_ylabel("Runs (where tower is good)", fontsize=14)
 
-                for i in range(n_plots, len(axes)):
-                    fig.delaxes(axes[i])
+                for i in range(n_plots, len(axes_flat)):
+                    fig.delaxes(axes_flat[i])
+
+                # Ensure bottom-most active subplot in each column displays x-axis tick labels and xlabel
+                for c in range(cols):
+                    active_in_col = [r for r in range(rows) if (r * cols + c) < n_plots]
+                    if active_in_col:
+                        last_r = max(active_in_col)
+                        bottom_ax = axes_flat[last_r * cols + c]
+                        bottom_ax.tick_params(labelbottom=True)
+                        bottom_ax.set_xlabel("z-score", fontsize=14)
 
                 plt.tight_layout()
                 plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_zscore.pdf", bbox_inches='tight')
-                plt.savefig(image_dir / f"{name}_frequent_hot_50pct_zscore.png", dpi=300, bbox_inches='tight')
+                plt.savefig(image_dir / f"{name}_frequent_hot_50pct_zscore.png", dpi=400, bbox_inches='tight')
                 plt.close(fig)
                 print(f"Saved z-score distributions for {n_plots} towers to {image_dir / f'{name}_frequent_hot_50pct_zscore.png'}")
 
