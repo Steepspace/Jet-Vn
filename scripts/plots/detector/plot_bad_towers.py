@@ -16,7 +16,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, MultipleLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.offsetbox import TextArea, HPacker, VPacker, AnnotationBbox
 import mplhep as hep
@@ -661,6 +661,129 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
     return freq_df
 
 
+def plot_status_run_fraction_distributions(tower_status_per_run, total_runs, output_dir, name):
+    """
+    Plot 1D distributions of the fraction of runs towers are flagged as Hot, Cold, or Bad Chi2.
+    Produces separate plots for Hot (status 2), Cold (status 3), and Bad Chi2 (status 4).
+    Uses unfilled step histogram style ('step') with a logarithmic y-axis scale.
+    """
+    if not tower_status_per_run:
+        return
+
+    if total_runs is None or total_runs <= 0:
+        total_runs = len(tower_status_per_run)
+
+    pdf_dir = output_dir / "pdf"
+    image_dir = output_dir / "images"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    image_dir.mkdir(parents=True, exist_ok=True)
+
+    status_configs = [
+        {
+            'status_code': 2,
+            'status_name': 'Hot',
+            'color': '#d62728',
+            'xlabel': 'Fraction of Runs Flagged as Hot',
+            'title': 'Hot Towers vs Run Fraction',
+            'base_filename': f"{name}_fraction_hot_towers",
+            'csv_filename': f"{name}_frequent_hot_towers.csv",
+        },
+        {
+            'status_code': 3,
+            'status_name': 'Cold',
+            'color': '#1f77b4',
+            'xlabel': 'Fraction of Runs Flagged as Cold',
+            'title': 'Cold Towers vs Run Fraction',
+            'base_filename': f"{name}_fraction_cold_towers",
+            'csv_filename': f"{name}_frequent_cold_towers.csv",
+        },
+        {
+            'status_code': 4,
+            'status_name': 'Bad Chi2',
+            'color': '#6a0dad',
+            'xlabel': r'Fraction of Runs Flagged as Bad $\chi^2$',
+            'title': r'Bad $\chi^2$ Towers vs Run Fraction',
+            'base_filename': f"{name}_fraction_bad_chi2_towers",
+            'csv_filename': f"{name}_frequent_bad_chi2_towers.csv",
+        },
+    ]
+
+    bins = np.linspace(0, 1, 51)  # 50 bins from 0 to 1 (bin width 0.02)
+
+    for cfg in status_configs:
+        code = cfg['status_code']
+        tower_counts = {}
+        for item in tower_status_per_run:
+            if isinstance(item, dict):
+                for k, s in item.items():
+                    if s == code:
+                        tower_counts[k] = tower_counts.get(k, 0) + 1
+            elif isinstance(item, (list, np.ndarray)) and code == 2:
+                for k in item:
+                    tower_counts[int(k)] = tower_counts.get(int(k), 0) + 1
+
+        fracs = np.array([c / total_runs for c in tower_counts.values()]) if tower_counts else np.array([])
+
+        # Also save CSV for Cold and Bad Chi2 if not already generated
+        if code in (3, 4) and tower_counts:
+            freq_data = []
+            for k, count in tower_counts.items():
+                ieta = k >> 16
+                iphi = k & 0xFFFF
+                try:
+                    tidx = decode_emcal(k) if decode_emcal else -1
+                except Exception:
+                    tidx = -1
+                freq_data.append({
+                    'TowerIndex': tidx,
+                    'ieta': ieta,
+                    'iphi': iphi,
+                    'TowerKey': k,
+                    f"{cfg['status_name'].replace(' ', '')}RunCount": count,
+                    f"{cfg['status_name'].replace(' ', '')}RunFraction": count / total_runs,
+                })
+            df = pd.DataFrame(freq_data).sort_values(by=f"{cfg['status_name'].replace(' ', '')}RunCount", ascending=False)
+            csv_path = output_dir / cfg['csv_filename']
+            df.to_csv(csv_path, index=False)
+            print(f"Saved frequently {cfg['status_name'].lower()} towers info ({len(df)} towers) to {csv_path}")
+
+        max_frac_str = f"{np.max(fracs)*100:.1f}%" if len(fracs) > 0 else "N/A"
+        stats_text = (
+            f"Total Runs = {total_runs}\n"
+            f"Flagged Towers = {len(fracs)}\n"
+            f"Max Frac: {max_frac_str}\n"
+            f"Frac > 10%: {np.sum(fracs > 0.10)}\n"
+            f"Frac > 50%: {np.sum(fracs > 0.50)}"
+        )
+
+        # Logarithmic scale step plot
+        fig, ax = plt.subplots(figsize=(10, 6))
+        if len(fracs) > 0:
+            n, _, _ = ax.hist(fracs, bins=bins, histtype='step', color=cfg['color'], linewidth=2.0)
+            max_n = max(n) if len(n) > 0 and max(n) > 0 else 10
+        else:
+            max_n = 10
+        ax.set_yscale('log')
+        ax.set_xlabel(cfg['xlabel'], loc='center', fontsize=18)
+        ax.set_ylabel("Number of Towers", loc='center', fontsize=18)
+        ax.set_xlim(0, 1)
+        ax.set_ylim(bottom=0.5, top=max_n * 3.0)
+        ax.xaxis.set_major_locator(MultipleLocator(0.2))
+        ax.xaxis.set_minor_locator(MultipleLocator(0.05))
+        ax.tick_params(labelsize=16)
+        ax.set_title(cfg['title'], fontsize=18, pad=12)
+        ax.text(0.72, 0.95, stats_text, transform=ax.transAxes, fontsize=14,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray'))
+        plt.tight_layout()
+        pdf_path = pdf_dir / f"{cfg['base_filename']}.pdf"
+        png_path = image_dir / f"{cfg['base_filename']}.png"
+        plt.savefig(pdf_path, bbox_inches='tight')
+        plt.savefig(png_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
+        print(f"Saved {cfg['status_name']} towers fraction 1D plot (log, step) to {png_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Plot Bad, Dead, and Hot Towers vs Run from a list of ROOT files.")
     parser.add_argument("-f", "--file", type=Path, help="Path to a text file containing ROOT file paths (one per line).")
@@ -906,6 +1029,11 @@ def main():
     plot_frequently_hot_towers(
         tower_status_list, original_items, run_numbers, args.output_dir, args.name,
         total_runs=len(run_numbers), no_cache=args.no_cache
+    )
+
+    # 1D Status Run Fraction Distributions (Hot, Cold, Bad Chi2)
+    plot_status_run_fraction_distributions(
+        tower_status_list, len(run_numbers), args.output_dir, args.name
     )
 
 if __name__ == "__main__":
