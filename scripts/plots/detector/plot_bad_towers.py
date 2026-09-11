@@ -662,7 +662,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
     return freq_df
 
 
-def plot_status_run_fraction_distributions(tower_status_per_run, total_runs, output_dir, name):
+def plot_status_run_fraction_distributions(tower_status_per_run, total_runs, output_dir, name, run_numbers=None, run_durations=None):
     """
     Plot 1D distributions of the fraction of runs towers are flagged as Hot, Cold, or Bad Chi2.
     Produces separate plots for Hot (status 2), Cold (status 3), and Bad Chi2 (status 4).
@@ -784,6 +784,116 @@ def plot_status_run_fraction_distributions(tower_status_per_run, total_runs, out
         plt.close(fig)
         print(f"Saved {cfg['status_name']} towers fraction 1D plot (log, step) to {png_path}")
 
+        # Second version for Hot Towers: overlay runs with duration >= 30 min
+        if code == 2 and run_numbers is not None and run_durations:
+            hot_30_indices = []
+            for idx, r in enumerate(run_numbers):
+                dur_info = run_durations.get(r)
+                if dur_info and dur_info.get('duration_min') is not None and dur_info['duration_min'] >= 30.0:
+                    hot_30_indices.append(idx)
+
+            n_runs_30 = len(hot_30_indices)
+            if n_runs_30 == 0:
+                print("Notice: No runs with duration >= 30 min found. Skipping 30 min overlay plot.")
+            else:
+                tower_counts_30 = {}
+                for idx in hot_30_indices:
+                    item = tower_status_per_run[idx]
+                    if isinstance(item, dict):
+                        for k, s in item.items():
+                            if s == 2:
+                                tower_counts_30[k] = tower_counts_30.get(k, 0) + 1
+                    elif isinstance(item, (list, np.ndarray)):
+                        for k in item:
+                            tower_counts_30[int(k)] = tower_counts_30.get(int(k), 0) + 1
+
+                fracs_30 = np.array([c / n_runs_30 for c in tower_counts_30.values()]) if tower_counts_30 else np.array([])
+
+                # Save CSV for frequently hot towers with duration >= 30 min
+                if tower_counts_30:
+                    freq_data_30 = []
+                    for k, count in tower_counts_30.items():
+                        ieta = k >> 16
+                        iphi = k & 0xFFFF
+                        try:
+                            tidx = decode_emcal(k) if decode_emcal else -1
+                        except Exception:
+                            tidx = -1
+                        freq_data_30.append({
+                            'TowerIndex': tidx,
+                            'ieta': ieta,
+                            'iphi': iphi,
+                            'TowerKey': k,
+                            'HotRunCount': count,
+                            'HotRunFraction': count / n_runs_30,
+                        })
+                    df_30 = pd.DataFrame(freq_data_30).sort_values(by="HotRunCount", ascending=False)
+                    csv_path_30 = output_dir / f"{name}_frequent_hot_towers_ge30min.csv"
+                    df_30.to_csv(csv_path_30, index=False)
+                    print(f"Saved frequently hot towers (duration >= 30 min) info ({len(df_30)} towers) to {csv_path_30}")
+
+                fig_overlay, ax_overlay = plt.subplots(figsize=(10, 6))
+
+                # Keep curve from the first (All Runs)
+                if len(fracs) > 0:
+                    n_all, _, _ = ax_overlay.hist(
+                        fracs, bins=bins, histtype='step', color='#d62728', linewidth=2.0,
+                        label=f"All Runs ($N = {total_runs}$)"
+                    )
+                    max_n_all = max(n_all) if len(n_all) > 0 and max(n_all) > 0 else 10
+                else:
+                    max_n_all = 10
+
+                # Overlay curve for duration >= 30 min
+                if len(fracs_30) > 0:
+                    n_30, _, _ = ax_overlay.hist(
+                        fracs_30, bins=bins, histtype='step', color='#0055a5', linewidth=2.0,
+                        label=rf"Duration $\geq$ 30 min ($N = {n_runs_30}$)"
+                    )
+                    max_n_30 = max(n_30) if len(n_30) > 0 and max(n_30) > 0 else 10
+                else:
+                    max_n_30 = 10
+
+                max_n_both = max(max_n_all, max_n_30)
+                ax_overlay.set_yscale('log')
+                ax_overlay.set_xlabel(cfg['xlabel'], loc='center', fontsize=18)
+                ax_overlay.set_ylabel("Number of Towers", loc='center', fontsize=18)
+                ax_overlay.set_xlim(0, 1)
+                ax_overlay.set_ylim(bottom=0.5, top=max_n_both * 4.0)
+                ax_overlay.xaxis.set_major_locator(MultipleLocator(0.2))
+                ax_overlay.xaxis.set_minor_locator(MultipleLocator(0.05))
+                ax_overlay.tick_params(labelsize=16)
+                ax_overlay.set_title(r"Hot Towers vs Run Fraction (Duration $\geq$ 30 min Overlay)", fontsize=18, pad=12)
+
+                max_frac_30_str = f"{np.max(fracs_30)*100:.1f}%" if len(fracs_30) > 0 else "N/A"
+                stats_text_overlay = (
+                    r"$\bf{All\ Runs}$" + f" ($N = {total_runs}$):\n"
+                    f"  Flagged Towers = {len(fracs)}\n"
+                    f"  Max Frac: {max_frac_str}\n"
+                    f"  Frac > 10%: {np.sum(fracs > 0.10)}\n"
+                    f"  Frac > 50%: {np.sum(fracs > 0.50)}\n\n"
+                    r"$\bf{Duration\ \geq\ 30\ min}$" + f" ($N = {n_runs_30}$):\n"
+                    f"  Flagged Towers = {len(fracs_30)}\n"
+                    f"  Max Frac: {max_frac_30_str}\n"
+                    f"  Frac > 10%: {np.sum(fracs_30 > 0.10)}\n"
+                    f"  Frac > 50%: {np.sum(fracs_30 > 0.50)}"
+                )
+
+                ax_overlay.text(0.64, 0.95, stats_text_overlay, transform=ax_overlay.transAxes, fontsize=12.5,
+                                verticalalignment='top',
+                                bbox=dict(boxstyle='round,pad=0.5', facecolor='white', alpha=0.9, edgecolor='gray'))
+
+                ax_overlay.legend(loc='upper left', fontsize=14, frameon=True, framealpha=0.9, edgecolor='gray')
+
+                plt.tight_layout()
+                overlay_base = f"{cfg['base_filename']}_duration_ge_30min"
+                pdf_path_overlay = pdf_dir / f"{overlay_base}.pdf"
+                png_path_overlay = image_dir / f"{overlay_base}.png"
+                plt.savefig(pdf_path_overlay, bbox_inches='tight')
+                plt.savefig(png_path_overlay, dpi=300, bbox_inches='tight')
+                plt.close(fig_overlay)
+                print(f"Saved Hot towers fraction overlay plot (duration >= 30 min) to {png_path_overlay}")
+
 
 def fetch_run_durations(run_numbers):
     """
@@ -838,7 +948,7 @@ def plot_run_durations(run_numbers, output_dir, name, cache=None, cache_path=Non
     Caches run duration data so repeated runs are fast.
     """
     if not run_numbers:
-        return
+        return {}
 
     hep.style.use("ATLAS")
 
@@ -906,7 +1016,7 @@ def plot_run_durations(run_numbers, output_dir, name, cache=None, cache_path=Non
 
     if not dur_list:
         print("No valid run durations found for input runs.")
-        return
+        return cached_durations
 
     durations = np.array(dur_list)
     total_runs = len(run_numbers)
@@ -971,6 +1081,7 @@ def plot_run_durations(run_numbers, output_dir, name, cache=None, cache_path=Non
     plt.savefig(png_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     print(f"Saved run duration plot (log, step) to {png_path} and {pdf_path}")
+    return cached_durations
 
 
 def main():
@@ -1220,15 +1331,16 @@ def main():
         total_runs=len(run_numbers), no_cache=args.no_cache
     )
 
-    # 1D Status Run Fraction Distributions (Hot, Cold, Bad Chi2)
-    plot_status_run_fraction_distributions(
-        tower_status_list, len(run_numbers), args.output_dir, args.name
-    )
-
     # Run Duration Distribution
-    plot_run_durations(
+    run_durations = plot_run_durations(
         run_numbers, args.output_dir, args.name,
         cache=cache, cache_path=cache_path, no_cache=args.no_cache
+    )
+
+    # 1D Status Run Fraction Distributions (Hot, Cold, Bad Chi2)
+    plot_status_run_fraction_distributions(
+        tower_status_list, len(run_numbers), args.output_dir, args.name,
+        run_numbers=run_numbers, run_durations=run_durations
     )
 
 if __name__ == "__main__":
