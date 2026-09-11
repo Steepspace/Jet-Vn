@@ -456,79 +456,49 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             png_dur = image_dir / f"{name}_frequent_hot_classes_2D_duration_ge_{suffix}.png"
             _plot_hot_frequency_classes_2d(freq_df_dur, title_dur, pdf_dur, png_dur)
 
-    # Plots for towers hot in >50% of the runs
-    hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
-    if len(hot_50_df) == 0:
-        print("No towers were hot in >50% of the runs. Skipping 50% hot towers plots.")
+    # Plot 3: 2D Run Index vs Tower for towers hot in >10% of the runs
+    hot_10_df = freq_df[freq_df['HotRunFraction'] > 0.1]
+    if len(hot_10_df) == 0:
+        print("No towers were hot in >10% of the runs. Skipping 10% hot towers plots.")
     else:
-        # Plot 3: 2D Run Index vs Tower for towers hot in >50% of the runs
-        target_keys = hot_50_df['TowerKey'].values
-        n_towers = len(target_keys)
-        n_runs = len(tower_status_per_run)
+        max_towers_per_plot = 26
+        n_total_towers = len(hot_10_df)
+        n_chunks = (n_total_towers + max_towers_per_plot - 1) // max_towers_per_plot
 
-        # Matrix: shape (n_towers, n_runs), default 0 (Good)
-        matrix_t = np.zeros((n_towers, n_runs), dtype=int)
-        for r_idx, run_status in enumerate(tower_status_per_run):
-            if isinstance(run_status, dict):
-                for t_idx, k in enumerate(target_keys):
-                    matrix_t[t_idx, r_idx] = run_status.get(int(k), 0)
-            elif run_status is not None and len(run_status) > 0:
-                for t_idx, k in enumerate(target_keys):
-                    if k in run_status:
-                        matrix_t[t_idx, r_idx] = 2
+        for chunk_idx in range(n_chunks):
+            start_idx = chunk_idx * max_towers_per_plot
+            end_idx = min((chunk_idx + 1) * max_towers_per_plot, n_total_towers)
+            chunk_df = hot_10_df.iloc[start_idx:end_idx]
 
-        tower_labels = [
-            f"({int(row['ieta'])}, {int(row['iphi'])})"
-            for _, row in hot_50_df.iterrows()
-        ]
+            target_keys = chunk_df['TowerKey'].values
+            n_towers = len(target_keys)
+            n_runs = len(tower_status_per_run)
 
-        fig_width = max(12, min(24, n_runs * 0.15 + 4))
-        fig_height = max(6, min(16, n_towers * 0.45 + 1))
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+            # Matrix: shape (n_towers, n_runs), default 0 (Good)
+            matrix_t = np.zeros((n_towers, n_runs), dtype=int)
+            for r_idx, run_status in enumerate(tower_status_per_run):
+                if isinstance(run_status, dict):
+                    for t_idx, k in enumerate(target_keys):
+                        matrix_t[t_idx, r_idx] = run_status.get(int(k), 0)
+                elif run_status is not None and len(run_status) > 0:
+                    for t_idx, k in enumerate(target_keys):
+                        if k in run_status:
+                            matrix_t[t_idx, r_idx] = 2
 
-        status_names = ['Good', 'Dead', 'Hot', 'Cold', 'Bad Chi2']
-        status_colors = ['#2ca02c', '#333333', '#d62728', '#1f77b4', '#6a0dad']
-        cmap = ListedColormap(status_colors)
-        norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], cmap.N)
+            tower_labels = [
+                f"({int(row['ieta'])}, {int(row['iphi'])})  [{row['HotRunFraction']*100:.1f}%]"
+                for _, row in chunk_df.iterrows()
+            ]
 
-        c = ax.imshow(matrix_t, aspect='auto', origin='lower', cmap=cmap, norm=norm,
-                      extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
-                      interpolation='nearest')
-        ax.invert_yaxis()
-        ax.set_xlim(0, n_runs - 1)
-
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes('right', size=0.3, pad=0.25)
-        cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3, 4])
-        cbar.ax.set_yticklabels(status_names, fontsize=14)
-        cbar.ax.tick_params(size=0)
-
-        ax.set_yticks(range(n_towers))
-        ax.set_yticklabels(tower_labels, fontsize=13)
-        ax.set_ylabel("Tower (ieta, iphi) (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
-        ax.set_xlabel("Run Index", loc='center', fontsize=18)
-        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
-        ax.set_title("Hot Towers (>50% Runs) vs Run Index", fontsize=18, pad=12)
-        ax.tick_params(axis='x', labelsize=16)
-
-        for y in np.arange(0.5, n_towers - 0.5, 1.0):
-            ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
-
-        plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index.pdf", bbox_inches='tight')
-        plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index.png", dpi=400, bbox_inches='tight')
-        plt.close(fig)
-        print(f"Saved hot towers (>50%) vs run index plot ({n_towers} towers) to {image_dir / f'{name}_frequent_hot_50pct_run_index.png'}")
-
-        # Plot 3b: Annotated version with vertical lines for specific runs (68144, 72020, 76020)
-        target_annotated_runs = [68144, 72020, 76020]
-        found_annotations = []
-        for ar in target_annotated_runs:
-            indices = [idx for idx, r_val in enumerate(run_numbers) if r_val == ar]
-            for idx in indices:
-                found_annotations.append((ar, idx))
-
-        if found_annotations:
+            fig_width = max(12, min(24, n_runs * 0.15 + 4))
+            fig_height = max(6, min(16, n_towers * 0.45 + 1))
             fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+            status_names = ['Good', 'Dead', 'Hot', 'Cold', 'Bad Chi2']
+            status_colors = ['#2ca02c', '#333333', '#d62728', '#1f77b4', '#6a0dad']
+            cmap = ListedColormap(status_colors)
+            norm = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5, 4.5], cmap.N)
+
             c = ax.imshow(matrix_t, aspect='auto', origin='lower', cmap=cmap, norm=norm,
                           extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
                           interpolation='nearest')
@@ -543,44 +513,92 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
 
             ax.set_yticks(range(n_towers))
             ax.set_yticklabels(tower_labels, fontsize=13)
-            ax.set_ylabel("Tower (ieta, iphi) (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
+            ax.set_ylabel("Tower (ieta, iphi) [% Hot Runs] (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
             ax.set_xlabel("Run Index", loc='center', fontsize=18)
             ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+
+            title_suffix = f" (Part {chunk_idx + 1}/{n_chunks})" if n_chunks > 1 else ""
+            ax.set_title(f"Hot Towers (>10% Runs) vs Run Index{title_suffix}", fontsize=18, pad=12)
             ax.tick_params(axis='x', labelsize=16)
 
             for y in np.arange(0.5, n_towers - 0.5, 1.0):
                 ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
 
-            # Annotated vertical lines, top tick labels, and good tower highlights
-            top_tick_labels = []
-            for ar, idx in found_annotations:
-                ax.axvline(idx, color='white', linestyle='-', linewidth=2.5, zorder=5)
-                ax.axvline(idx, color='black', linestyle='--', linewidth=1.8, zorder=6)
-
-                good_t_indices = np.where(matrix_t[:, idx] == 0)[0]
-                n_good = len(good_t_indices)
-                top_tick_labels.append(f"Run {ar}\n({n_good}/{n_towers} Good)")
-
-                if n_good > 0:
-                    ax.scatter([idx] * n_good, good_t_indices, marker='s', s=100,
-                               facecolors='none', edgecolors='#ffd700', linewidth=2.5, zorder=12)
-                    good_labels = [tower_labels[t] for t in good_t_indices]
-                    print(f"Run {ar} (run index {idx}): {n_good}/{n_towers} towers flagged Good: {', '.join(good_labels)}")
-                else:
-                    print(f"Run {ar} (run index {idx}): 0/{n_towers} towers flagged Good.")
-
-            ax_top = ax.twiny()
-            ax_top.set_axes_locator(ax.get_axes_locator())
-            ax_top.set_xlim(ax.get_xlim())
-            ax_top.set_xticks([idx for ar, idx in found_annotations])
-            ax_top.set_xticklabels(top_tick_labels, fontsize=16, fontweight='bold')
-            ax_top.tick_params(axis='x', pad=4, length=6, width=1.5)
-            ax_top.set_title("Hot Towers (>50% Runs) vs Run Index  (Gold boxes = Good in Annotated Run)", fontsize=16, pad=10)
-
-            plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_run_index_annotated.pdf", bbox_inches='tight')
-            plt.savefig(image_dir / f"{name}_frequent_hot_50pct_run_index_annotated.png", dpi=400, bbox_inches='tight')
+            file_suffix = f"_pt{chunk_idx + 1}" if n_chunks > 1 else ""
+            plt.savefig(pdf_dir / f"{name}_frequent_hot_10pct_run_index{file_suffix}.pdf", bbox_inches='tight')
+            plt.savefig(image_dir / f"{name}_frequent_hot_10pct_run_index{file_suffix}.png", dpi=400, bbox_inches='tight')
             plt.close(fig)
-            print(f"Saved hot towers (>50%) vs run index plot with annotated runs to {image_dir / f'{name}_frequent_hot_50pct_run_index_annotated.png'}")
+            print(f"Saved hot towers (>10%) vs run index plot ({n_towers} towers){title_suffix} to {image_dir / f'{name}_frequent_hot_10pct_run_index{file_suffix}.png'}")
+
+            # Plot 3b: Annotated version with vertical lines for specific runs (68144, 72020, 76020)
+            target_annotated_runs = [68144, 72020, 76020]
+            found_annotations = []
+            for ar in target_annotated_runs:
+                indices = [idx for idx, r_val in enumerate(run_numbers) if r_val == ar]
+                for idx in indices:
+                    found_annotations.append((ar, idx))
+
+            if found_annotations:
+                fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+                c = ax.imshow(matrix_t, aspect='auto', origin='lower', cmap=cmap, norm=norm,
+                              extent=[-0.5, n_runs - 0.5, -0.5, n_towers - 0.5],
+                              interpolation='nearest')
+                ax.invert_yaxis()
+                ax.set_xlim(0, n_runs - 1)
+
+                divider = make_axes_locatable(ax)
+                cax = divider.append_axes('right', size=0.3, pad=0.25)
+                cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3, 4])
+                cbar.ax.set_yticklabels(status_names, fontsize=14)
+                cbar.ax.tick_params(size=0)
+
+                ax.set_yticks(range(n_towers))
+                ax.set_yticklabels(tower_labels, fontsize=13)
+                ax.set_ylabel("Tower (ieta, iphi) [% Hot Runs] (Most to Least Frequent)", loc='center', fontsize=16, labelpad=10)
+                ax.set_xlabel("Run Index", loc='center', fontsize=18)
+                ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+                ax.tick_params(axis='x', labelsize=16)
+
+                for y in np.arange(0.5, n_towers - 0.5, 1.0):
+                    ax.axhline(y, color='gray', linewidth=0.8, alpha=0.5)
+
+                # Annotated vertical lines, top tick labels, and good tower highlights
+                top_tick_labels = []
+                for ar, idx in found_annotations:
+                    ax.axvline(idx, color='white', linestyle='-', linewidth=2.5, zorder=5)
+                    ax.axvline(idx, color='black', linestyle='--', linewidth=1.8, zorder=6)
+
+                    good_t_indices = np.where(matrix_t[:, idx] == 0)[0]
+                    n_good = len(good_t_indices)
+                    top_tick_labels.append(f"Run {ar}\n({n_good}/{n_towers} Good)")
+
+                    if n_good > 0:
+                        ax.scatter([idx] * n_good, good_t_indices, marker='s', s=100,
+                                   facecolors='none', edgecolors='#ffd700', linewidth=2.5, zorder=12)
+                        good_labels = [tower_labels[t] for t in good_t_indices]
+                        print(f"Run {ar} (run index {idx}): {n_good}/{n_towers} towers flagged Good: {', '.join(good_labels)}")
+                    else:
+                        print(f"Run {ar} (run index {idx}): 0/{n_towers} towers flagged Good.")
+
+                ax_top = ax.twiny()
+                ax_top.set_axes_locator(ax.get_axes_locator())
+                ax_top.set_xlim(ax.get_xlim())
+                ax_top.set_xticks([idx for ar, idx in found_annotations])
+                ax_top.set_xticklabels(top_tick_labels, fontsize=16, fontweight='bold')
+                ax_top.tick_params(axis='x', pad=4, length=6, width=1.5)
+                ax_top.set_title(f"Hot Towers (>10% Runs) vs Run Index{title_suffix}  (Gold boxes = Good in Annotated Run)", fontsize=16, pad=10)
+
+                plt.savefig(pdf_dir / f"{name}_frequent_hot_10pct_run_index_annotated{file_suffix}.pdf", bbox_inches='tight')
+                plt.savefig(image_dir / f"{name}_frequent_hot_10pct_run_index_annotated{file_suffix}.png", dpi=400, bbox_inches='tight')
+                plt.close(fig)
+                print(f"Saved hot towers (>10%) vs run index plot with annotated runs{title_suffix} to {image_dir / f'{name}_frequent_hot_10pct_run_index_annotated{file_suffix}.png'}")
+
+    # Setup for Plot 4: 1D Z-score distributions for towers hot in >50% runs
+    hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
+    if len(hot_50_df) == 0:
+        print("No towers were hot in >50% of the runs. Skipping 50% hot towers Z-score plots.")
+    else:
+        target_keys = hot_50_df['TowerKey'].values
 
         # Plot 4: 1D Z-score distributions for towers hot in >50% runs
         sigmas_cache_path = output_dir / f".{name}_hot_sigmas_cache.pkl"
