@@ -251,16 +251,76 @@ def _get_target_sigmas_for_run(args):
 
     return run_num, sigmas
 
-def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run_numbers, output_dir, name, total_runs=None, no_cache=False):
-    """Analyze frequently hot towers across runs, save CSV, and produce 1D/2D plots."""
-    if not tower_status_per_run:
-        return None
+def _plot_hot_frequency_classes_2d(freq_df, title, pdf_path, png_path):
+    """Plot 2D ieta vs iphi map categorized by hot frequency classes: 0%, >0-10%, 10-50%, >50%."""
+    fig, ax = plt.subplots(figsize=(8, 14))
+    map_2d_classes = np.zeros((256, 96), dtype=int)
+    if freq_df is not None and not freq_df.empty:
+        for _, row in freq_df.iterrows():
+            iphi = int(row['iphi'])
+            ieta = int(row['ieta'])
+            if 0 <= iphi < 256 and 0 <= ieta < 96:
+                frac = row['HotRunFraction']
+                if frac > 0.5:
+                    map_2d_classes[iphi, ieta] = 3
+                elif frac > 0.1:
+                    map_2d_classes[iphi, ieta] = 2
+                elif row['HotRunCount'] >= 1:
+                    map_2d_classes[iphi, ieta] = 1
 
-    if total_runs is None or total_runs <= 0:
-        total_runs = len(tower_status_per_run)
+    counts = [np.count_nonzero(map_2d_classes == i) for i in range(4)]
+    def _fmt_cnt(cnt):
+        return f"{cnt:,} tower" if cnt == 1 else f"{cnt:,} towers"
+
+    class_colors = ['white', '#1f77b4', '#6a0dad', '#d62728']
+    class_names = [
+        f"0%\n({_fmt_cnt(counts[0])})",
+        f">0% - 10%\n({_fmt_cnt(counts[1])})",
+        f"10% - 50%\n({_fmt_cnt(counts[2])})",
+        f">50%\n({_fmt_cnt(counts[3])})"
+    ]
+    cmap_classes = ListedColormap(class_colors)
+    norm_classes = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap_classes.N)
+
+    c = ax.imshow(map_2d_classes, aspect='equal', origin='lower', cmap=cmap_classes, norm=norm_classes,
+                  extent=[-0.5, 95.5, -0.5, 255.5], interpolation='nearest')
+
+    ax.set_xlim(-0.5, 95.5)
+    ax.set_ylim(-0.5, 255.5)
+    ax.set_xlabel("ieta", fontsize=18)
+    ax.set_ylabel("iphi", loc='center', fontsize=18)
+    ax.set_title(title, fontsize=18, pad=12)
+    ax.tick_params(which='both', labelsize=18, color='black', labelcolor='black')
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes('right', size='5%', pad=0.2)
+    cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3])
+    cbar.ax.set_yticklabels(class_names, fontsize=14)
+    cbar.ax.tick_params(size=0)
+
+    plt.tight_layout()
+    plt.savefig(pdf_path, bbox_inches='tight')
+    plt.savefig(png_path, dpi=300, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Saved hot towers categorized 2D map to {png_path}")
+
+
+def _compute_hot_frequency_df(tower_status_list, subset_indices=None, total_runs=None):
+    """Compute frequency DataFrame for towers flagged as hot (status 2)."""
+    if subset_indices is not None:
+        items = [tower_status_list[i] for i in subset_indices]
+        if total_runs is None:
+            total_runs = len(subset_indices)
+    else:
+        items = tower_status_list
+        if total_runs is None:
+            total_runs = len(tower_status_list)
+
+    if total_runs <= 0 or not items:
+        return pd.DataFrame(columns=['TowerIndex', 'ieta', 'iphi', 'TowerKey', 'HotRunCount', 'HotRunFraction'])
 
     valid_hot_keys = []
-    for item in tower_status_per_run:
+    for item in items:
         if isinstance(item, dict):
             h_keys = [k for k, s in item.items() if s == 2]
             if h_keys:
@@ -269,7 +329,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             valid_hot_keys.append(np.array(item, dtype=int))
 
     if not valid_hot_keys:
-        return None
+        return pd.DataFrame(columns=['TowerIndex', 'ieta', 'iphi', 'TowerKey', 'HotRunCount', 'HotRunFraction'])
 
     all_keys = np.concatenate(valid_hot_keys)
     unique_keys, counts = np.unique(all_keys, return_counts=True)
@@ -290,8 +350,32 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             'HotRunCount': count,
             'HotRunFraction': count / total_runs,
         })
+    return pd.DataFrame(freq_data).sort_values(by="HotRunCount", ascending=False)
 
-    freq_df = pd.DataFrame(freq_data).sort_values(by="HotRunCount", ascending=False)
+
+def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run_numbers, output_dir, name, total_runs=None, no_cache=False, run_durations=None):
+    """Analyze frequently hot towers across runs, save CSV, and produce 1D/2D plots."""
+    if not tower_status_per_run:
+        return None
+
+    if total_runs is None or total_runs <= 0:
+        total_runs = len(tower_status_per_run)
+
+    if run_durations is None and not no_cache:
+        cache_file = output_dir / ".bad_towers_cache.pkl"
+        if cache_file.exists():
+            try:
+                with cache_file.open("rb") as f:
+                    c_data = pickle.load(f)
+                if isinstance(c_data, dict) and "_run_durations" in c_data:
+                    run_durations = c_data["_run_durations"]
+            except Exception:
+                pass
+
+    freq_df = _compute_hot_frequency_df(tower_status_per_run, total_runs=total_runs)
+    if freq_df.empty:
+        return None
+
     freq_csv_path = output_dir / f"{name}_frequent_hot_towers.csv"
     freq_df.to_csv(freq_csv_path, index=False)
     print(f"Saved frequently hot towers info ({len(freq_df)} towers) to {freq_csv_path}")
@@ -339,58 +423,38 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
     plt.close(fig)
     print(f"Saved frequently hot 2D map to {image_dir / f'{name}_frequent_hot_2D.png'}")
 
-    # 2D Map categorized by hot frequency classes: 0-10%, 10-30%, 30-50%, >50%
-    fig, ax = plt.subplots(figsize=(8, 14))
-    map_2d_classes = np.zeros((256, 96), dtype=int)
-    for _, row in freq_df.iterrows():
-        iphi = int(row['iphi'])
-        ieta = int(row['ieta'])
-        if 0 <= iphi < 256 and 0 <= ieta < 96:
-            frac = row['HotRunFraction']
-            if frac > 0.5:
-                map_2d_classes[iphi, ieta] = 3
-            elif frac > 0.1:
-                map_2d_classes[iphi, ieta] = 2
-            elif row['HotRunCount'] >= 1:
-                map_2d_classes[iphi, ieta] = 1
+    # Plot 2D Map categorized by hot frequency classes: 0%, >0-10%, 10-50%, >50% (All Runs)
+    _plot_hot_frequency_classes_2d(
+        freq_df,
+        "Hot Towers Frequency Map",
+        pdf_dir / f"{name}_frequent_hot_classes_2D.pdf",
+        image_dir / f"{name}_frequent_hot_classes_2D.png"
+    )
 
-    counts = [np.count_nonzero(map_2d_classes == i) for i in range(4)]
-    def _fmt_cnt(cnt):
-        return f"{cnt:,} tower" if cnt == 1 else f"{cnt:,} towers"
+    # 2D Hot Towers Frequency Map for filtered run durations (>= 10 min, >= 30 min)
+    duration_thresholds = [(10, "10min"), (30, "30min")]
+    for min_dur, suffix in duration_thresholds:
+        if run_numbers is not None and run_durations:
+            filtered_indices = []
+            for idx, r in enumerate(run_numbers):
+                dur_info = run_durations.get(r)
+                if dur_info and dur_info.get('duration_min') is not None and dur_info['duration_min'] >= float(min_dur):
+                    filtered_indices.append(idx)
 
-    class_colors = ['white', '#1f77b4', '#6a0dad', '#d62728']
-    class_names = [
-        f"0%\n({_fmt_cnt(counts[0])})",
-        f">0% - 10%\n({_fmt_cnt(counts[1])})",
-        f"10% - 50%\n({_fmt_cnt(counts[2])})",
-        f">50%\n({_fmt_cnt(counts[3])})"
-    ]
-    cmap_classes = ListedColormap(class_colors)
-    norm_classes = BoundaryNorm([-0.5, 0.5, 1.5, 2.5, 3.5], cmap_classes.N)
+            n_filtered = len(filtered_indices)
+            if n_filtered == 0:
+                print(f"Notice: No runs with duration >= {min_dur} min found. Skipping {min_dur} min 2D map.")
+                continue
 
-    c = ax.imshow(map_2d_classes, aspect='equal', origin='lower', cmap=cmap_classes, norm=norm_classes,
-                  extent=[-0.5, 95.5, -0.5, 255.5], interpolation='nearest')
+            freq_df_dur = _compute_hot_frequency_df(tower_status_per_run, subset_indices=filtered_indices, total_runs=n_filtered)
+            csv_path_dur = output_dir / f"{name}_frequent_hot_towers_ge{suffix}.csv"
+            freq_df_dur.to_csv(csv_path_dur, index=False)
+            print(f"Saved frequently hot towers (duration >= {min_dur} min, {n_filtered} runs, {len(freq_df_dur)} towers) to {csv_path_dur}")
 
-    ax.set_xlim(-0.5, 95.5)
-    ax.set_ylim(-0.5, 255.5)
-    ax.set_xlabel("ieta", fontsize=18)
-    ax.set_ylabel("iphi", loc='center', fontsize=18)
-    ax.set_title("Hot Towers Frequency Map", fontsize=18, pad=12)
-    ax.tick_params(which='both', labelsize=18, color='black', labelcolor='black')
-
-    divider = make_axes_locatable(ax)
-    cax = divider.append_axes('right', size='5%', pad=0.2)
-    cbar = fig.colorbar(c, cax=cax, ticks=[0, 1, 2, 3])
-    cbar.ax.set_yticklabels(class_names, fontsize=14)
-    cbar.ax.tick_params(size=0)
-
-    plt.tight_layout()
-    plt.savefig(pdf_dir / f"{name}_frequent_hot_classes_2D.pdf", bbox_inches='tight')
-    plt.savefig(image_dir / f"{name}_frequent_hot_classes_2D.png", dpi=300, bbox_inches='tight')
-    plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_2D.pdf", bbox_inches='tight')
-    plt.savefig(image_dir / f"{name}_frequent_hot_50pct_2D.png", dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"Saved hot towers categorized 2D map to {image_dir / f'{name}_frequent_hot_classes_2D.png'}")
+            title_dur = rf"Hot Towers Frequency Map (Duration $\geq$ {min_dur} min)"
+            pdf_dur = pdf_dir / f"{name}_frequent_hot_classes_2D_duration_ge_{suffix}.pdf"
+            png_dur = image_dir / f"{name}_frequent_hot_classes_2D_duration_ge_{suffix}.png"
+            _plot_hot_frequency_classes_2d(freq_df_dur, title_dur, pdf_dur, png_dur)
 
     # Plots for towers hot in >50% of the runs
     hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
@@ -1325,16 +1389,16 @@ def main():
         ylabel="Number of Hot Towers", suffix="", ylim_bottom=None, legend_loc='upper center', legend_fontsize=14
     )
 
-    # Frequently Hot Towers Analysis
-    plot_frequently_hot_towers(
-        tower_status_list, original_items, run_numbers, args.output_dir, args.name,
-        total_runs=len(run_numbers), no_cache=args.no_cache
-    )
-
     # Run Duration Distribution
     run_durations = plot_run_durations(
         run_numbers, args.output_dir, args.name,
         cache=cache, cache_path=cache_path, no_cache=args.no_cache
+    )
+
+    # Frequently Hot Towers Analysis
+    plot_frequently_hot_towers(
+        tower_status_list, original_items, run_numbers, args.output_dir, args.name,
+        total_runs=len(run_numbers), no_cache=args.no_cache, run_durations=run_durations
     )
 
     # 1D Status Run Fraction Distributions (Hot, Cold, Bad Chi2)
