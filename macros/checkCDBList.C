@@ -34,10 +34,13 @@ void checkCDBList(const std::vector<unsigned int>& runnumbers, const std::filesy
       {"EMCal Bad Tower Map", "CEMC_BadTowerMap"},
       {"EMCal Frac Bad Chi2", "CEMC_hotTowers_fracBadChi2"},
       {"EMCal Mean Time", "CEMC_meanTime"},
+      {"EMCal ZS Cross Calib", "CEMC_ZSCrossCalib"},
       {"HCALIN Frac Bad Chi2", "HCALIN_hotTowers_fracBadChi2"},
       {"HCALIN Mean Time", "HCALIN_meanTime"},
+      {"HCALIN ZS Cross Calib", "HCALIN_ZSCrossCalib"},
       {"HCALOUT Frac Bad Chi2", "HCALOUT_hotTowers_fracBadChi2"},
       {"HCALOUT Mean Time", "HCALOUT_meanTime"},
+      {"HCALOUT ZS Cross Calib", "HCALOUT_ZSCrossCalib"},
       {"sEPD Calib", "SEPD_NMIP_CALIB"},
       {"sEPD Event Plane", "SEPD_EventPlaneCalib"}
   };
