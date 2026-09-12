@@ -62,6 +62,8 @@ class sEPDQA
     TH2 *h2CaloE_MBD{nullptr};
     TH2 *h2sEPD_CaloE_cut{nullptr};
     TH2 *h2CaloE_MBD_cut{nullptr};
+    TH2 *h2sEPD_North_South{nullptr};
+    TH2 *h2sEPD_North_South_cut{nullptr};
   };
 
   AnalysisHists m_hists;
@@ -158,6 +160,10 @@ void sEPDQA::init_hists()
   double sepd_total_charge_low{0};
   double sepd_total_charge_high{3e4};
 
+  unsigned int bins_sepd_charge{100};
+  double sepd_charge_low{0};
+  double sepd_charge_high{2e4};
+
   unsigned int bins_mbd_total_charge{120};
   double mbd_total_charge_low{0};
   double mbd_total_charge_high{3e3};
@@ -177,6 +183,8 @@ void sEPDQA::init_hists()
   m_hists2D["h2CaloE_MBD"] = std::make_unique<TH2F>("h2CaloE_MBD", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
   m_hists2D["h2sEPD_CaloE_cut"] = std::make_unique<TH2F>("h2sEPD_CaloE_cut", "; Total Calorimeter Energy [GeV]; sEPD Total Charge", bins_Calo_E, Calo_E_low, Calo_E_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
   m_hists2D["h2CaloE_MBD_cut"] = std::make_unique<TH2F>("h2CaloE_MBD_cut", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
+  m_hists2D["h2sEPD_North_South"] = std::make_unique<TH2F>("h2sEPD_North_South", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
+  m_hists2D["h2sEPD_North_South_cut"] = std::make_unique<TH2F>("h2sEPD_North_South_cut", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
 
   // Bind pointers for performance
   m_hists.h2sEPD_Centrality = m_hists2D["h2sEPD_Centrality"].get();
@@ -185,6 +193,8 @@ void sEPDQA::init_hists()
   m_hists.h2CaloE_MBD = m_hists2D["h2CaloE_MBD"].get();
   m_hists.h2sEPD_CaloE_cut = m_hists2D["h2sEPD_CaloE_cut"].get();
   m_hists.h2CaloE_MBD_cut = m_hists2D["h2CaloE_MBD_cut"].get();
+  m_hists.h2sEPD_North_South = m_hists2D["h2sEPD_North_South"].get();
+  m_hists.h2sEPD_North_South_cut = m_hists2D["h2sEPD_North_South_cut"].get();
 
   for (auto &[name, hist] : m_hists2D)
   {
@@ -223,12 +233,14 @@ void sEPDQA::process_events()
     m_hists.h2sEPD_MBD->Fill(mbd_total, sepd_total);
     m_hists.h2sEPD_CaloE->Fill(total_calo_e, sepd_total);
     m_hists.h2CaloE_MBD->Fill(mbd_total, total_calo_e);
+    m_hists.h2sEPD_North_South->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
 
     // Event cut: y > (76/7)x + 1000 where y is sEPD total charge and x is MBD total charge
     if (sepd_total > (76.0 / 7.0) * mbd_total + 1000.0)
     {
       m_hists.h2sEPD_CaloE_cut->Fill(total_calo_e, sepd_total);
       m_hists.h2CaloE_MBD_cut->Fill(mbd_total, total_calo_e);
+      m_hists.h2sEPD_North_South_cut->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
     }
 
     if (m_verbosity > 0)

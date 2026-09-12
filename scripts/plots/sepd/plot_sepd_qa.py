@@ -30,6 +30,8 @@ HIST_NAMES = [
     "h2CaloE_MBD",
     "h2sEPD_CaloE_cut",
     "h2CaloE_MBD_cut",
+    "h2sEPD_North_South",
+    "h2sEPD_North_South_cut",
 ]
 
 CENTRALITY_INTERVALS = [
@@ -200,12 +202,16 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
         ax.set_xlim(left=xedges[0], right=2100)
     elif hist_name == "h2sEPD_Centrality":
         ax.set_xlim(left=0, right=100)
+    elif hist_name in ["h2sEPD_North_South", "h2sEPD_North_South_cut"]:
+        ax.set_xlim(left=0, right=xedges[-1])
     else:
         ax.set_xlim(left=xedges[0], right=xedges[-1])
 
     # Set y-limits based on histogram type
     if hist_name in ["h2CaloE_MBD", "h2CaloE_MBD_cut"]:
         ax.set_ylim(bottom=yedges[0], top=2100)
+    elif hist_name in ["h2sEPD_North_South", "h2sEPD_North_South_cut"]:
+        ax.set_ylim(bottom=0, top=yedges[-1])
     else:
         # sEPD total charge max is 20000 on y-axis
         ax.set_ylim(bottom=0, top=20000)
