@@ -196,6 +196,14 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
       continue;
     }
 
+    int rbin = TowerInfoDefs::get_epd_rbin(key);
+
+    // Skip Innermost Ring
+    if (m_skipRing0 && rbin == 0)
+    {
+      continue;
+    }
+
     double charge = tower->get_energy();
 
     unsigned int arm = TowerInfoDefs::get_epd_arm(key);

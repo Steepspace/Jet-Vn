@@ -27,6 +27,7 @@ class GlobalQA : public SubsysReco
   void set_do_mbd(bool b = true) { m_do_mbd = b; }
 
   void set_sepd_threshold(double threshold) { m_sepd_channel_threshold = threshold; }
+  void set_skipRing0(bool b = true) { m_skipRing0 = b; }
 
  private:
 
@@ -57,6 +58,8 @@ class GlobalQA : public SubsysReco
   EventData m_data;
 
   double m_sepd_channel_threshold{0.5};
+
+  bool m_skipRing0{true};
 
   bool m_do_ep{true};
   bool m_do_sepd{true};
