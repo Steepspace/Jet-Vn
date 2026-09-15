@@ -419,13 +419,20 @@ def make_1d_zs_ratio_plot(hist2d_zs, hist2d_total, run_number, output_path, hist
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, frac_bad_chi2=None, logy=True, auto_xlim=None):
+def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_index=None, exclude_towers=None, label_text=None, z_score=None, frac_bad_chi2=None, logy=True, auto_xlim=None, ref_tower_index=None, ref_z_score=None, ref_frac_bad_chi2=None):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
     values, xedges, yedges = hist2d.to_numpy()
 
     tower_info_lines = []
+    proj_y_ref = None
+    if ref_tower_index is not None:
+        if 0 <= ref_tower_index < values.shape[0]:
+            proj_y_ref = values[ref_tower_index, :]
+        else:
+            print(f"Warning: Reference tower index {ref_tower_index} out of bounds (0, {values.shape[0]})")
+
     if tower_index is not None:
         if 0 <= tower_index < values.shape[0]:
             proj_y = values[tower_index, :]
@@ -474,7 +481,29 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
     if not ylabel:
         ylabel = r"Raw Tower Energy [ADC]" if "Raw" in hist_name else r"Tower Energy [GeV]"
 
-    hep.histplot((proj_y, yedges), ax=ax, histtype='step', color='navy', linewidth=2)
+    if proj_y_ref is not None:
+        def format_overlay_legend_label(prefix, t_idx, z_val, f_val):
+            ieta, iphi = get_calo_tower_ieta_iphi(t_idx, hist_name)
+            line1 = f"{prefix}: Tower {t_idx}"
+            if ieta is not None and iphi is not None:
+                line1 += f" (ieta: {ieta}, iphi: {iphi})"
+            line2_parts = []
+            if z_val is not None and not (isinstance(z_val, float) and np.isnan(z_val)):
+                line2_parts.append(f"z-score: {z_val:+.2f}")
+            if f_val is not None and not (isinstance(f_val, float) and np.isnan(f_val)):
+                c_str = f"{f_val:.2e}" if 0 < abs(f_val) < 0.01 else f"{f_val:.2f}"
+                line2_parts.append(f"frac badChi2: {c_str}")
+            if line2_parts:
+                return line1 + "\n  " + ", ".join(line2_parts)
+            return line1
+
+        label_out = format_overlay_legend_label("Outlier", tower_index, z_score, frac_bad_chi2)
+        label_ref = format_overlay_legend_label("Ref", ref_tower_index, ref_z_score, ref_frac_bad_chi2)
+
+        hep.histplot((proj_y, yedges), ax=ax, histtype='step', color='crimson', linewidth=2, label=label_out)
+        hep.histplot((proj_y_ref, yedges), ax=ax, histtype='step', color='navy', linewidth=2, linestyle='--', label=label_ref)
+    else:
+        hep.histplot((proj_y, yedges), ax=ax, histtype='step', color='navy', linewidth=2)
 
     ax.set_xlabel(ylabel, loc='center')
     ax.set_ylabel("Counts", loc='center')
@@ -482,14 +511,19 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
     if logy:
         ax.set_yscale('log')
         ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
-        max_val = np.max(proj_y) if proj_y.size > 0 else 1
-        ax.set_ylim(bottom=0.5, top=max(max_val * 5, 10))
+        all_projs = [proj_y]
+        if proj_y_ref is not None:
+            all_projs.append(proj_y_ref)
+        max_val = max(np.max(p) if p.size > 0 else 1 for p in all_projs)
+        top_mult = 30 if proj_y_ref is not None else 5
+        ax.set_ylim(bottom=0.5, top=max(max_val * top_mult, 10))
 
     if auto_xlim is None:
         auto_xlim = ("h2EMCalEnergyTowerIndex" in hist_name and "Zoom" not in hist_name)
 
     if auto_xlim:
-        nonzero = np.where(proj_y > 0)[0]
+        comb_y = proj_y + proj_y_ref if proj_y_ref is not None else proj_y
+        nonzero = np.where(comb_y > 0)[0]
         if len(nonzero) > 0:
             xmin = float(yedges[nonzero[0]])
             xmax = float(yedges[nonzero[-1] + 1])
@@ -504,7 +538,31 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
         ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
 
     ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
-    if tower_index is not None and tower_info_lines:
+
+    if proj_y_ref is not None:
+        # Check overlap for legend placement (upper right vs upper left)
+        x_min, x_max = ax.get_xlim()
+        y_min, y_max = ax.get_ylim()
+        overlap_right = False
+        overlap_left = False
+        for y_arr in [proj_y, proj_y_ref]:
+            for i in range(len(y_arr)):
+                if y_arr[i] <= 0:
+                    continue
+                bx = (0.5 * (yedges[i] + yedges[i + 1]) - x_min) / (x_max - x_min) if (x_max - x_min) != 0 else 0
+                if logy:
+                    by = (np.log10(y_arr[i]) - np.log10(y_min)) / (np.log10(y_max) - np.log10(y_min)) if y_min > 0 and y_max > y_min else 0
+                else:
+                    by = (y_arr[i] - y_min) / (y_max - y_min) if (y_max - y_min) != 0 else 0
+                if by >= 0.60:
+                    if bx >= 0.50:
+                        overlap_right = True
+                    if bx <= 0.50:
+                        overlap_left = True
+
+        legend_loc = 'upper left' if (overlap_right and not overlap_left) else 'upper right'
+        ax.legend(frameon=True, facecolor='white', edgecolor='lightgray', fontsize=11, loc=legend_loc)
+    elif tower_index is not None and tower_info_lines:
         tower_info_text = "\n".join(tower_info_lines)
         text_obj = ax.text(0.95, 0.95, tower_info_text, transform=ax.transAxes, ha='right', va='top', fontsize=16, multialignment='left')
 
@@ -776,6 +834,7 @@ def process_file(
     max_outlier_towers=50,
     use_cdb=True,
     cdbtag="newcdbtag",
+    ref_tower=None,
 ):
     path = Path(path)
     if not path.exists():
@@ -923,6 +982,13 @@ def process_file(
                 bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
                 frac_bad_chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=cdbtag)
 
+            ref_z_score = None
+            ref_frac_bad_chi2 = None
+            if ref_tower is not None and use_cdb:
+                ref_key = get_calo_tower_key(ref_tower, det="EMCal")
+                ref_z_score = bad_tower_map.get(ref_key, {}).get("sigma") if bad_tower_map else None
+                ref_frac_bad_chi2 = frac_bad_chi2_map.get(ref_key) if frac_bad_chi2_map else None
+
             if len(outlier_towers) > 0:
                 tower_desc = []
                 for t in outlier_towers[:max_outlier_towers]:
@@ -1056,6 +1122,23 @@ def process_file(
                                 logy=True,
                             )
 
+                            if ref_tower is not None:
+                                out_filename_overlay = f"run_{run_number}_{h2_energy_name}_tower{tower_idx}_ref{ref_tower}.png"
+                                output_path_overlay = run_output_dir / out_filename_overlay
+                                make_1d_yproj_plot(
+                                    hist2d,
+                                    run_number,
+                                    output_path_overlay,
+                                    hist_name=h2_energy_name,
+                                    tower_index=tower_idx,
+                                    z_score=z_score,
+                                    frac_bad_chi2=frac_bad_chi2,
+                                    ref_tower_index=ref_tower,
+                                    ref_z_score=ref_z_score,
+                                    ref_frac_bad_chi2=ref_frac_bad_chi2,
+                                    logy=True,
+                                )
+
             return None
     except Exception as e:
         traceback.print_exc()
@@ -1073,6 +1156,7 @@ def main():
     parser.add_argument("--max-outlier-towers", type=int, default=50, help="Maximum number of outlier tower 1D plots to generate per run (default: 50).")
     parser.add_argument("--cdbtag", default="newcdbtag", help="CDB global tag to fetch BadTowerMap calibration (default: newcdbtag).")
     parser.add_argument("--no-cdb", action="store_true", help="Disable CDB BadTowerMap query for outlier tower z-scores.")
+    parser.add_argument("--ref-tower", "--ref-tower-index", "--tower-index", type=int, default=None, dest="ref_tower", help="Reference tower index to overlay on outlier tower 1D plots.")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths")
     args = parser.parse_args()
 
@@ -1112,6 +1196,7 @@ def main():
         max_outlier_towers=args.max_outlier_towers,
         use_cdb=not args.no_cdb,
         cdbtag=args.cdbtag,
+        ref_tower=args.ref_tower,
     )
     max_workers = min(os.cpu_count() or 4, 32)
 
