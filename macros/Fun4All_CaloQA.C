@@ -105,6 +105,7 @@ void Fun4All_CaloQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   FlagHandler* flag = new FlagHandler();
   se->registerSubsystem(flag);
 
+  CaloCalib::do_neg_energy_threshold = false;
   // Calibrate Towers
   Process_Calo_Calib();
 
@@ -136,6 +137,7 @@ void Fun4All_CaloQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Event QA
   EventQA* event_qa = new EventQA();
   event_qa->set_do_tree(false);
+  event_qa->set_cent_max(100);
   event_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(event_qa);
 
@@ -143,6 +145,7 @@ void Fun4All_CaloQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   CaloQA* calo_qa = new CaloQA();
   calo_qa->set_do_retower(false);
   calo_qa->set_do_tree(false);
+  calo_qa->set_do_raw_tower(true);
   calo_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(calo_qa);
 
