@@ -302,7 +302,8 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
   if (m_do_hists || m_do_detailed || m_do_raw || Verbosity() > 0)
   {
     // Base EMCal
-    for (unsigned int towerIndex = 0; towerIndex < towersCEMC->size(); ++towerIndex)
+    size_t emcal_size = towersCEMC->size();
+    for (unsigned int towerIndex = 0; towerIndex < emcal_size; ++towerIndex)
     {
       unsigned int key = TowerInfoDefs::encode_emcal(towerIndex);
       unsigned int iphi = TowerInfoDefs::getCaloTowerPhiBin(key);
@@ -370,7 +371,7 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
   }
 
   double totalCaloE = 0;
-  for (unsigned int towerIndex = 0; towerIndex < towersIHCal->size(); ++towerIndex)
+  for (unsigned int towerIndex = 0; towerIndex < nTowersIHCal; ++towerIndex)
   {
     unsigned int iphi = 0;
     unsigned int ieta = 0;
@@ -499,7 +500,8 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
 
       if (towersCEMC_sub1 && towersIHCal_sub1 && towersOHCal_sub1)
       {
-        for (unsigned int towerIndex = 0; towerIndex < towersCEMC_sub1->size(); ++towerIndex)
+        size_t iter_size = towersCEMC_sub1->size();
+        for (unsigned int towerIndex = 0; towerIndex < iter_size; ++towerIndex)
         {
           auto* towerCEMC = towersCEMC_sub1->get_tower_at_channel(towerIndex);
           if (towerCEMC && towerCEMC->get_isGood())
@@ -533,7 +535,8 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
 
       if (towersCEMC_mult && towersIHCal_mult && towersOHCal_mult)
       {
-        for (unsigned int towerIndex = 0; towerIndex < towersCEMC_mult->size(); ++towerIndex)
+        size_t mult_size = towersCEMC_mult->size();
+        for (unsigned int towerIndex = 0; towerIndex < mult_size; ++towerIndex)
         {
           auto* towerCEMC = towersCEMC_mult->get_tower_at_channel(towerIndex);
           if (towerCEMC && towerCEMC->get_isGood())
