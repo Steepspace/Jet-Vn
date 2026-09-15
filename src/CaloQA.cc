@@ -141,9 +141,9 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                                bins_emcal_towers, 0, bins_emcal_towers,
                                                bins_energy_wide, energy_wide_low, energy_wide_high);
 
-    int bins_energy_neg = 50;
+    int bins_energy_neg = 100;
     double energy_neg_low = -50;
-    double energy_neg_high = 0;
+    double energy_neg_high = 50;
 
     m_hists.h2EMCalEnergyTowerIndexZS = new TH2D("h2EMCalEnergyTowerIndexZS", "EMCal; Tower Index; Tower Energy [GeV]",
                                                  bins_emcal_towers, 0, bins_emcal_towers,
@@ -380,10 +380,7 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
         if (tower->get_isZS())
         {
           m_hists.h2EMCalZSCent->Fill(energy, cent);
-          if (energy < 0.0)
-          {
-            m_hists.h2EMCalEnergyTowerIndexZS->Fill(towerIndex, energy);
-          }
+          m_hists.h2EMCalEnergyTowerIndexZS->Fill(towerIndex, energy);
         }
         else
         {
