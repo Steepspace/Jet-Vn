@@ -486,7 +486,7 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
         ax.set_ylim(bottom=0.5, top=max(max_val * 5, 10))
 
     if auto_xlim is None:
-        auto_xlim = ("h2EMCalEnergyTowerIndex" in hist_name)
+        auto_xlim = ("h2EMCalEnergyTowerIndex" in hist_name and "Zoom" not in hist_name)
 
     if auto_xlim:
         nonzero = np.where(proj_y > 0)[0]
@@ -901,13 +901,15 @@ def process_file(
             # 3. 1D Y-Projection QA Histograms for Tower Energy vs Index
             h2_energy_index_names = [
                 "h2EMCalEnergyTowerIndex",
+                "h2EMCalEnergyTowerIndexZS",
+                "h2EMCalEnergyTowerIndexZoom",
                 "h2EMCalRawEnergyTowerIndex",
             ]
 
-            # Find any outlier towers with energy below threshold (only calibrated energy in GeV, not raw ADC)
+            # Find any outlier towers with energy below threshold (only calibrated energy in GeV, not raw ADC or zoom)
             outlier_towers_set = set()
             for h2_energy_name in h2_energy_index_names:
-                if "Raw" in h2_energy_name:
+                if "Raw" in h2_energy_name or "Zoom" in h2_energy_name:
                     continue
                 if h2_energy_name in file:
                     towers = find_outlier_towers(file[h2_energy_name], energy_threshold)
