@@ -17,8 +17,13 @@ Features:
 """
 
 import argparse
+import concurrent.futures
+import functools
 import os
+from pathlib import Path
+import re
 import sys
+import tqdm
 
 # ---------------------------------------------------------
 # PyROOT C++ Bridge Backend Configuration
@@ -544,6 +549,70 @@ def get_frac_bad_chi2_map(run_number, det="CEMC", dbtag="newcdbtag"):
 get_cemc_frac_bad_chi2_map = get_frac_bad_chi2_map
 
 
+def query_single_run_tower_cdb(run_number, key_val, cdb_det="CEMC", dbtag="newcdbtag"):
+    """
+    Query CDB BadTowerMap and fracBadChi2 for a single run and tower key.
+    Safe for execution across worker processes in ProcessPoolExecutor.
+    Returns: (run_number, info_dict_or_None, frac_bad_chi2_float_or_None)
+    """
+    info = None
+    chi2_val = None
+    try:
+        bad_map = get_bad_tower_map(run_number, det=cdb_det, dbtag=dbtag)
+        info = bad_map.get(key_val)
+    except Exception:
+        pass
+
+    try:
+        chi2_map = get_frac_bad_chi2_map(run_number, det=cdb_det, dbtag=dbtag)
+        chi2_val = chi2_map.get(key_val)
+    except Exception:
+        pass
+
+    return run_number, info, chi2_val
+
+
+def extract_runs_from_file(file_path):
+    """
+    Read run numbers from a text file.
+    Supports:
+    - Integer run numbers (one per line, space-separated, or comma-separated)
+    - ROOT file paths (extracts run number from filename, e.g. .../68144.root)
+    - Comment lines starting with # and inline comments after #
+    """
+    p = Path(file_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"Run list file '{file_path}' not found.")
+
+    extracted = []
+    with p.open("r") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if not line:
+                continue
+            # If line looks like a file path or ROOT filename
+            if "/" in line or line.endswith(".root"):
+                name = Path(line).name
+                try:
+                    extracted.append(int(name.split(".")[0]))
+                except ValueError:
+                    match = re.search(r"\d+", name)
+                    if match:
+                        extracted.append(int(match.group()))
+            else:
+                for part in re.split(r"[\s,]+", line):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    try:
+                        extracted.append(int(part))
+                    except ValueError:
+                        match = re.search(r"\d+", part)
+                        if match:
+                            extracted.append(int(match.group()))
+    return extracted
+
+
 # ---------------------------------------------------------
 # Command-line Interface
 # ---------------------------------------------------------
@@ -561,11 +630,28 @@ def main():
         help="Tower key (decimal or 0x hex) to decode.",
     )
     parser.add_argument(
+        "-f",
+        "--file",
+        "--run-file",
+        "--run-list",
+        type=Path,
+        help="Optional text file containing run numbers or ROOT file paths (one per line).",
+    )
+    parser.add_argument(
         "--run",
         "--runs",
         nargs="+",
         action="extend",
-        help="Optional run number(s) to query CDB BadTowerMap & fracBadChi2 (accepts space- or comma-separated run numbers).",
+        help="Optional run number(s) or run list file(s) to query CDB BadTowerMap & fracBadChi2.",
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        "--workers",
+        dest="workers",
+        type=int,
+        default=None,
+        help="Number of parallel worker processes to query CDB (default: min(cpu_count, 32)).",
     )
     parser.add_argument(
         "--cdbtag",
@@ -581,85 +667,108 @@ def main():
 
     backend = "PyROOT (C++)" if args.use_pyroot else "Pure Python"
 
+    if args.key is not None:
+        target_key = args.key
+        eta, phi = get_calo_tower_key_coords(target_key)
+        idx = get_calo_tower_index(target_key, det=args.det, use_pyroot=args.use_pyroot)
+        base = (
+            f"[{backend}] {args.det} towerKey={target_key} (hex: {hex(target_key)}) -> "
+            f"(ieta={eta}, iphi={phi}), towerIndex={idx}"
+        )
+    elif args.eta is not None and args.phi is not None:
+        idx = get_calo_tower_index(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
+        target_key = get_calo_tower_key(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
+        base = (
+            f"[{backend}] {args.det} (ieta={args.eta}, iphi={args.phi}) -> "
+            f"towerIndex={idx}, towerKey={target_key} (hex: {hex(target_key)})"
+        )
+    elif args.index is not None:
+        eta, phi = get_calo_tower_ieta_iphi(args.index, det=args.det, use_pyroot=args.use_pyroot)
+        target_key = get_calo_tower_key(args.index, det=args.det, use_pyroot=args.use_pyroot)
+        base = (
+            f"[{backend}] {args.det} towerIndex={args.index} -> "
+            f"(ieta={eta}, iphi={phi}), towerKey={target_key} (hex: {hex(target_key)})"
+        )
+    else:
+        parser.print_help()
+        return
+
     runs = []
+    if args.file:
+        try:
+            runs.extend(extract_runs_from_file(args.file))
+        except Exception as e:
+            print(f"Error reading run file '{args.file}': {e}")
+            sys.exit(1)
+
     if args.run:
         for r_arg in args.run:
+            if Path(r_arg).is_file():
+                try:
+                    runs.extend(extract_runs_from_file(r_arg))
+                except Exception as e:
+                    print(f"Error reading run file '{r_arg}': {e}")
+                    sys.exit(1)
+                continue
+
             for r_str in str(r_arg).split(","):
                 r_str = r_str.strip()
                 if r_str:
                     try:
                         runs.append(int(r_str))
                     except ValueError:
-                        print(f"Error: Invalid run number '{r_str}'")
+                        print(f"Error: Invalid run number or file '{r_str}'")
                         sys.exit(1)
         runs = list(dict.fromkeys(runs))
 
-    run_cdb_info = {}
-    run_chi2_info = {}
-    if runs:
-        if "EMCal" in args.det or "CEMC" in args.det:
-            cdb_det = "CEMC"
-        elif "OHCal" in args.det or "HCALOUT" in args.det:
-            cdb_det = "HCALOUT"
-        else:
-            cdb_det = "HCALIN"
-        for r in runs:
-            run_cdb_info[r] = get_bad_tower_map(r, det=cdb_det, dbtag=args.cdbtag)
-            run_chi2_info[r] = get_frac_bad_chi2_map(r, det=cdb_det, dbtag=args.cdbtag)
+    if not runs:
+        print(base)
+        return
 
-    def _format_run_parts(r, key_val):
+    if "EMCal" in args.det or "CEMC" in args.det:
+        cdb_det = "CEMC"
+    elif "OHCal" in args.det or "HCALOUT" in args.det:
+        cdb_det = "HCALOUT"
+    else:
+        cdb_det = "HCALIN"
+
+    if len(runs) == 1:
+        r = runs[0]
+        _, info, chi2_val = query_single_run_tower_cdb(r, target_key, cdb_det=cdb_det, dbtag=args.cdbtag)
         parts = []
-        info = run_cdb_info.get(r, {}).get(key_val)
         if info is not None:
             parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
-        chi2_val = run_chi2_info.get(r, {}).get(key_val)
         if chi2_val is not None:
             c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
             parts.append(f"frac badChi2={c_str}")
-        return ", ".join(parts)
+        cdb_str = f", {', '.join(parts)}" if parts else ""
+        print(f"{base}{cdb_str}")
+        return
 
-    def print_result(base_str, key_val):
-        if not runs:
-            print(base_str)
-            return
+    max_workers = args.workers if args.workers else min(os.cpu_count() or 4, 32, len(runs))
+    worker_func = functools.partial(
+        query_single_run_tower_cdb,
+        key_val=target_key,
+        cdb_det=cdb_det,
+        dbtag=args.cdbtag,
+    )
 
-        if len(runs) == 1:
-            parts_str = _format_run_parts(runs[0], key_val)
-            cdb_str = f", {parts_str}" if parts_str else ""
-            print(f"{base_str}{cdb_str}")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        if tqdm is not None and len(runs) > 3:
+            results = list(tqdm.tqdm(executor.map(worker_func, runs), total=len(runs), desc="Querying CDB"))
         else:
-            print(base_str)
-            for r in runs:
-                parts_str = _format_run_parts(r, key_val)
-                out_str = parts_str if parts_str else "no CDB record"
-                print(f"  Run {r}: {out_str}")
+            results = list(executor.map(worker_func, runs))
 
-    if args.key is not None:
-        eta, phi = get_calo_tower_key_coords(args.key)
-        idx = get_calo_tower_index(args.key, det=args.det, use_pyroot=args.use_pyroot)
-        base = (
-            f"[{backend}] {args.det} towerKey={args.key} (hex: {hex(args.key)}) -> "
-            f"(ieta={eta}, iphi={phi}), towerIndex={idx}"
-        )
-        print_result(base, args.key)
-    elif args.eta is not None and args.phi is not None:
-        idx = get_calo_tower_index(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
-        key = get_calo_tower_key(args.eta, args.phi, det=args.det, use_pyroot=args.use_pyroot)
-        base = (
-            f"[{backend}] {args.det} (ieta={args.eta}, iphi={args.phi}) -> "
-            f"towerIndex={idx}, towerKey={key} (hex: {hex(key)})"
-        )
-        print_result(base, key)
-    elif args.index is not None:
-        eta, phi = get_calo_tower_ieta_iphi(args.index, det=args.det, use_pyroot=args.use_pyroot)
-        key = get_calo_tower_key(args.index, det=args.det, use_pyroot=args.use_pyroot)
-        base = (
-            f"[{backend}] {args.det} towerIndex={args.index} -> "
-            f"(ieta={eta}, iphi={phi}), towerKey={key} (hex: {hex(key)})"
-        )
-        print_result(base, key)
-    else:
-        parser.print_help()
+    print(base)
+    for r, info, chi2_val in results:
+        parts = []
+        if info is not None:
+            parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
+        if chi2_val is not None:
+            c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
+            parts.append(f"frac badChi2={c_str}")
+        out_str = ", ".join(parts) if parts else "no CDB record"
+        print(f"  Run {r}: {out_str}")
 
 
 if __name__ == "__main__":
