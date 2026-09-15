@@ -904,9 +904,11 @@ def process_file(
                 "h2EMCalRawEnergyTowerIndex",
             ]
 
-            # Find any outlier towers with energy below threshold
+            # Find any outlier towers with energy below threshold (only calibrated energy in GeV, not raw ADC)
             outlier_towers_set = set()
             for h2_energy_name in h2_energy_index_names:
+                if "Raw" in h2_energy_name:
+                    continue
                 if h2_energy_name in file:
                     towers = find_outlier_towers(file[h2_energy_name], energy_threshold)
                     if len(towers) > 0:
