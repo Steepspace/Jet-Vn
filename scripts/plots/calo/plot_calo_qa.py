@@ -116,6 +116,11 @@ def get_hist_axis_titles(hist2d, hist_name=""):
 
     return xlabel, ylabel
 
+def format_run_header(run_number):
+    if str(run_number).lower() in ("combined", "run-combined") or "combined" in str(run_number).lower():
+        return "Combined Runs"
+    return rf"Run: {run_number}"
+
 def make_2d_plot(hist2d, run_number, output_path, hist_name="", xlim_left=None, xlim_right=None, ylim_bottom=None, ylim_top=None, extra_label=None, logx=False, logy=False):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -239,7 +244,7 @@ def make_2d_plot(hist2d, run_number, output_path, hist_name="", xlim_left=None, 
         formatter_y.set_powerlimits((3, 3))
         ax.yaxis.set_major_formatter(formatter_y)
 
-    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(1.0, 1.01, format_run_header(run_number), transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
 
     if extra_label:
         ax.text(0.95, 0.95, extra_label, transform=ax.transAxes, ha='right', va='top', fontsize=15, color='white', bbox=dict(boxstyle='round,pad=0.2', facecolor='black', alpha=0.4, edgecolor='none'))
@@ -283,7 +288,7 @@ def make_1d_proj_plot(hist2d, run_number, output_path, hist_name="", logy=True, 
 
     ax.set_xlim(left=np.min(xedges), right=np.max(xedges))
 
-    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(1.0, 1.01, format_run_header(run_number), transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
 
     det = "OHCal" if "OHCal" in hist_name else ("EMCal" if "EMCal" in hist_name else "")
     if det:
@@ -399,7 +404,7 @@ def make_1d_zs_ratio_plot(hist2d_zs, hist2d_total, run_number, output_path, hist
         else:
             ax.yaxis.set_major_formatter(FormatStrFormatter('%.2f'))
 
-    ax.text(1.0, 1.01, rf'Run: {run_number}', transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(1.0, 1.01, format_run_header(run_number), transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
     ax.text(0.04, 0.94, f'{hist_name}', transform=ax.transAxes, ha='left', va='top', fontsize=14, fontweight='bold')
 
     # Show summary of deviating bins placed in lower-left area
@@ -537,7 +542,7 @@ def make_1d_yproj_plot(hist2d, run_number, output_path, hist_name="", tower_inde
     else:
         ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
 
-    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(1.0, 1.01, format_run_header(run_number), transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
 
     if proj_y_ref is not None:
         # Check overlap for legend placement (upper right vs upper left)
@@ -693,7 +698,7 @@ def make_1d_cdb_branch_plot(
     if span > 0:
         ax.set_xlim(left=bin_edges[0] - 0.03 * span, right=bin_edges[-1] + 0.03 * span)
 
-    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+    ax.text(1.0, 1.01, format_run_header(run_number), transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
 
     # For Z-score plot, shade z-score < -5 in light blue and z-score > 5 in light red
     if branch_name == "FCEMC_sigma" or xlabel == "Z-score":
@@ -841,14 +846,20 @@ def process_file(
         return f"File not found: {path}"
 
     try:
-        try:
-            run_number = int(path.name.split('.')[0])
-        except ValueError:
-            match = re.search(r'\d+', path.name)
-            if match:
-                run_number = int(match.group())
-            else:
-                return f"Could not parse run number from {path.name}"
+        stem = path.stem
+        if "combined" in stem.lower():
+            run_number = "combined"
+        else:
+            try:
+                run_number = int(stem)
+            except ValueError:
+                match = re.search(r'\d+', stem)
+                if match:
+                    run_number = int(match.group())
+                else:
+                    run_number = stem
+
+        is_combined = not isinstance(run_number, int) or "combined" in str(run_number).lower()
 
         run_output_dir = None
         if output_dir is not None:
@@ -978,13 +989,13 @@ def process_file(
             outlier_towers = sorted(outlier_towers_set)
             bad_tower_map = {}
             frac_bad_chi2_map = {}
-            if use_cdb:
+            if use_cdb and not is_combined:
                 bad_tower_map = get_bad_tower_map(run_number, det="CEMC", dbtag=cdbtag)
                 frac_bad_chi2_map = get_frac_bad_chi2_map(run_number, det="CEMC", dbtag=cdbtag)
 
             ref_z_score = None
             ref_frac_bad_chi2 = None
-            if ref_tower is not None and use_cdb:
+            if ref_tower is not None and use_cdb and not is_combined:
                 ref_key = get_calo_tower_key(ref_tower, det="EMCal")
                 ref_z_score = bad_tower_map.get(ref_key, {}).get("sigma") if bad_tower_map else None
                 ref_frac_bad_chi2 = frac_bad_chi2_map.get(ref_key) if frac_bad_chi2_map else None
