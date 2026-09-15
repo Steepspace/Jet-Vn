@@ -141,6 +141,22 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                                bins_emcal_towers, 0, bins_emcal_towers,
                                                bins_energy_wide, energy_wide_low, energy_wide_high);
 
+    int bins_energy_neg = 50;
+    double energy_neg_low = -50;
+    double energy_neg_high = 0;
+
+    m_hists.h2EMCalEnergyTowerIndexZS = new TH2D("h2EMCalEnergyTowerIndexZS", "EMCal; Tower Index; Tower Energy [GeV]",
+                                                 bins_emcal_towers, 0, bins_emcal_towers,
+                                                 bins_energy_neg, energy_neg_low, energy_neg_high);
+
+    int bins_energy_zoom = 60;
+    double energy_zoom_low = -0.5;
+    double energy_zoom_high = 2.5;
+
+    m_hists.h2EMCalEnergyTowerIndexZoom = new TH2D("h2EMCalEnergyTowerIndexZoom", "EMCal; Tower Index; Tower Energy [GeV]",
+                                                   bins_emcal_towers, 0, bins_emcal_towers,
+                                                   bins_energy_zoom, energy_zoom_low, energy_zoom_high);
+
     if (m_do_raw)
     {
       int bins_adc = 170;
@@ -192,6 +208,8 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
 
     se->registerHisto(m_hists.h2CentralityTotalCaloE);
     se->registerHisto(m_hists.h2EMCalEnergyTowerIndex);
+    se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZoom);
+    se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZS);
     if (m_do_raw)
     {
       se->registerHisto(m_hists.h2EMCalChi2Energy);
@@ -357,10 +375,15 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
         m_hists.h2EMCal->Fill(iphi, ieta, energy);
         m_hists.h2EMCalCent->Fill(energy, cent);
         m_hists.h2EMCalEnergyTowerIndex->Fill(towerIndex, energy);
+        m_hists.h2EMCalEnergyTowerIndexZoom->Fill(towerIndex, energy);
 
         if (tower->get_isZS())
         {
           m_hists.h2EMCalZSCent->Fill(energy, cent);
+          if (energy < 0.0)
+          {
+            m_hists.h2EMCalEnergyTowerIndexZS->Fill(towerIndex, energy);
+          }
         }
         else
         {
