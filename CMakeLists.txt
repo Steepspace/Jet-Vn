@@ -129,6 +129,10 @@ target_link_libraries(checkCDBList PRIVATE ${STANDALONE_MACRO_LIBS})
 add_executable(checkTree macros/checkTree.C)
 target_link_libraries(checkTree PRIVATE ${STANDALONE_MACRO_LIBS})
 
+# --- createGlobalBadTowerMap ---
+add_executable(createGlobalBadTowerMap macros/CDB/createGlobalBadTowerMap.C)
+target_link_libraries(createGlobalBadTowerMap PRIVATE ${STANDALONE_MACRO_LIBS})
+
 # --- displayHotMap ---
 add_executable(displayHotMap macros/displayHotMap.C)
 target_link_libraries(displayHotMap PRIVATE ${STANDALONE_MACRO_LIBS})
