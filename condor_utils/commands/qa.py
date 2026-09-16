@@ -1,7 +1,7 @@
 import math
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.core.helpers import run_command_and_log, chunk_list
+from condor_utils.core.helpers import chunk_list
 from condor_utils.cli import get_common_parser
 
 def create_trigger_qa_jobs(args):
@@ -18,19 +18,7 @@ def create_trigger_qa_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -52,19 +40,7 @@ def create_calo_qa_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -85,19 +61,7 @@ def create_event_qa_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
