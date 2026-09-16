@@ -1,6 +1,9 @@
 #ifndef CALO_CALIB_H
 #define CALO_CALIB_H
 
+#include <iostream>
+#include <string>
+
 #include <caloreco/CaloTowerBuilder.h>
 #include <caloreco/CaloTowerCalib.h>
 #include <caloreco/CaloTowerStatus.h>
@@ -32,6 +35,7 @@ namespace CaloCalib
 {
   bool do_neg_energy_threshold = true;
   float neg_energy_threshold = -2.0F;
+  std::string cemc_globalBadTowerMap_override = "";
 }  // namespace CaloCalib
 
 namespace CALOCALIB = CaloCalib;
@@ -92,6 +96,10 @@ void Process_Calo_Calib()
   std::cout << "status setters" << std::endl;
   CaloTowerStatus *statusEMC = new CaloTowerStatus("CEMCSTATUS");
   statusEMC->set_detector_type(CaloTowerDefs::CEMC);
+  if (!CaloCalib::cemc_globalBadTowerMap_override.empty())
+  {
+    statusEMC->set_directURL_globalHotMap(CaloCalib::cemc_globalBadTowerMap_override);
+  }
   // MC Towers Status
   if (isSim)
   {
