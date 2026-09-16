@@ -13,6 +13,7 @@
 class TriggerAnalyzer;
 class PHCompositeNode;
 class TH1;
+class TH2;
 
 class EventQA : public SubsysReco
 {
@@ -79,6 +80,16 @@ class EventQA : public SubsysReco
   const int m_trig_12 = 12; // MBD N&S >= 2, vtx < 10 cm
   const int m_trig_14 = 14; // MBD N&S >= 2, vtx < 150 cm
 
+  std::vector<int> m_triggerBits = {m_trig_12, m_trig_14};
+  std::vector<std::string> m_triggernames = {"MBD N&S >= 2, vtx < 10 cm",
+                                             "MBD N&S >= 2, vtx < 150 cm"};
+
+  // Event Selection Flags
+  bool m_pass_MB{false};
+  bool m_pass_Zvtx{false};
+  bool m_didTrig12Fire{false};
+  bool m_didTrig14Fire{false};
+
   // Cuts
   struct EventCuts
   {
@@ -101,9 +112,22 @@ class EventQA : public SubsysReco
 
   EventData m_data;
 
+  // Histograms
   TH1* hEvent{nullptr};
+  TH1* hEventTrigger{nullptr};
   TH1* hEventMinBias{nullptr};
   TH1* hVtxZ{nullptr};
   TH1* hVtxZ_MB{nullptr};
+  TH1* hZVertex{nullptr};
   TH1* hCentrality{nullptr};
+  TH1* hCentralityZ50{nullptr};
+  TH1* hCentralityZOuter{nullptr};
+  TH2* h2ZVertexCentrality{nullptr};
+
+  // Trigger
+  std::vector<TH1*> hZVertexTrig;
+  std::vector<TH1*> hCentralityTrig;
+  std::vector<TH1*> hCentralityZ50Trig;
+  std::vector<TH1*> hCentralityZOuterTrig;
+  std::vector<TH2*> h2ZVertexCentralityTrig;
 };
