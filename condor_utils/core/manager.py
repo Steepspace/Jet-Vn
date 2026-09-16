@@ -5,6 +5,7 @@ import datetime
 import textwrap
 from pathlib import Path
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from condor_utils.core.logging import setup_logging
 from condor_utils.core.helpers import run_command_and_log, get_line_count
@@ -132,6 +133,68 @@ class CondorJobManager:
                     src = Path(d).resolve()
                     shutil.copytree(src, self.output_dir / src.name, dirs_exist_ok=True)
 
+    def prepare_job_lists(self, dst_per_job, files_dir=None, jobs_file_name="jobs.list", max_workers=16):
+        """
+        Splits input lists into chunks of dst_per_job and writes resolved chunk paths to jobs_file_name.
+        Uses multithreading and native Python file I/O for speed across thousands of runs.
+        """
+        if files_dir is None:
+            files_dir = self.output_dir / 'files'
+        files_dir = Path(files_dir).resolve()
+        files_dir.mkdir(parents=True, exist_ok=True)
+
+        jobs_file = self.output_dir / jobs_file_name
+        jobs_file.unlink(missing_ok=True)
+
+        if not self.input_list or not self.input_list.is_file():
+            self.logger.warning("Input list is not set or does not exist.")
+            return []
+
+        input_files = [line.strip() for line in self.input_list.read_text(encoding='utf-8').splitlines() if line.strip()]
+        total_runs = len(input_files)
+        self.logger.info(f"Preparing job lists for {total_runs} runs (dst_per_job={dst_per_job})...")
+
+        if dst_per_job <= 0:
+            dst_per_job = 1
+
+        def process_run(run_file_str):
+            run_path = Path(run_file_str)
+            if not run_path.is_file():
+                candidate = self.input_list.parent / run_file_str
+                if candidate.is_file():
+                    run_path = candidate
+                else:
+                    self.logger.warning(f"Run list file not found: {run_file_str}")
+                    return []
+            stem = run_path.stem
+            try:
+                lines = [l.strip() for l in run_path.read_text(encoding='utf-8').splitlines() if l.strip()]
+            except Exception as e:
+                self.logger.error(f"Failed to read {run_path}: {e}")
+                return []
+
+            if not lines:
+                return []
+
+            job_paths = []
+            for idx, chunk_start in enumerate(range(0, len(lines), dst_per_job)):
+                chunk = lines[chunk_start:chunk_start + dst_per_job]
+                chunk_file = files_dir / f"{stem}-{idx:03d}.list"
+                chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
+                job_paths.append(str(chunk_file.resolve()))
+            return job_paths
+
+        all_job_paths = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for run_jobs in executor.map(process_run, input_files):
+                all_job_paths.extend(run_jobs)
+
+        if all_job_paths:
+            jobs_file.write_text("\n".join(all_job_paths) + "\n", encoding='utf-8')
+
+        self.logger.info(f"Total jobs created: {len(all_job_paths)} across {total_runs} runs.")
+        return all_job_paths
+
     def write_submit_file(self, arguments, executable=None, memory=None, sub_file_name="genFun4All.sub", stdout_dir="stdout", error_dir="error", log_prefix="job"):
         exec_file = executable or (self.condor_script.name if self.condor_script else "script.sh")
         mem = memory or getattr(self.args, 'memory', 1)
@@ -161,15 +224,16 @@ class CondorJobManager:
         total_lines = get_line_count(list_path)
 
         if total_lines > limit:
-            # Split the job list file to respect the Condor submission limit
+            # Split the job list file to respect the Condor submission limit using native Python
+            lines = [l for l in list_path.read_text(encoding='utf-8').splitlines() if l.strip()]
             split_prefix = "jobs-"
-            command = f'split --lines {limit} {list_file} -d -a 1 {split_prefix} --additional-suffix=.list'
-            run_command_and_log(command, self.logger, self.output_dir, False)
-
-            # Find the resulting split files
-            split_files = sorted(self.output_dir.glob(f"{split_prefix}*.list"))
+            split_files = []
+            for i, chunk_start in enumerate(range(0, len(lines), limit)):
+                chunk = lines[chunk_start:chunk_start + limit]
+                split_file = self.output_dir / f"{split_prefix}{i}.list"
+                split_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
+                split_files.append(split_file)
             if not split_files:
-                # Fallback if split didn't generate anything (e.g. if the list file was empty)
                 split_files = [list_path]
         else:
             split_files = [list_path]
