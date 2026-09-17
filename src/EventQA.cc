@@ -31,7 +31,7 @@ EventQA::EventQA(const std::string &name)
   : SubsysReco(name),
     hZVertexTrig(m_triggernames.size()),
     hCentralityTrig(m_triggernames.size()),
-    hCentralityZ50Trig(m_triggernames.size()),
+    hCentralityZ60Trig(m_triggernames.size()),
     hCentralityZOuterTrig(m_triggernames.size()),
     h2ZVertexCentralityTrig(m_triggernames.size())
 {
@@ -78,10 +78,10 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     hCentrality = new TH1F("hCentrality", "|z| < 10 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
     se->registerHisto(hCentrality);
 
-    hCentralityZ50 = new TH1F("hCentralityZ50", "|z| < 50 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
-    se->registerHisto(hCentralityZ50);
+    hCentralityZ60 = new TH1F("hCentralityZ60", "|z| < 60 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+    se->registerHisto(hCentralityZ60);
 
-    hCentralityZOuter = new TH1F("hCentralityZOuter", "10 cm < |z| < 50 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+    hCentralityZOuter = new TH1F("hCentralityZOuter", "10 cm < |z| < 60 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
     se->registerHisto(hCentralityZOuter);
 
     // 2D Vertex vs Centrality
@@ -94,19 +94,19 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       const auto &trig = m_triggernames[i];
 
       std::string title_centrality = std::format("|z| < 10 cm and {}; Centrality [%]; Events", trig);
-      std::string title_centralityZ50 = std::format("|z| < 50 cm and {}; Centrality [%]; Events", trig);
-      std::string title_centralityZOuter = std::format("10 cm < |z| < 50 cm and {}; Centrality [%]; Events", trig);
+      std::string title_centralityZ60 = std::format("|z| < 60 cm and {}; Centrality [%]; Events", trig);
+      std::string title_centralityZOuter = std::format("10 cm < |z| < 60 cm and {}; Centrality [%]; Events", trig);
 
       std::string name_centrality = std::format("hCentrality_Trig{}", triggerIdx);
-      std::string name_centralityZ50 = std::format("hCentralityZ50_Trig{}", triggerIdx);
+      std::string name_centralityZ60 = std::format("hCentralityZ60_Trig{}", triggerIdx);
       std::string name_centralityZOuter = std::format("hCentralityZOuter_Trig{}", triggerIdx);
 
       hCentralityTrig[i] = new TH1F(name_centrality.c_str(), title_centrality.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
-      hCentralityZ50Trig[i] = new TH1F(name_centralityZ50.c_str(), title_centralityZ50.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityZ60Trig[i] = new TH1F(name_centralityZ60.c_str(), title_centralityZ60.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
       hCentralityZOuterTrig[i] = new TH1F(name_centralityZOuter.c_str(), title_centralityZOuter.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
 
       se->registerHisto(hCentralityTrig[i]);
-      se->registerHisto(hCentralityZ50Trig[i]);
+      se->registerHisto(hCentralityZ60Trig[i]);
       se->registerHisto(hCentralityZOuterTrig[i]);
 
       std::string title_h1 = std::format("{}; Z [cm]; Events", trig);
@@ -202,7 +202,7 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   {
     if (m_do_hist)
     {
-      hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX50));
+      hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX60));
       if (pass_zvtx10)
       {
         hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX10));
@@ -393,7 +393,7 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
 
     if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
     {
-      hCentralityZ50->Fill(cent);
+      hCentralityZ60->Fill(cent);
 
       if (m_pass_Zvtx)
       {
@@ -410,7 +410,7 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
       h2ZVertexCentralityTrig[0]->Fill(m_data.zvtx, cent);
       if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
       {
-        hCentralityZ50Trig[0]->Fill(cent);
+        hCentralityZ60Trig[0]->Fill(cent);
         if (m_pass_Zvtx)
         {
           hCentralityTrig[0]->Fill(cent);
@@ -427,7 +427,7 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
       h2ZVertexCentralityTrig[1]->Fill(m_data.zvtx, cent);
       if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
       {
-        hCentralityZ50Trig[1]->Fill(cent);
+        hCentralityZ60Trig[1]->Fill(cent);
         if (m_pass_Zvtx)
         {
           hCentralityTrig[1]->Fill(cent);
