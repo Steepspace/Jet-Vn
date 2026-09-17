@@ -42,9 +42,9 @@ class EventQA : public SubsysReco
 
   struct HistConfig
   {
-    unsigned int m_bins_zvtx{200};
-    double m_zvtx_low{-50};
-    double m_zvtx_high{50};
+    unsigned int m_bins_zvtx{240};
+    double m_zvtx_low{-60};
+    double m_zvtx_high{60};
 
     unsigned int m_bins_cent{100};
     double m_cent_low{-0.5};
@@ -57,7 +57,7 @@ class EventQA : public SubsysReco
   {
     ALL,
     ZVTX,
-    ZVTX50,
+    ZVTX60,
     ZVTX10,
     MB_TRIG,
     MB,
@@ -72,7 +72,7 @@ class EventQA : public SubsysReco
     MBD_HIGH
   };
 
-  std::vector<std::string> m_eventType{"All", "Has Z", "|z| < 50 cm", "|z| < 10 cm", "MB Trig", "MB", "Cent"};
+  std::vector<std::string> m_eventType{"All", "Has Z", "|z| < 60 cm", "|z| < 10 cm", "MB Trig", "MB", "Cent"};
   std::vector<std::string> m_MinBias_Type{"MBD Background", "Hits < 2", "ZDC < 60 GeV", "MBD > 2100"};
 
   std::unique_ptr<TriggerAnalyzer> m_triggerAnalyzer;
@@ -94,7 +94,7 @@ class EventQA : public SubsysReco
   struct EventCuts
   {
     double m_zvtx_max{10}; // cm
-    double m_zvtx_max_v2{50}; // cm
+    double m_zvtx_max_v2{60}; // cm
     double m_cent_max{60};
   };
 
@@ -120,14 +120,14 @@ class EventQA : public SubsysReco
   TH1* hVtxZ_MB{nullptr};
   TH1* hZVertex{nullptr};
   TH1* hCentrality{nullptr};
-  TH1* hCentralityZ50{nullptr};
+  TH1* hCentralityZ60{nullptr};
   TH1* hCentralityZOuter{nullptr};
   TH2* h2ZVertexCentrality{nullptr};
 
   // Trigger
   std::vector<TH1*> hZVertexTrig;
   std::vector<TH1*> hCentralityTrig;
-  std::vector<TH1*> hCentralityZ50Trig;
+  std::vector<TH1*> hCentralityZ60Trig;
   std::vector<TH1*> hCentralityZOuterTrig;
   std::vector<TH2*> h2ZVertexCentralityTrig;
 };
