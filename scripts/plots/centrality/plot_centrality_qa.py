@@ -90,6 +90,17 @@ def get_hist_axis_titles(hist1d, hist_name=""):
 
     return xlabel, ylabel
 
+class EngScalarFormatter(ScalarFormatter):
+    """
+    Custom ScalarFormatter that constrains the order of magnitude
+    to multiples of 3 (e.g. 10^3, 10^6), preventing labels like 1000 x 10^3
+    and reducing them to 10^6 where appropriate.
+    """
+    def _set_order_of_magnitude(self):
+        super()._set_order_of_magnitude()
+        if self._orderOfMagnitude != 0:
+            self._orderOfMagnitude = (self._orderOfMagnitude // 3) * 3
+
 def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=None, extra_labels=None, logy=False, xlim=None):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -120,8 +131,8 @@ def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=Non
         hep.histplot((values, edges), ax=ax, histtype='step', color='blue', linewidth=3)
         ax.set_ylim(bottom=0, top=np.max(values) * 1.3 if has_positive else 10)
         if np.max(values) >= 1000:
-            formatter_y = ScalarFormatter(useMathText=True)
-            formatter_y.set_powerlimits((3, 3))
+            formatter_y = EngScalarFormatter(useMathText=True)
+            formatter_y.set_powerlimits((0, 3))
             ax.yaxis.set_major_formatter(formatter_y)
 
     ax.set_xlabel(xlabel)
@@ -184,8 +195,8 @@ def make_zvertex_cent_slices_plot(hist2d, run_number, output_path, slices=(1, 2,
         if i == 0:
             ax.set_ylabel("Events")
             if not logy and max_val >= 1000:
-                formatter_y = ScalarFormatter(useMathText=True)
-                formatter_y.set_powerlimits((3, 3))
+                formatter_y = EngScalarFormatter(useMathText=True)
+                formatter_y.set_powerlimits((0, 3))
                 ax.yaxis.set_major_formatter(formatter_y)
         else:
             ax.tick_params(axis='y', which='both', left=True, labelleft=False)
