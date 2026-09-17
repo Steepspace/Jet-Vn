@@ -29,11 +29,11 @@
 
 EventQA::EventQA(const std::string &name)
   : SubsysReco(name),
-    hZVertexTrig(m_triggernames.size()),
-    hCentralityTrig(m_triggernames.size()),
-    hCentralityZ60Trig(m_triggernames.size()),
-    hCentralityZOuterTrig(m_triggernames.size()),
-    h2ZVertexCentralityTrig(m_triggernames.size())
+    hZVertexTrig(TrigIdx::NUM_TRIG),
+    hCentralityTrig(TrigIdx::NUM_TRIG),
+    hCentralityZ60Trig(TrigIdx::NUM_TRIG),
+    hCentralityZOuterTrig(TrigIdx::NUM_TRIG),
+    h2ZVertexCentralityTrig(TrigIdx::NUM_TRIG)
 {
 }
 
@@ -93,6 +93,10 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       int triggerIdx = m_triggerBits[i];
       const auto &trig = m_triggernames[i];
 
+      size_t idx_relaxed = 2 * i;
+      size_t idx_tight = 2 * i + 1;
+
+      // Relaxed (trigger-only, without offline MB)
       std::string title_centrality = std::format("|z| < 10 cm and {}; Centrality [%]; Events", trig);
       std::string title_centralityZ60 = std::format("|z| < 60 cm and {}; Centrality [%]; Events", trig);
       std::string title_centralityZOuter = std::format("10 cm < |z| < 60 cm and {}; Centrality [%]; Events", trig);
@@ -101,13 +105,13 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       std::string name_centralityZ60 = std::format("hCentralityZ60_Trig{}", triggerIdx);
       std::string name_centralityZOuter = std::format("hCentralityZOuter_Trig{}", triggerIdx);
 
-      hCentralityTrig[i] = new TH1F(name_centrality.c_str(), title_centrality.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
-      hCentralityZ60Trig[i] = new TH1F(name_centralityZ60.c_str(), title_centralityZ60.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
-      hCentralityZOuterTrig[i] = new TH1F(name_centralityZOuter.c_str(), title_centralityZOuter.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityTrig[idx_relaxed] = new TH1F(name_centrality.c_str(), title_centrality.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityZ60Trig[idx_relaxed] = new TH1F(name_centralityZ60.c_str(), title_centralityZ60.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityZOuterTrig[idx_relaxed] = new TH1F(name_centralityZOuter.c_str(), title_centralityZOuter.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
 
-      se->registerHisto(hCentralityTrig[i]);
-      se->registerHisto(hCentralityZ60Trig[i]);
-      se->registerHisto(hCentralityZOuterTrig[i]);
+      se->registerHisto(hCentralityTrig[idx_relaxed]);
+      se->registerHisto(hCentralityZ60Trig[idx_relaxed]);
+      se->registerHisto(hCentralityZOuterTrig[idx_relaxed]);
 
       std::string title_h1 = std::format("{}; Z [cm]; Events", trig);
       std::string title_h2 = std::format("{}; Z [cm]; Centrality [%]", trig);
@@ -115,11 +119,40 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       std::string name_h1 = std::format("hZVertex_Trig{}", triggerIdx);
       std::string name_h2 = std::format("h2ZVertexCentrality_Trig{}", triggerIdx);
 
-      hZVertexTrig[i] = new TH1F(name_h1.c_str(), title_h1.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
-      h2ZVertexCentralityTrig[i] = new TH2F(name_h2.c_str(), title_h2.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high, m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hZVertexTrig[idx_relaxed] = new TH1F(name_h1.c_str(), title_h1.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
+      h2ZVertexCentralityTrig[idx_relaxed] = new TH2F(name_h2.c_str(), title_h2.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high, m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
 
-      se->registerHisto(hZVertexTrig[i]);
-      se->registerHisto(h2ZVertexCentralityTrig[i]);
+      se->registerHisto(hZVertexTrig[idx_relaxed]);
+      se->registerHisto(h2ZVertexCentralityTrig[idx_relaxed]);
+
+      // Tight (trigger + offline MB)
+      std::string title_centrality_MB = std::format("|z| < 10 cm and {} and MB; Centrality [%]; Events", trig);
+      std::string title_centralityZ60_MB = std::format("|z| < 60 cm and {} and MB; Centrality [%]; Events", trig);
+      std::string title_centralityZOuter_MB = std::format("10 cm < |z| < 60 cm and {} and MB; Centrality [%]; Events", trig);
+
+      std::string name_centrality_MB = std::format("hCentrality_Trig{}_MB", triggerIdx);
+      std::string name_centralityZ60_MB = std::format("hCentralityZ60_Trig{}_MB", triggerIdx);
+      std::string name_centralityZOuter_MB = std::format("hCentralityZOuter_Trig{}_MB", triggerIdx);
+
+      hCentralityTrig[idx_tight] = new TH1F(name_centrality_MB.c_str(), title_centrality_MB.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityZ60Trig[idx_tight] = new TH1F(name_centralityZ60_MB.c_str(), title_centralityZ60_MB.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+      hCentralityZOuterTrig[idx_tight] = new TH1F(name_centralityZOuter_MB.c_str(), title_centralityZOuter_MB.c_str(), m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+
+      se->registerHisto(hCentralityTrig[idx_tight]);
+      se->registerHisto(hCentralityZ60Trig[idx_tight]);
+      se->registerHisto(hCentralityZOuterTrig[idx_tight]);
+
+      std::string title_h1_MB = std::format("{} and MB; Z [cm]; Events", trig);
+      std::string title_h2_MB = std::format("{} and MB; Z [cm]; Centrality [%]", trig);
+
+      std::string name_h1_MB = std::format("hZVertex_Trig{}_MB", triggerIdx);
+      std::string name_h2_MB = std::format("h2ZVertexCentrality_Trig{}_MB", triggerIdx);
+
+      hZVertexTrig[idx_tight] = new TH1F(name_h1_MB.c_str(), title_h1_MB.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
+      h2ZVertexCentralityTrig[idx_tight] = new TH2F(name_h2_MB.c_str(), title_h2_MB.c_str(), m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high, m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
+
+      se->registerHisto(hZVertexTrig[idx_tight]);
+      se->registerHisto(h2ZVertexCentralityTrig[idx_tight]);
     }
 
     for (unsigned int i = 0; i < m_eventType.size(); ++i)
@@ -238,13 +271,13 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
 
     if (!vertexmap->empty())
     {
-      if (m_didTrig12Fire && hZVertexTrig[0])
+      if (m_didTrig12Fire && hZVertexTrig[TrigIdx::TRIG12])
       {
-        hZVertexTrig[0]->Fill(zvtx);
+        hZVertexTrig[TrigIdx::TRIG12]->Fill(zvtx);
       }
-      if (m_didTrig14Fire && hZVertexTrig[1])
+      if (m_didTrig14Fire && hZVertexTrig[TrigIdx::TRIG14])
       {
-        hZVertexTrig[1]->Fill(zvtx);
+        hZVertexTrig[TrigIdx::TRIG14]->Fill(zvtx);
       }
     }
   }
@@ -329,25 +362,34 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
     return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // skip event if not minimum bias
+  // Check minimum bias
   if (!m_mb_info->isAuAuMinimumBias())
   {
     if (Verbosity() > 0)
     {
-      std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] REJECTED: isAuAuMinimumBias failed" << std::endl;
+      std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] isAuAuMinimumBias failed" << std::endl;
     }
     ++m_ctr["process_eventCheck_isAuAuMinBias_fail"];
-    return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
-
-  m_pass_MB = true;
-
-  if (m_do_hist)
+  else
   {
-    hVtxZ_MB->Fill(zvtx);
-    if (hZVertex)
+    m_pass_MB = true;
+
+    if (m_do_hist)
     {
-      hZVertex->Fill(zvtx);
+      hVtxZ_MB->Fill(zvtx);
+      if (hZVertex)
+      {
+        hZVertex->Fill(zvtx);
+      }
+      if (m_didTrig12Fire && hZVertexTrig[TrigIdx::TRIG12_MB])
+      {
+        hZVertexTrig[TrigIdx::TRIG12_MB]->Fill(zvtx);
+      }
+      if (m_didTrig14Fire && hZVertexTrig[TrigIdx::TRIG14_MB])
+      {
+        hZVertexTrig[TrigIdx::TRIG14_MB]->Fill(zvtx);
+      }
     }
   }
 
@@ -387,54 +429,146 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
     return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
 
-  if (m_do_hist && m_pass_MB)
+  if (m_do_hist)
   {
-    h2ZVertexCentrality->Fill(m_data.zvtx, cent);
-
-    if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
+    // Histograms requiring offline MB
+    if (m_pass_MB)
     {
-      hCentralityZ60->Fill(cent);
+      h2ZVertexCentrality->Fill(m_data.zvtx, cent);
 
-      if (m_pass_Zvtx)
+      if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
       {
-        hCentrality->Fill(cent);
-      }
-      else
-      {
-        hCentralityZOuter->Fill(cent);
+        hCentralityZ60->Fill(cent);
+
+        if (m_pass_Zvtx)
+        {
+          hCentrality->Fill(cent);
+        }
+        else
+        {
+          hCentralityZOuter->Fill(cent);
+        }
       }
     }
 
+    // Trigger 12
     if (m_didTrig12Fire)
     {
-      h2ZVertexCentralityTrig[0]->Fill(m_data.zvtx, cent);
+      // Relaxed: trigger only
+      if (h2ZVertexCentralityTrig[TrigIdx::TRIG12])
+      {
+        h2ZVertexCentralityTrig[TrigIdx::TRIG12]->Fill(m_data.zvtx, cent);
+      }
       if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
       {
-        hCentralityZ60Trig[0]->Fill(cent);
+        if (hCentralityZ60Trig[TrigIdx::TRIG12])
+        {
+          hCentralityZ60Trig[TrigIdx::TRIG12]->Fill(cent);
+        }
         if (m_pass_Zvtx)
         {
-          hCentralityTrig[0]->Fill(cent);
+          if (hCentralityTrig[TrigIdx::TRIG12])
+          {
+            hCentralityTrig[TrigIdx::TRIG12]->Fill(cent);
+          }
         }
         else
         {
-          hCentralityZOuterTrig[0]->Fill(cent);
+          if (hCentralityZOuterTrig[TrigIdx::TRIG12])
+          {
+            hCentralityZOuterTrig[TrigIdx::TRIG12]->Fill(cent);
+          }
+        }
+      }
+
+      // Tight: trigger + offline MB
+      if (m_pass_MB)
+      {
+        if (h2ZVertexCentralityTrig[TrigIdx::TRIG12_MB])
+        {
+          h2ZVertexCentralityTrig[TrigIdx::TRIG12_MB]->Fill(m_data.zvtx, cent);
+        }
+        if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
+        {
+          if (hCentralityZ60Trig[TrigIdx::TRIG12_MB])
+          {
+            hCentralityZ60Trig[TrigIdx::TRIG12_MB]->Fill(cent);
+          }
+          if (m_pass_Zvtx)
+          {
+            if (hCentralityTrig[TrigIdx::TRIG12_MB])
+            {
+              hCentralityTrig[TrigIdx::TRIG12_MB]->Fill(cent);
+            }
+          }
+          else
+          {
+            if (hCentralityZOuterTrig[TrigIdx::TRIG12_MB])
+            {
+              hCentralityZOuterTrig[TrigIdx::TRIG12_MB]->Fill(cent);
+            }
+          }
         }
       }
     }
 
+    // Trigger 14
     if (m_didTrig14Fire)
     {
-      h2ZVertexCentralityTrig[1]->Fill(m_data.zvtx, cent);
+      // Relaxed: trigger only
+      if (h2ZVertexCentralityTrig[TrigIdx::TRIG14])
+      {
+        h2ZVertexCentralityTrig[TrigIdx::TRIG14]->Fill(m_data.zvtx, cent);
+      }
       if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
       {
-        hCentralityZ60Trig[1]->Fill(cent);
+        if (hCentralityZ60Trig[TrigIdx::TRIG14])
+        {
+          hCentralityZ60Trig[TrigIdx::TRIG14]->Fill(cent);
+        }
         if (m_pass_Zvtx)
         {
-          hCentralityTrig[1]->Fill(cent);
+          if (hCentralityTrig[TrigIdx::TRIG14])
+          {
+            hCentralityTrig[TrigIdx::TRIG14]->Fill(cent);
+          }
         }
         else
         {
-          hCentralityZOuterTrig[1]->Fill(cent);
+          if (hCentralityZOuterTrig[TrigIdx::TRIG14])
+          {
+            hCentralityZOuterTrig[TrigIdx::TRIG14]->Fill(cent);
+          }
+        }
+      }
+
+      // Tight: trigger + offline MB
+      if (m_pass_MB)
+      {
+        if (h2ZVertexCentralityTrig[TrigIdx::TRIG14_MB])
+        {
+          h2ZVertexCentralityTrig[TrigIdx::TRIG14_MB]->Fill(m_data.zvtx, cent);
+        }
+        if (std::abs(m_data.zvtx) < m_cuts.m_zvtx_max_v2)
+        {
+          if (hCentralityZ60Trig[TrigIdx::TRIG14_MB])
+          {
+            hCentralityZ60Trig[TrigIdx::TRIG14_MB]->Fill(cent);
+          }
+          if (m_pass_Zvtx)
+          {
+            if (hCentralityTrig[TrigIdx::TRIG14_MB])
+            {
+              hCentralityTrig[TrigIdx::TRIG14_MB]->Fill(cent);
+            }
+          }
+          else
+          {
+            if (hCentralityZOuterTrig[TrigIdx::TRIG14_MB])
+            {
+              hCentralityZOuterTrig[TrigIdx::TRIG14_MB]->Fill(cent);
+            }
+          }
         }
       }
     }
@@ -448,6 +582,12 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
       std::cout << "EventQA::process_centrality - [Event " << m_data.event << "] REJECTED: |zvtx| = " << std::abs(m_data.zvtx) << " cm >= " << m_cuts.m_zvtx_max << " cm" << std::endl;
     }
     ++m_ctr["process_eventCheck_zvtx_large"];
+    return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
+  }
+
+  // skip event if not minimum bias
+  if (!m_pass_MB)
+  {
     return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
 

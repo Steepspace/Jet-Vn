@@ -84,6 +84,15 @@ class EventQA : public SubsysReco
   std::vector<std::string> m_triggernames = {"MBD N&S >= 2, vtx < 10 cm",
                                              "MBD N&S >= 2, vtx < 150 cm"};
 
+  enum TrigIdx : std::size_t
+  {
+    TRIG12 = 0,
+    TRIG12_MB = 1,
+    TRIG14 = 2,
+    TRIG14_MB = 3,
+    NUM_TRIG = 4
+  };
+
   // Event Selection Flags
   bool m_pass_MB{false};
   bool m_pass_Zvtx{false};
@@ -124,7 +133,8 @@ class EventQA : public SubsysReco
   TH1* hCentralityZOuter{nullptr};
   TH2* h2ZVertexCentrality{nullptr};
 
-  // Trigger
+  // Trigger (paired by trigger bit: [relaxed (trigger-only), tight (trigger + MB)])
+  // e.g. [Trig12, Trig12_MB, Trig14, Trig14_MB]
   std::vector<TH1*> hZVertexTrig;
   std::vector<TH1*> hCentralityTrig;
   std::vector<TH1*> hCentralityZ60Trig;
