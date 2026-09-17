@@ -229,6 +229,8 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 extra_labels = []
                 title = hist1d.title
                 if title:
+                    if ";" in title:
+                        title = title.split(";")[0].strip()
                     cleaned_title = clean_root_latex(title)
                     if cleaned_title:
                         extra_labels.append(cleaned_title)
@@ -249,7 +251,38 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
             else:
                 print(f"Warning: 'hCentrality' not found in {path}")
 
-            # 2. 1D Z vertex plot (full X projection of h2ZVertexCentrality)
+            # 2. 1D Centrality Z150 Trig14 plot
+            if "hCentralityZ150_Trig14" in file:
+                hist1d_z150 = file["hCentralityZ150_Trig14"]
+                values_z150, _ = hist1d_z150.to_numpy()
+                total_events_z150 = np.sum(values_z150)
+
+                extra_labels_z150 = []
+                title_z150 = hist1d_z150.title
+                if title_z150:
+                    if ";" in title_z150:
+                        title_z150 = title_z150.split(";")[0].strip()
+                    cleaned_title_z150 = clean_root_latex(title_z150)
+                    if cleaned_title_z150:
+                        extra_labels_z150.append(cleaned_title_z150)
+                extra_labels_z150.append(f"Total: {total_events_z150:.2e}")
+
+                output_path_z150 = run_output_dir / f"run_{run_number}_hCentralityZ150_Trig14.png"
+                make_1d_plot(
+                    hist1d_z150,
+                    run_number,
+                    output_path_z150,
+                    xlabel="Centrality [%]",
+                    ylabel="Events",
+                    extra_labels=extra_labels_z150,
+                    logy=logy,
+                    xlim=(0, 100),
+                )
+                plots_made += 1
+            else:
+                print(f"Warning: 'hCentralityZ150_Trig14' not found in {path}")
+
+            # 3. 1D Z vertex plot (full X projection of h2ZVertexCentrality)
             if "h2ZVertexCentrality" in file:
                 hist2d = file["h2ZVertexCentrality"]
                 values_2d, edges_x, _ = hist2d.to_numpy()
@@ -269,7 +302,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                     xlim=(edges_x[0], edges_x[-1]),
                 )
 
-                # 3. 1x3 panel Z vertex 1D projections for centrality slices 1%, 2%, 3%
+                # 4. 1x3 panel Z vertex 1D projections for centrality slices 1%, 2%, 3%
                 output_path_slices = run_output_dir / f"run_{run_number}_z_vertex_cent_slices.png"
                 make_zvertex_cent_slices_plot(
                     hist2d,
@@ -284,7 +317,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 print(f"Warning: 'h2ZVertexCentrality' not found in {path}")
 
             if plots_made == 0:
-                return f"Warning: Neither 'hCentrality' nor 'h2ZVertexCentrality' found in {path}"
+                return f"Warning: No valid QA histograms found in {path}"
 
         return None
     except Exception as e:
