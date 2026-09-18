@@ -18,12 +18,18 @@ Features:
 
 import argparse
 import concurrent.futures
+import csv
 import functools
 import os
 from pathlib import Path
 import re
 import sys
+
+import numpy as np
+from scipy.optimize import LinearConstraint, milp
 import tqdm
+import uproot
+
 
 # ---------------------------------------------------------
 # PyROOT C++ Bridge Backend Configuration
@@ -466,9 +472,6 @@ def get_bad_tower_map(run_number, det="CEMC", dbtag="newcdbtag"):
         return {}
 
     try:
-        import uproot
-        import numpy as np
-
         with uproot.open(url) as f:
             tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
             sigma_branch = next((b for b in tree.keys() if b.endswith("_sigma")), None)
@@ -532,8 +535,6 @@ def get_frac_bad_chi2_map(run_number, det="CEMC", dbtag="newcdbtag"):
         return {}
 
     try:
-        import uproot
-
         with uproot.open(url) as f:
             tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
             data = tree.arrays(["IID", "Ffraction"], library="np")
@@ -587,9 +588,6 @@ def get_calib_adc_to_etower_map(run_number, det="CEMC", dbtag="newcdbtag"):
         return {}
 
     try:
-        import uproot
-        import numpy as np
-
         with uproot.open(url) as f:
             tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
 
@@ -751,12 +749,469 @@ def extract_runs_from_file(file_path):
     return extracted
 
 
+def _query_run_towers_worker(run_number, target_keys, cdb_det="CEMC", dbtag="newcdbtag"):
+    """
+    Query CDB BadTowerMap for a single run, returning data only for target_keys.
+    Returns: (run_number, {tower_key: {'sigma': float, 'status': int}}, error_str_or_None)
+    """
+    try:
+        bad_map = get_bad_tower_map(run_number, det=cdb_det, dbtag=dbtag)
+        res = {}
+        for key in target_keys:
+            info = bad_map.get(key)
+            if info is None:
+                idx = get_calo_tower_index(key, det=cdb_det)
+                if idx is not None:
+                    info = bad_map.get(idx)
+            if info is not None:
+                res[key] = info
+        return run_number, res, None
+    except Exception as e:
+        return run_number, {}, str(e)
+
+
+def load_towers_from_csv(csv_path, det="EMCal"):
+    """
+    Load calorimeter towers from a CSV file.
+    Supports (ieta, iphi), (towerIndex), or (towerKey).
+    Also extracts run numbers if a run column exists.
+    Returns: (tower_entries, extracted_runs)
+    where tower_entries is a list of dict:
+      {'ieta': ieta, 'iphi': iphi, 'index': idx, 'key': key}
+    """
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"CSV file not found: {csv_path}")
+
+    with open(csv_path, "r") as f:
+        raw_lines = [l.strip() for l in f if l.strip() and not l.strip().startswith("#")]
+
+    if not raw_lines:
+        return [], []
+
+    first_line = raw_lines[0]
+    has_header = False
+    for col_name in ["eta", "phi", "tower", "index", "key", "run"]:
+        if col_name in first_line.lower():
+            has_header = True
+            break
+
+    ieta_col = None
+    iphi_col = None
+    tower_col = None
+    key_col = None
+    run_col = None
+    start_idx = 0
+
+    if has_header:
+        start_idx = 1
+        reader = csv.reader([first_line])
+        header = [c.strip().lower() for c in next(reader)]
+        for idx, col in enumerate(header):
+            if col in ("ieta", "eta", "etabin", "i_eta") or ("eta" in col and "theta" not in col):
+                ieta_col = idx
+            elif col in ("iphi", "phi", "phibin", "i_phi") or "phi" in col:
+                iphi_col = idx
+            elif col in ("tower", "tower_index", "towerindex", "tower_id", "towerid", "index"):
+                tower_col = idx
+            elif col in ("towerkey", "tower_key", "key", "iid"):
+                key_col = idx
+            elif col in ("run", "runnumber", "run_number", "run_id", "runid") or (col.startswith("run") and "count" not in col and "frac" not in col):
+                run_col = idx
+    else:
+        sample = first_line
+        delim = "," if "," in sample else ("\t" if "\t" in sample else None)
+        parts = [p.strip() for p in sample.split(delim)] if delim else sample.split()
+        if len(parts) >= 3:
+            ieta_col, iphi_col, run_col = 0, 1, 2
+        elif len(parts) == 2:
+            ieta_col, iphi_col = 0, 1
+        elif len(parts) == 1:
+            tower_col = 0
+
+    if ieta_col is None and tower_col is None and key_col is None:
+        ieta_col, iphi_col = 0, 1
+
+    towers = []
+    seen_keys = set()
+    extracted_runs = []
+
+    for line_num, line in enumerate(raw_lines[start_idx:], start=start_idx + 1):
+        delim = "," if "," in line else ("\t" if "\t" in line else None)
+        parts = [p.strip() for p in line.split(delim)] if delim else line.split()
+
+        req_cols = [c for c in [ieta_col, iphi_col, tower_col, key_col] if c is not None]
+        if not req_cols or len(parts) < max(req_cols) + 1:
+            continue
+
+        try:
+            ieta, iphi, idx, key = None, None, None, None
+            if key_col is not None and (ieta_col is None or iphi_col is None):
+                key = int(parts[key_col], 0)
+                ieta, iphi = get_calo_tower_key_coords(key)
+                idx = get_calo_tower_index(key, det=det)
+            elif tower_col is not None and (ieta_col is None or iphi_col is None):
+                idx = int(parts[tower_col])
+                ieta, iphi = get_calo_tower_ieta_iphi(idx, det=det)
+                key = get_calo_tower_key(idx, det=det)
+            else:
+                ieta = int(parts[ieta_col])
+                iphi = int(parts[iphi_col])
+                idx = get_calo_tower_index(ieta, iphi, det=det)
+                key = get_calo_tower_key(ieta, iphi, det=det)
+
+            if key not in seen_keys:
+                seen_keys.add(key)
+                towers.append({
+                    "ieta": ieta,
+                    "iphi": iphi,
+                    "index": idx,
+                    "key": key,
+                })
+
+            if run_col is not None and len(parts) > run_col:
+                r_str = parts[run_col]
+                try:
+                    r_val = int(float(r_str))
+                    if r_val not in extracted_runs:
+                        extracted_runs.append(r_val)
+                except ValueError:
+                    pass
+        except Exception:
+            continue
+
+    return towers, extracted_runs
+
+
+def solve_minimum_set_cover(tower_keys, candidate_runs_per_tower):
+    """
+    Find the minimum set of runs S such that for every tower T in tower_keys,
+    S contains at least one run from candidate_runs_per_tower[T].
+    Uses essential runs reduction, exact MILP (via scipy if available), or exact branch-and-bound.
+    """
+    valid_towers = [t for t in tower_keys if candidate_runs_per_tower.get(t)]
+    if not valid_towers:
+        return []
+
+    tower_to_runs = {t: set(candidate_runs_per_tower[t]) for t in valid_towers}
+    run_to_towers = {}
+    for t, runs in tower_to_runs.items():
+        for r in runs:
+            if r not in run_to_towers:
+                run_to_towers[r] = set()
+            run_to_towers[r].add(t)
+
+    selected_runs = set()
+    uncovered_towers = set(valid_towers)
+
+    # Reduction 1: Essential runs (towers with only 1 candidate run)
+    changed = True
+    while changed:
+        changed = False
+        essential = set()
+        for t in list(uncovered_towers):
+            avail_runs = tower_to_runs[t] & set(run_to_towers.keys())
+            if len(avail_runs) == 1:
+                r = next(iter(avail_runs))
+                essential.add(r)
+
+        for r in essential:
+            selected_runs.add(r)
+            cov = run_to_towers.get(r, set())
+            uncovered_towers -= cov
+            run_to_towers.pop(r, None)
+            changed = True
+
+    if not uncovered_towers:
+        return sorted(selected_runs)
+
+    # Try exact ILP via scipy
+    try:
+        cand_runs_list = list(run_to_towers.keys())
+        uncov_towers_list = list(uncovered_towers)
+        run_idx_map = {r: i for i, r in enumerate(cand_runs_list)}
+
+        n_runs = len(cand_runs_list)
+        n_towers = len(uncov_towers_list)
+
+        c = np.ones(n_runs)
+        A = np.zeros((n_towers, n_runs))
+        for i, t in enumerate(uncov_towers_list):
+            for r in tower_to_runs[t]:
+                if r in run_idx_map:
+                    A[i, run_idx_map[r]] = 1.0
+
+        constraints = LinearConstraint(A, lb=1.0, ub=np.inf)
+        integrality = np.ones(n_runs)
+        res = milp(c=c, integrality=integrality, constraints=constraints, bounds=(0, 1))
+        if res.success:
+            chosen = [cand_runs_list[i] for i, val in enumerate(res.x) if val > 0.5]
+            selected_runs.update(chosen)
+            return sorted(selected_runs)
+    except Exception:
+        pass
+
+    # Fallback: Branch and bound search
+    cand_runs = list(run_to_towers.keys())
+    greedy_selected = set()
+    greedy_uncovered = set(uncovered_towers)
+    while greedy_uncovered:
+        best_r = max(cand_runs, key=lambda r: len(run_to_towers.get(r, set()) & greedy_uncovered))
+        greedy_selected.add(best_r)
+        greedy_uncovered -= run_to_towers.get(best_r, set())
+
+    best_solution = list(greedy_selected)
+    best_size = len(best_solution)
+
+    def bnb(remaining_towers, current_runs):
+        nonlocal best_solution, best_size
+        if not remaining_towers:
+            if len(current_runs) < best_size:
+                best_size = len(current_runs)
+                best_solution = list(current_runs)
+            return
+
+        if len(current_runs) >= best_size - 1:
+            return
+
+        t = min(remaining_towers, key=lambda tow: len(tower_to_runs[tow] & set(cand_runs)))
+        branch_runs = sorted(
+            [r for r in tower_to_runs[t] if r in cand_runs],
+            key=lambda r: len(run_to_towers.get(r, set()) & remaining_towers),
+            reverse=True,
+        )
+
+        for r in branch_runs:
+            cov = run_to_towers.get(r, set())
+            bnb(remaining_towers - cov, current_runs | {r})
+
+    bnb(set(uncovered_towers), set())
+    selected_runs.update(best_solution)
+    return sorted(selected_runs)
+
+
+def find_smallest_runs_for_towers(
+    tower_list,
+    runs,
+    det="EMCal",
+    dbtag="newcdbtag",
+    workers=None,
+    verbose=True,
+):
+    """
+    Given a list of towers and a list of runs, finds the smallest set of runs where:
+    - towers in the list have the highest |z-score| and status = 0 (good).
+
+    tower_list: list of dicts with 'key', 'ieta', 'iphi', 'index' (from load_towers_from_csv)
+                or list of (ieta, iphi) tuples.
+    runs: list of integer run numbers.
+    det: 'EMCal' / 'CEMC', 'IHCal' / 'HCALIN', or 'OHCal' / 'HCALOUT'.
+    dbtag: CDB tag.
+    workers: number of parallel worker processes.
+
+    Returns dict with:
+      'selected_runs': list of int,
+      'run_coverage': dict mapping run -> list of covered tower info dicts,
+      'tower_stats': dict mapping tower_key -> dict of stats,
+      'uncovered_towers': list of tower info dicts without any status=0 run,
+      'total_towers': int,
+      'all_runs_queried': list of runs queried.
+    """
+    if "EMCal" in det or "CEMC" in det:
+        cdb_det = "CEMC"
+    elif "OHCal" in det or "HCALOUT" in det:
+        cdb_det = "HCALOUT"
+    elif "IHCal" in det or "HCALIN" in det:
+        cdb_det = "HCALIN"
+    else:
+        cdb_det = "CEMC"
+
+    # Standardize tower_list
+    normalized_towers = []
+    tower_by_key = {}
+    for item in tower_list:
+        if isinstance(item, dict):
+            key = item.get("key")
+            ieta = item.get("ieta")
+            iphi = item.get("iphi")
+            idx = item.get("index")
+            if key is None:
+                key = get_calo_tower_key(ieta, iphi, det=det)
+            if idx is None:
+                idx = get_calo_tower_index(ieta, iphi, det=det)
+            entry = {"ieta": ieta, "iphi": iphi, "index": idx, "key": key}
+        elif isinstance(item, (tuple, list)):
+            if len(item) == 2:
+                ieta, iphi = item
+                idx = get_calo_tower_index(ieta, iphi, det=det)
+                key = get_calo_tower_key(ieta, iphi, det=det)
+            else:
+                ieta, iphi, idx = item[:3]
+                key = get_calo_tower_key(ieta, iphi, det=det)
+            entry = {"ieta": ieta, "iphi": iphi, "index": idx, "key": key}
+        else:
+            key = int(item)
+            ieta, iphi = get_calo_tower_key_coords(key)
+            idx = get_calo_tower_index(key, det=det)
+            entry = {"ieta": ieta, "iphi": iphi, "index": idx, "key": key}
+
+        if entry["key"] not in tower_by_key:
+            tower_by_key[entry["key"]] = entry
+            normalized_towers.append(entry)
+
+    target_keys = list(tower_by_key.keys())
+    unique_runs = list(dict.fromkeys(runs))
+
+    if not unique_runs:
+        return {
+            "selected_runs": [],
+            "run_coverage": {},
+            "tower_stats": {},
+            "uncovered_towers": normalized_towers,
+            "total_towers": len(normalized_towers),
+            "all_runs_queried": [],
+        }
+
+    if verbose:
+        print(f"Querying CDB ({cdb_det}, tag '{dbtag}') across {len(unique_runs)} run(s) for {len(target_keys)} tower(s)...")
+
+    max_workers = workers if workers else min(os.cpu_count() or 4, 32, len(unique_runs))
+    worker_func = functools.partial(
+        _query_run_towers_worker,
+        target_keys=target_keys,
+        cdb_det=cdb_det,
+        dbtag=dbtag,
+    )
+
+    run_results = {}
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        if tqdm is not None and len(unique_runs) > 3 and verbose:
+            results_iter = tqdm.tqdm(
+                executor.map(worker_func, unique_runs),
+                total=len(unique_runs),
+                desc="Querying CDB",
+            )
+        else:
+            results_iter = executor.map(worker_func, unique_runs)
+
+        for r_num, t_map, err in results_iter:
+            if err and verbose:
+                print(f"Warning: Failed to load BadTowerMap for run {r_num}: {err}")
+            run_results[r_num] = t_map
+
+    # Analyze per-tower results across all runs
+    candidate_runs = {}
+    tower_stats = {}
+    uncovered_towers = []
+
+    for key in target_keys:
+        good_records = []
+        had_any_record = False
+
+        for r in unique_runs:
+            t_info = run_results.get(r, {}).get(key)
+            if t_info is not None:
+                had_any_record = True
+                st = t_info.get("status")
+                sig = t_info.get("sigma")
+                if st == 0 and sig is not None and not (isinstance(sig, float) and np.isnan(sig)):
+                    good_records.append((r, float(sig), abs(float(sig))))
+
+        if not good_records:
+            reason = "Status was non-zero in all queried runs (always bad)" if had_any_record else "No CDB BadTowerMap record found"
+            uncovered_towers.append({**tower_by_key[key], "reason": reason})
+        else:
+            max_abs_z = max(rec[2] for rec in good_records)
+            best_runs = [rec[0] for rec in good_records if abs(rec[2] - max_abs_z) < 1e-4]
+            candidate_runs[key] = best_runs
+            tower_stats[key] = {
+                "tower": tower_by_key[key],
+                "max_abs_z": max_abs_z,
+                "best_runs": best_runs,
+                "good_records_count": len(good_records),
+                "run_data": {rec[0]: {"sigma": rec[1], "status": 0} for rec in good_records},
+            }
+
+    valid_keys = list(candidate_runs.keys())
+    selected_runs = solve_minimum_set_cover(valid_keys, candidate_runs)
+
+    # Organize coverage breakdown: assign each covered tower to one of the selected runs
+    run_coverage = {r: [] for r in selected_runs}
+    if selected_runs:
+        # Sort runs by number of candidates they can cover descending
+        sorted_sel = sorted(selected_runs, key=lambda r: sum(1 for k in valid_keys if r in candidate_runs[k]), reverse=True)
+        assigned_keys = set()
+        for r in sorted_sel:
+            for k in valid_keys:
+                if k not in assigned_keys and r in candidate_runs[k]:
+                    assigned_keys.add(k)
+                    t_entry = tower_by_key[k]
+                    sig = tower_stats[k]["run_data"][r]["sigma"]
+                    run_coverage[r].append({
+                        **t_entry,
+                        "sigma": sig,
+                        "status": 0,
+                        "max_abs_z": tower_stats[k]["max_abs_z"],
+                    })
+
+    return {
+        "selected_runs": selected_runs,
+        "run_coverage": run_coverage,
+        "tower_stats": tower_stats,
+        "uncovered_towers": uncovered_towers,
+        "total_towers": len(normalized_towers),
+        "all_runs_queried": unique_runs,
+    }
+
+
+def print_smallest_runs_report(result, det="CEMC", dbtag="newcdbtag"):
+    """Format and print the summary report for find_smallest_runs_for_towers."""
+    selected_runs = result["selected_runs"]
+    run_coverage = result["run_coverage"]
+    uncovered = result["uncovered_towers"]
+    total_towers = result["total_towers"]
+    covered_count = total_towers - len(uncovered)
+    total_runs = len(result["all_runs_queried"])
+
+    print("\n" + "=" * 80)
+    print("Smallest Set of Runs for Towers with Highest |z-score| and Status = 0 (Good)")
+    print("=" * 80)
+    print(f"Detector:         {det} (CDB Tag: {dbtag})")
+    print(f"Towers requested: {total_towers}")
+    print(f"Runs analyzed:    {total_runs}")
+    print(f"Runs selected:    {len(selected_runs)} (covers {covered_count}/{total_towers} towers at peak |z-score| with status=0)")
+    print(f"Selected Runs:    {', '.join(map(str, selected_runs)) if selected_runs else 'None'}")
+    print("-" * 80)
+
+    if selected_runs:
+        print("Run Breakdown:")
+        for r in selected_runs:
+            t_list = run_coverage.get(r, [])
+            print(f"\n  Run {r} (covers {len(t_list)} tower{'s' if len(t_list) != 1 else ''}):")
+            for t in t_list:
+                z_str = f"{t['sigma']:+.2f}"
+                abs_z = f"{abs(t['sigma']):.2f}"
+                print(f"    - Tower (ieta={t['ieta']:2d}, iphi={t['iphi']:3d}, idx={t['index']:5d}, key={hex(t['key'])}): z-score = {z_str} (|z| = {abs_z}), status = {t['status']}")
+
+    if uncovered:
+        print("\n" + "-" * 80)
+        print(f"Uncovered Towers ({len(uncovered)}): [No run in list had status = 0 (good)]")
+        for t in uncovered:
+            print(f"    - Tower (ieta={t['ieta']:2d}, iphi={t['iphi']:3d}, idx={t['index']:5d}, key={hex(t['key'])}): {t.get('reason', 'No good status')}")
+
+    print("=" * 80)
+    if selected_runs:
+        print("Selected runs (space-separated):")
+        print(" ".join(map(str, selected_runs)))
+        print("=" * 80)
+
+
 # ---------------------------------------------------------
 # Command-line Interface
 # ---------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(
-        description="Convert between sPHENIX calorimeter tower index, (ieta, iphi), and tower key."
+        description="Convert between sPHENIX calorimeter tower index, (ieta, iphi), and tower key, or find smallest set of runs for a tower CSV."
     )
     parser.add_argument("index", nargs="?", type=int, help="Tower index to convert.")
     parser.add_argument("--det", choices=["EMCal", "CEMC", "HCal", "IHCal", "OHCal", "HCALIN", "HCALOUT"], default="EMCal", help="Calorimeter detector (default: EMCal).")
@@ -766,6 +1221,23 @@ def main():
         "--key",
         type=lambda x: int(x, 0),
         help="Tower key (decimal or 0x hex) to decode.",
+    )
+    parser.add_argument(
+        "-c",
+        "--csv",
+        "--tower-csv",
+        "--towers-csv",
+        type=Path,
+        dest="csv",
+        help="Path to CSV file containing (ieta,iphi) tower list.",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        "--output-runs",
+        type=Path,
+        dest="output_runs",
+        help="Optional text file path to write the selected run numbers (one per line).",
     )
     parser.add_argument(
         "-f",
@@ -803,6 +1275,83 @@ def main():
     )
     args = parser.parse_args()
 
+    # --- Mode 1: CSV of (ieta, iphi) towers ---
+    if args.csv is not None:
+        try:
+            csv_towers, csv_runs = load_towers_from_csv(args.csv, det=args.det)
+        except Exception as e:
+            print(f"Error loading tower CSV '{args.csv}': {e}")
+            sys.exit(1)
+
+        if not csv_towers:
+            print(f"Warning: No valid towers found in CSV file '{args.csv}'.")
+            return
+
+        print(f"Loaded {len(csv_towers)} unique tower(s) from {args.csv}.")
+
+        runs = []
+        if args.file:
+            try:
+                runs.extend(extract_runs_from_file(args.file))
+            except Exception as e:
+                print(f"Error reading run file '{args.file}': {e}")
+                sys.exit(1)
+
+        if args.run:
+            for r_arg in args.run:
+                if Path(r_arg).is_file():
+                    try:
+                        runs.extend(extract_runs_from_file(r_arg))
+                    except Exception as e:
+                        print(f"Error reading run file '{r_arg}': {e}")
+                        sys.exit(1)
+                    continue
+
+                for r_str in str(r_arg).split(","):
+                    r_str = r_str.strip()
+                    if r_str:
+                        try:
+                            runs.append(int(r_str))
+                        except ValueError:
+                            print(f"Error: Invalid run number or file '{r_str}'")
+                            sys.exit(1)
+
+        if not runs and csv_runs:
+            runs.extend(csv_runs)
+
+        runs = list(dict.fromkeys(runs))
+
+        if not runs:
+            print(f"No run list provided. Displaying first {min(len(csv_towers), 10)} tower(s) from CSV:")
+            for t in csv_towers[:10]:
+                print(f"  (ieta={t['ieta']}, iphi={t['iphi']}) -> towerIndex={t['index']}, towerKey={t['key']} (hex: {hex(t['key'])})")
+            if len(csv_towers) > 10:
+                print(f"  ... and {len(csv_towers) - 10} more tower(s).")
+            print("\nTo find the smallest set of runs with highest |z-score| and status=0, provide a run list via -f/--file or --run.")
+            return
+
+        result = find_smallest_runs_for_towers(
+            csv_towers,
+            runs,
+            det=args.det,
+            dbtag=args.cdbtag,
+            workers=args.workers,
+            verbose=True,
+        )
+
+        print_smallest_runs_report(result, det=args.det, dbtag=args.cdbtag)
+
+        if args.output_runs:
+            out_p = Path(args.output_runs)
+            out_p.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_p, "w") as f:
+                for r in result["selected_runs"]:
+                    f.write(f"{r}\n")
+            print(f"\nSaved {len(result['selected_runs'])} selected run(s) to {out_p}")
+
+        return
+
+    # --- Mode 2: Single tower conversion / lookup ---
     backend = "PyROOT (C++)" if args.use_pyroot else "Pure Python"
 
     if args.key is not None:
