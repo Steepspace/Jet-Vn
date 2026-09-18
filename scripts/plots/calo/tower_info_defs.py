@@ -549,27 +549,165 @@ def get_frac_bad_chi2_map(run_number, det="CEMC", dbtag="newcdbtag"):
 get_cemc_frac_bad_chi2_map = get_frac_bad_chi2_map
 
 
+# ---------------------------------------------------------
+# sPHENIX CDB ADC-to-ETower Calibration Factor Support
+# ---------------------------------------------------------
+_CALIB_ADC_TO_ETOWER_CACHE = {}
+
+
+def get_calib_adc_to_etower_map(run_number, det="CEMC", dbtag="newcdbtag"):
+    """
+    Load the ADC-to-ETower calibration factor tree for a given run and detector.
+    det: 'CEMC' (or 'EMCal'), 'HCALIN' (or 'IHCal'), 'HCALOUT' (or 'OHCal'),
+         or a full payload type like 'CEMC_calib_ADC_to_ETower'.
+    Returns a dict mapping towerKey (IID) -> float(calibration factor).
+    Cached per (det, run_number, dbtag).
+    """
+    cache_key = (str(det), int(run_number), str(dbtag))
+    if cache_key in _CALIB_ADC_TO_ETOWER_CACHE:
+        return _CALIB_ADC_TO_ETOWER_CACHE[cache_key]
+
+    if det.endswith("_calib_ADC_to_ETower"):
+        pl_type = det
+    elif "EMCal" in det or det == "CEMC":
+        pl_type = "CEMC_calib_ADC_to_ETower"
+    elif "OHCal" in det or "HCALOUT" in det:
+        pl_type = "HCALOUT_calib_ADC_to_ETower"
+    elif "IHCal" in det or "HCALIN" in det:
+        pl_type = "HCALIN_calib_ADC_to_ETower"
+    else:
+        pl_type = f"{det}_calib_ADC_to_ETower"
+
+    url = get_cdb_calibration_url(pl_type, run_number, dbtag=dbtag)
+    if not url:
+        url = get_cdb_calibration_url(f"{pl_type}_default", run_number, dbtag=dbtag)
+
+    if not url:
+        _CALIB_ADC_TO_ETOWER_CACHE[cache_key] = {}
+        return {}
+
+    try:
+        import uproot
+        import numpy as np
+
+        with uproot.open(url) as f:
+            tree = f["Multiple"] if "Multiple" in f else f[f.keys()[0]]
+
+            # Find the calibration branch name
+            calib_branch = None
+            for cand in [
+                f"F{pl_type}",
+                f"F{pl_type.replace('_default', '')}",
+                f"F{det}_calib_ADC_to_ETower",
+                f"{det}_calib_ADC_to_ETower",
+                "calib",
+                "Fcalib",
+            ]:
+                if cand in tree.keys():
+                    calib_branch = cand
+                    break
+
+            if not calib_branch:
+                for b in tree.keys():
+                    b_clean = b.split(";")[0]
+                    if "calib" in b_clean.lower() and b_clean not in ("IID", "Istatus", "status"):
+                        calib_branch = b
+                        break
+
+            if not calib_branch:
+                for b in tree.keys():
+                    b_clean = b.split(";")[0]
+                    if b_clean not in ("IID", "Istatus", "status"):
+                        calib_branch = b
+                        break
+
+            if not calib_branch or "IID" not in tree:
+                print(f"Warning: Could not identify calibration branches in {url} (branches: {tree.keys()})")
+                _CALIB_ADC_TO_ETOWER_CACHE[cache_key] = {}
+                return {}
+
+            data = tree.arrays(["IID", calib_branch], library="np")
+            result = {int(iid): float(val) for iid, val in zip(data["IID"], data[calib_branch])}
+            _CALIB_ADC_TO_ETOWER_CACHE[cache_key] = result
+            return result
+    except Exception as e:
+        print(f"Warning: Failed to load calib_ADC_to_ETower from {url}: {e}")
+        _CALIB_ADC_TO_ETOWER_CACHE[cache_key] = {}
+        return {}
+
+
+get_cemc_calib_adc_to_etower_map = get_calib_adc_to_etower_map
+get_calo_calib_adc_to_etower_map = get_calib_adc_to_etower_map
+get_calibration_map = get_calib_adc_to_etower_map
+
+
+def get_calo_tower_calib_factor(arg1, arg2=None, run_number=None, det="EMCal", dbtag="newcdbtag", use_pyroot=None):
+    """
+    Convenience function to get the ADC-to-ETower calibration factor for a given tower.
+    Usage:
+        get_calo_tower_calib_factor(tower_index, run_number=68144, det="EMCal")
+        get_calo_tower_calib_factor(ieta, iphi, run_number=68144, det="EMCal")
+        get_calo_tower_calib_factor(tower_key, run_number=68144, det="EMCal")
+    """
+    if run_number is None and arg2 is not None and arg2 > 1000:
+        run_number = arg2
+        arg2 = None
+
+    if run_number is None:
+        raise ValueError("run_number must be specified to look up tower calibration factor.")
+
+    if arg2 is not None:
+        tower_key = get_calo_tower_key(arg1, arg2, det=det, use_pyroot=use_pyroot)
+    else:
+        tower_key = get_calo_tower_key(arg1, det=det, use_pyroot=use_pyroot)
+
+    calib_map = get_calib_adc_to_etower_map(run_number, det=det, dbtag=dbtag)
+    val = calib_map.get(tower_key)
+    if val is None and arg2 is None:
+        val = calib_map.get(int(arg1))
+    return val
+
+
 def query_single_run_tower_cdb(run_number, key_val, cdb_det="CEMC", dbtag="newcdbtag"):
     """
-    Query CDB BadTowerMap and fracBadChi2 for a single run and tower key.
+    Query CDB BadTowerMap, fracBadChi2, and calib_ADC_to_ETower for a single run and tower key.
     Safe for execution across worker processes in ProcessPoolExecutor.
-    Returns: (run_number, info_dict_or_None, frac_bad_chi2_float_or_None)
+    Returns: (run_number, info_dict_or_None, frac_bad_chi2_float_or_None, calib_factor_float_or_None)
     """
     info = None
     chi2_val = None
+    calib_val = None
     try:
         bad_map = get_bad_tower_map(run_number, det=cdb_det, dbtag=dbtag)
         info = bad_map.get(key_val)
+        if info is None:
+            idx = get_calo_tower_index(key_val, det=cdb_det)
+            if idx is not None:
+                info = bad_map.get(idx)
     except Exception:
         pass
 
     try:
         chi2_map = get_frac_bad_chi2_map(run_number, det=cdb_det, dbtag=dbtag)
         chi2_val = chi2_map.get(key_val)
+        if chi2_val is None:
+            idx = get_calo_tower_index(key_val, det=cdb_det)
+            if idx is not None:
+                chi2_val = chi2_map.get(idx)
     except Exception:
         pass
 
-    return run_number, info, chi2_val
+    try:
+        calib_map = get_calib_adc_to_etower_map(run_number, det=cdb_det, dbtag=dbtag)
+        calib_val = calib_map.get(key_val)
+        if calib_val is None:
+            idx = get_calo_tower_index(key_val, det=cdb_det)
+            if idx is not None:
+                calib_val = calib_map.get(idx)
+    except Exception:
+        pass
+
+    return run_number, info, chi2_val, calib_val
 
 
 def extract_runs_from_file(file_path):
@@ -621,7 +759,7 @@ def main():
         description="Convert between sPHENIX calorimeter tower index, (ieta, iphi), and tower key."
     )
     parser.add_argument("index", nargs="?", type=int, help="Tower index to convert.")
-    parser.add_argument("--det", choices=["EMCal", "HCal", "IHCal", "OHCal"], default="EMCal", help="Calorimeter detector (default: EMCal).")
+    parser.add_argument("--det", choices=["EMCal", "CEMC", "HCal", "IHCal", "OHCal", "HCALIN", "HCALOUT"], default="EMCal", help="Calorimeter detector (default: EMCal).")
     parser.add_argument("--eta", type=int, help="ieta coordinate.")
     parser.add_argument("--phi", type=int, help="iphi coordinate.")
     parser.add_argument(
@@ -642,7 +780,7 @@ def main():
         "--runs",
         nargs="+",
         action="extend",
-        help="Optional run number(s) or run list file(s) to query CDB BadTowerMap & fracBadChi2.",
+        help="Optional run number(s) or run list file(s) to query CDB BadTowerMap, fracBadChi2, & calib_ADC_to_ETower.",
     )
     parser.add_argument(
         "-j",
@@ -726,49 +864,84 @@ def main():
         return
 
     if "EMCal" in args.det or "CEMC" in args.det:
-        cdb_det = "CEMC"
+        cdb_dets = ["CEMC"]
     elif "OHCal" in args.det or "HCALOUT" in args.det:
-        cdb_det = "HCALOUT"
+        cdb_dets = ["HCALOUT"]
+    elif "IHCal" in args.det or "HCALIN" in args.det:
+        cdb_dets = ["HCALIN"]
     else:
-        cdb_det = "HCALIN"
+        cdb_dets = ["HCALIN", "HCALOUT"]
 
-    if len(runs) == 1:
-        r = runs[0]
-        _, info, chi2_val = query_single_run_tower_cdb(r, target_key, cdb_det=cdb_det, dbtag=args.cdbtag)
+    def format_cdb_parts(info, chi2_val, calib_val):
         parts = []
         if info is not None:
             parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
         if chi2_val is not None:
             c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
             parts.append(f"frac badChi2={c_str}")
-        cdb_str = f", {', '.join(parts)}" if parts else ""
+        if calib_val is not None:
+            if 0 < abs(calib_val) < 0.001 or abs(calib_val) >= 10000:
+                calib_str = f"{calib_val:.4e}"
+            else:
+                calib_str = f"{calib_val:.6g}"
+            parts.append(f"calib={calib_str} GeV/ADC")
+        return parts
+
+    if len(runs) == 1:
+        r = runs[0]
+        run_parts = []
+        for det_name in cdb_dets:
+            _, info, chi2_val, calib_val = query_single_run_tower_cdb(r, target_key, cdb_det=det_name, dbtag=args.cdbtag)
+            p = format_cdb_parts(info, chi2_val, calib_val)
+            if p:
+                prefix = f"{det_name}: " if len(cdb_dets) > 1 else ""
+                run_parts.append(f"{prefix}{', '.join(p)}")
+        cdb_str = f", {'; '.join(run_parts)}" if run_parts else ""
         print(f"{base}{cdb_str}")
         return
 
     max_workers = args.workers if args.workers else min(os.cpu_count() or 4, 32, len(runs))
-    worker_func = functools.partial(
-        query_single_run_tower_cdb,
-        key_val=target_key,
-        cdb_det=cdb_det,
-        dbtag=args.cdbtag,
-    )
+    if len(cdb_dets) == 1:
+        worker_func = functools.partial(
+            query_single_run_tower_cdb,
+            key_val=target_key,
+            cdb_det=cdb_dets[0],
+            dbtag=args.cdbtag,
+        )
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            if tqdm is not None and len(runs) > 3:
+                results = list(tqdm.tqdm(executor.map(worker_func, runs), total=len(runs), desc="Querying CDB"))
+            else:
+                results = list(executor.map(worker_func, runs))
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        if tqdm is not None and len(runs) > 3:
-            results = list(tqdm.tqdm(executor.map(worker_func, runs), total=len(runs), desc="Querying CDB"))
-        else:
-            results = list(executor.map(worker_func, runs))
+        print(base)
+        for r, info, chi2_val, calib_val in results:
+            parts = format_cdb_parts(info, chi2_val, calib_val)
+            out_str = ", ".join(parts) if parts else "no CDB record"
+            print(f"  Run {r}: {out_str}")
+    else:
+        def worker_multi(r):
+            det_res = {}
+            for det_name in cdb_dets:
+                _, info, chi2_val, calib_val = query_single_run_tower_cdb(r, target_key, cdb_det=det_name, dbtag=args.cdbtag)
+                det_res[det_name] = (info, chi2_val, calib_val)
+            return r, det_res
 
-    print(base)
-    for r, info, chi2_val in results:
-        parts = []
-        if info is not None:
-            parts.append(f"z-score={info['sigma']:+.2f}, status={info['status']}")
-        if chi2_val is not None:
-            c_str = f"{chi2_val:.2e}" if 0 < abs(chi2_val) < 0.01 else f"{chi2_val:.2f}"
-            parts.append(f"frac badChi2={c_str}")
-        out_str = ", ".join(parts) if parts else "no CDB record"
-        print(f"  Run {r}: {out_str}")
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            if tqdm is not None and len(runs) > 3:
+                results = list(tqdm.tqdm(executor.map(worker_multi, runs), total=len(runs), desc="Querying CDB"))
+            else:
+                results = list(executor.map(worker_multi, runs))
+
+        print(base)
+        for r, det_res in results:
+            run_parts = []
+            for det_name, (info, chi2_val, calib_val) in det_res.items():
+                p = format_cdb_parts(info, chi2_val, calib_val)
+                if p:
+                    run_parts.append(f"{det_name}: {', '.join(p)}")
+            out_str = "; ".join(run_parts) if run_parts else "no CDB record"
+            print(f"  Run {r}: {out_str}")
 
 
 if __name__ == "__main__":
