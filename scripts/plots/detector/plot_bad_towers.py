@@ -593,14 +593,13 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                 plt.close(fig)
                 print(f"Saved hot towers (>10%) vs run index plot with annotated runs{title_suffix} to {image_dir / f'{name}_frequent_hot_10pct_run_index_annotated{file_suffix}.png'}")
 
-    # Setup for Plot 4: 1D Z-score distributions for towers hot in >50% runs
-    hot_50_df = freq_df[freq_df['HotRunFraction'] > 0.5]
-    if len(hot_50_df) == 0:
-        print("No towers were hot in >50% of the runs. Skipping 50% hot towers Z-score plots.")
+    # Setup for Plot 4: 1D Z-score distributions for towers hot in >10% runs
+    if len(hot_10_df) == 0:
+        print("No towers were hot in >10% of the runs. Skipping 10% hot towers Z-score plots.")
     else:
-        target_keys = hot_50_df['TowerKey'].values
+        target_keys = hot_10_df['TowerKey'].values
 
-        # Plot 4: 1D Z-score distributions for towers hot in >50% runs
+        # Plot 4: 1D Z-score distributions for towers hot in >10% runs
         sigmas_cache_path = output_dir / f".{name}_hot_sigmas_cache.pkl"
         run_sigmas_map = {}
         if not no_cache and sigmas_cache_path.exists():
@@ -621,14 +620,15 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
 
             missing_keys = []
             for tk in target_keys:
-                if run_status.get(tk, 0) == 0 and tk not in cached_sigmas:
+                status_k = run_status.get(tk, 0) if isinstance(run_status, dict) else (2 if run_status and tk in run_status else 0)
+                if status_k == 0 and tk not in cached_sigmas:
                     missing_keys.append(tk)
 
             if missing_keys:
                 runs_to_process.append((run_num, item_data, missing_keys))
 
         if runs_to_process:
-            print(f"Extracting z-scores for >50% hot towers from {len(runs_to_process)} runs ({len(run_numbers) - len(runs_to_process)} loaded from cache)...")
+            print(f"Extracting z-scores for >10% hot towers from {len(runs_to_process)} runs ({len(run_numbers) - len(runs_to_process)} loaded from cache)...")
             max_workers = min(os.cpu_count() or 4, 32)
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 for run_num, sigmas in tqdm.tqdm(executor.map(_get_target_sigmas_for_run, runs_to_process), total=len(runs_to_process)):
@@ -644,10 +644,10 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                 except Exception as e:
                     print(f"Warning: Could not save sigmas cache {sigmas_cache_path}: {e}")
         else:
-            print(f"Loaded all z-scores for >50% hot towers from cache ({sigmas_cache_path}).")
+            print(f"Loaded all z-scores for >10% hot towers from cache ({sigmas_cache_path}).")
 
         sigmas_to_plot = []
-        for i, (tidx, row) in enumerate(hot_50_df.iterrows()):
+        for i, (tidx, row) in enumerate(hot_10_df.iterrows()):
             tkey = int(row['TowerKey'])
             ieta = int(row['ieta'])
             iphi = int(row['iphi'])
@@ -655,7 +655,7 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
             sigmas = []
             for r_idx, run_status in enumerate(tower_status_per_run):
                 run_num = run_numbers[r_idx]
-                status = run_status.get(tkey, 0)
+                status = run_status.get(tkey, 0) if isinstance(run_status, dict) else (2 if run_status and tkey in run_status else 0)
                 # Only plot for runs where the tower is Good (status 0)
                 if status == 0:
                     val = run_sigmas_map.get(run_num, {}).get(tkey, np.nan)
@@ -663,7 +663,10 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                         sigmas.append(val)
             if sigmas:
                 # Compute status percentages across all runs
-                t_statuses = matrix_t[i, :]
+                t_statuses = np.array([
+                    rs.get(tkey, 0) if isinstance(rs, dict) else (2 if rs and tkey in rs else 0)
+                    for rs in tower_status_per_run
+                ], dtype=int)
                 n_tot = len(t_statuses)
                 status_labels = [
                     (0, 'good', '#2ca02c'),
@@ -681,19 +684,26 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                         type_pcts.append((f"{slabel}: {pct_str}", scolor))
                 sigmas_to_plot.append((row, ieta, iphi, sigmas, type_pcts))
 
-        n_plots = len(sigmas_to_plot)
-        if n_plots > 0:
+        n_total_plots = len(sigmas_to_plot)
+        if n_total_plots > 0:
+            max_towers_per_plot = 25
+            n_chunks = (n_total_plots + max_towers_per_plot - 1) // max_towers_per_plot
             cols = 5
-            # Force at least 5 rows if n_plots <= 25 to match 5x5 request
-            rows = max(5, int(np.ceil(n_plots / cols))) if n_plots > 0 else 0
 
-            if rows > 0:
+            for chunk_idx in range(n_chunks):
+                start_idx = chunk_idx * max_towers_per_plot
+                end_idx = min((chunk_idx + 1) * max_towers_per_plot, n_total_plots)
+                chunk_sigmas = sigmas_to_plot[start_idx:end_idx]
+                n_plots = len(chunk_sigmas)
+
+                rows = max(5, int(np.ceil(n_plots / cols)))
                 fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 4.5 * rows), sharex=True)
-                if n_plots == 1:
-                    axes = np.array([axes])
-                axes_flat = axes.flatten()
+                if n_plots == 1 and rows == 1 and cols == 1:
+                    axes_flat = np.array([axes])
+                else:
+                    axes_flat = axes.flatten()
 
-                for i, (row, ieta, iphi, sigmas, type_pcts) in enumerate(sigmas_to_plot):
+                for i, (row, ieta, iphi, sigmas, type_pcts) in enumerate(chunk_sigmas):
                     ax = axes_flat[i]
                     ax.hist(sigmas, bins=30, range=(-5, 5), histtype='step', color='#1f77b4', linewidth=2, log=True)
                     ax.set_ylim(bottom=0.5)
@@ -736,10 +746,12 @@ def plot_frequently_hot_towers(tower_status_per_run, original_items_per_run, run
                         bottom_ax.set_xlabel("z-score", fontsize=14)
 
                 plt.tight_layout()
-                plt.savefig(pdf_dir / f"{name}_frequent_hot_50pct_zscore.pdf", bbox_inches='tight')
-                plt.savefig(image_dir / f"{name}_frequent_hot_50pct_zscore.png", dpi=400, bbox_inches='tight')
+                file_suffix = f"_pt{chunk_idx + 1}" if n_chunks > 1 else ""
+                title_suffix = f" (Part {chunk_idx + 1}/{n_chunks})" if n_chunks > 1 else ""
+                plt.savefig(pdf_dir / f"{name}_frequent_hot_10pct_zscore{file_suffix}.pdf", bbox_inches='tight')
+                plt.savefig(image_dir / f"{name}_frequent_hot_10pct_zscore{file_suffix}.png", dpi=400, bbox_inches='tight')
                 plt.close(fig)
-                print(f"Saved z-score distributions for {n_plots} towers to {image_dir / f'{name}_frequent_hot_50pct_zscore.png'}")
+                print(f"Saved z-score distributions for {n_plots} towers{title_suffix} to {image_dir / f'{name}_frequent_hot_10pct_zscore{file_suffix}.png'}")
 
     return freq_df
 
