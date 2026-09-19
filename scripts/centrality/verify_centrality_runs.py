@@ -218,17 +218,27 @@ def inspect_single_scale_file(
 def verify_scales_directory(
     scales_dir: Path,
     scales_runs: Dict[int, str],
+    intersection_runs: Optional[Set[int]] = None,
     workers: Optional[int] = None,
     verbose: bool = False,
     save_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Inspects all files in scales_dir for Dcentralityscale values and prints
-    the breakdown of Good (1), Bad (0), Other, and error runs.
+    Inspects files in scales_dir for Dcentralityscale values (filtered to
+    intersection runs with all calib types) and prints the breakdown of
+    Good (1), Bad (0), Other, and error runs.
     """
-    items = [(r, str(scales_dir / fname)) for r, fname in sorted(scales_runs.items())]
+    if intersection_runs is not None:
+        items = [
+            (r, str(scales_dir / fname))
+            for r, fname in sorted(scales_runs.items())
+            if r in intersection_runs
+        ]
+    else:
+        items = [(r, str(scales_dir / fname)) for r, fname in sorted(scales_runs.items())]
+
     if not items:
-        print(f"\nNo scale files found in {scales_dir}.")
+        print(f"\nNo scale files found in {scales_dir} matching intersection runs.")
         return {}
 
     num_workers = workers if workers is not None else min(os.cpu_count() or 4, 16)
@@ -236,7 +246,10 @@ def verify_scales_directory(
     print(f" Centrality Scale (Dcentralityscale) Verification")
     print(f"=======================================================")
     print(f"Scales Directory: {scales_dir}")
-    print(f"Inspecting {len(items)} files with {num_workers} workers...")
+    if intersection_runs is not None:
+        print(f"Inspecting {len(items)} intersection runs (with all calib types) using {num_workers} workers...")
+    else:
+        print(f"Inspecting {len(items)} files with {num_workers} workers...")
 
     if len(items) > 20 and num_workers > 1:
         with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -285,14 +298,6 @@ def verify_scales_directory(
     print("\nScale Breakdown:")
     print_table(headers, rows)
 
-    # Highlight runs with neither 1 nor 0
-    if other_runs:
-        print(f"\n[ALERT] Found {len(other_runs)} run(s) with scale NEITHER 1 NOR 0:")
-        for r, (val, msg) in sorted(other_runs.items()):
-            print(f"    Run {r}: {msg}")
-    else:
-        print("\n[OK] No runs found with scale neither 1 nor 0.")
-
     if error_runs:
         print(f"\n[WARNING] Found {len(error_runs)} run(s) with errors reading Dcentralityscale:")
         for r, msg in sorted(error_runs.items())[:20]:
@@ -300,7 +305,7 @@ def verify_scales_directory(
         if len(error_runs) > 20 and not verbose:
             print(f"    ... and {len(error_runs) - 20} more (use -v to display all)")
 
-    # Print summary of Good vs Bad
+    # Print summary of Good vs Bad vs Other
     print(f"\nScale Summary:")
     print(f"  - Good Runs (Scale = 1): {len(good_runs)}")
     if verbose or len(good_runs) <= 20:
@@ -311,14 +316,19 @@ def verify_scales_directory(
         print(f"    Last 10:  {good_runs[-10:]}")
         print(f"    (Use -v or --verbose to display all)")
 
+    print(f"  - Other Runs (Scale != 0 and != 1): {len(other_runs)}")
+
     print(f"  - Bad Runs (Scale = 0): {len(bad_runs)}")
-    if verbose or len(bad_runs) <= 20:
-        if bad_runs:
-            print(f"    {bad_runs}")
-    else:
-        print(f"    First 10: {bad_runs[:10]}")
-        print(f"    Last 10:  {bad_runs[-10:]}")
-        print(f"    (Use -v or --verbose to display all)")
+    if bad_runs:
+        if verbose or len(bad_runs) <= 50:
+            for i in range(0, len(bad_runs), 10):
+                print("    " + ", ".join(str(r) for r in bad_runs[i : i + 10]))
+        else:
+            for i in range(0, min(len(bad_runs), 20), 10):
+                print("    " + ", ".join(str(r) for r in bad_runs[i : i + 10]))
+            print(f"    ... [{len(bad_runs) - 40} intermediate bad runs omitted; use -v or --verbose to display all {len(bad_runs)}]")
+            for i in range(len(bad_runs) - 20, len(bad_runs), 10):
+                print("    " + ", ".join(str(r) for r in bad_runs[i : i + 10]))
 
     # Save scale lists if requested
     if save_dir:
@@ -495,6 +505,7 @@ def main():
             scale_results = verify_scales_directory(
                 scales_dir=scales_dir_path,
                 scales_runs=scales_runs,
+                intersection_runs=intersection_runs,
                 workers=args.workers,
                 verbose=args.verbose,
                 save_dir=args.save_scales,
@@ -529,7 +540,7 @@ def main():
                         f.write(f"{r}\n")
                 print(f"Saved missing runs for '{d}' to: {missing_file}")
 
-    if scale_results.get("other"):
+    if scale_results.get("bad"):
         has_discrepancy = True
     if scale_results.get("error"):
         has_discrepancy = True
