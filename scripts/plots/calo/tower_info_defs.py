@@ -1206,6 +1206,42 @@ def print_smallest_runs_report(result, det="CEMC", dbtag="newcdbtag"):
         print("=" * 80)
 
 
+def save_smallest_runs_csv(result, output_path):
+    """
+    Save the determined (ieta, iphi, run) results to a CSV file.
+    Columns: ieta, iphi, run, tower_index, tower_key, z_score, status
+    """
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    run_coverage = result.get("run_coverage", {})
+    for r, towers in run_coverage.items():
+        for t in towers:
+            rows.append({
+                "ieta": t["ieta"],
+                "iphi": t["iphi"],
+                "run": r,
+                "tower_index": t.get("index", ""),
+                "tower_key": int(t["key"]) if "key" in t else "",
+                "z_score": f"{t['sigma']:.4f}" if "sigma" in t and t["sigma"] is not None else "",
+                "status": t.get("status", 0),
+            })
+
+    # Sort by ieta, iphi for clean consistent ordering
+    rows.sort(key=lambda x: (x["ieta"], x["iphi"]))
+
+    fieldnames = ["ieta", "iphi", "run", "tower_index", "tower_key", "z_score", "status"]
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    print(f"\nSaved determined results for {len(rows)} tower(s) to CSV: {output_path}")
+    if result.get("uncovered_towers"):
+        print(f"Note: {len(result['uncovered_towers'])} uncovered tower(s) were excluded from CSV because no run had status=0 (good).")
+
+
 # ---------------------------------------------------------
 # Command-line Interface
 # ---------------------------------------------------------
@@ -1238,6 +1274,13 @@ def main():
         type=Path,
         dest="output_runs",
         help="Optional text file path to write the selected run numbers (one per line).",
+    )
+    parser.add_argument(
+        "--output-csv",
+        "--out-csv",
+        type=Path,
+        dest="output_csv",
+        help="Optional CSV file path to write the determined results (ieta, iphi, run, tower_index, tower_key, z_score, status).",
     )
     parser.add_argument(
         "-f",
@@ -1348,6 +1391,11 @@ def main():
                 for r in result["selected_runs"]:
                     f.write(f"{r}\n")
             print(f"\nSaved {len(result['selected_runs'])} selected run(s) to {out_p}")
+
+        if args.output_csv:
+            save_smallest_runs_csv(result, args.output_csv)
+        elif args.output_runs and str(args.output_runs).lower().endswith(".csv"):
+            save_smallest_runs_csv(result, args.output_runs)
 
         return
 
