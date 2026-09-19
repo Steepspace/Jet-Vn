@@ -100,6 +100,7 @@ void Process_Calo_Calib()
   {
     statusEMC->set_directURL_globalHotMap(CaloCalib::cemc_globalBadTowerMap_override);
   }
+  statusEMC->set_doAbortMissingCalib(true);
   // MC Towers Status
   if (isSim)
   {
@@ -119,10 +120,12 @@ void Process_Calo_Calib()
 
   CaloTowerStatus *statusHCalIn = new CaloTowerStatus("HCALINSTATUS");
   statusHCalIn->set_detector_type(CaloTowerDefs::HCALIN);
+  statusHCalIn->set_doAbortMissingCalib(true);
   se->registerSubsystem(statusHCalIn);
 
   CaloTowerStatus *statusHCALOUT = new CaloTowerStatus("HCALOUTSTATUS");
   statusHCALOUT->set_detector_type(CaloTowerDefs::HCALOUT);
+  statusHCALOUT->set_doAbortMissingCalib(true);
   se->registerSubsystem(statusHCALOUT);
 
   ////////////////////
@@ -132,6 +135,7 @@ void Process_Calo_Calib()
   calibEMC->set_detector_type(CaloTowerDefs::CEMC);
   calibEMC->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibEMC->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
+  calibEMC->set_doAbortMissingCalib(true);
   se->registerSubsystem(calibEMC);
 
   std::cout << "Calibrating OHcal" << std::endl;
@@ -139,6 +143,7 @@ void Process_Calo_Calib()
   calibOHCal->set_detector_type(CaloTowerDefs::HCALOUT);
   calibOHCal->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibOHCal->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
+  calibOHCal->set_doAbortMissingCalib(true);
   se->registerSubsystem(calibOHCal);
 
   std::cout << "Calibrating IHcal" << std::endl;
@@ -146,6 +151,7 @@ void Process_Calo_Calib()
   calibIHCal->set_detector_type(CaloTowerDefs::HCALIN);
   calibIHCal->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibIHCal->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
+  calibIHCal->set_doAbortMissingCalib(true);
   se->registerSubsystem(calibIHCal);
 
   ////////////////
