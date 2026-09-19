@@ -12,11 +12,16 @@ Default calibration directory:
 """
 
 import argparse
+import concurrent.futures
 import os
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+import numpy as np
+import tqdm
+import uproot
 
 
 DEFAULT_CALIB_DIR = "/sphenix/user/anarde/sEPD-Study/centrality_calib"
@@ -46,6 +51,36 @@ def parse_args():
         action="store_true",
         default=True,
         help="Check for 0-byte or empty files (default: enabled)",
+    )
+    parser.add_argument(
+        "--check-scales",
+        action="store_true",
+        default=True,
+        help="Inspect 'scales' directory ROOT files for Dcentralityscale branch (default: enabled)",
+    )
+    parser.add_argument(
+        "--no-check-scales",
+        dest="check_scales",
+        action="store_false",
+        help="Disable checking Dcentralityscale in scales files",
+    )
+    parser.add_argument(
+        "--save-scales",
+        type=str,
+        default=None,
+        help="Optional directory to save lists of good (scale=1), bad (scale=0), and other scale runs",
+    )
+    parser.add_argument(
+        "--only-good-scales",
+        action="store_true",
+        help="When saving runs with --save-runs, filter to only include runs with scale == 1",
+    )
+    parser.add_argument(
+        "-j",
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel worker processes for checking scale files (default: min(os.cpu_count(), 16))",
     )
     parser.add_argument(
         "--save-runs",
@@ -124,6 +159,197 @@ def print_table(headers: List[str], rows: List[List[str]]):
         line_str = "| " + " | ".join(str(val).ljust(col_widths[i]) for i, val in enumerate(row)) + " |"
         print(line_str)
     print(sep)
+
+
+def inspect_single_scale_file(
+    item: Tuple[int, str]
+) -> Tuple[int, str, Optional[float], str]:
+    """
+    Worker function to inspect a single scale ROOT file.
+
+    Returns:
+        (run_number, status, scale_value, message)
+        where status is 'GOOD', 'BAD', 'OTHER', 'EMPTY', or 'ERROR'.
+    """
+    run_num, file_path_str = item
+    file_path = Path(file_path_str)
+    try:
+        if file_path.stat().st_size == 0:
+            return run_num, "EMPTY", None, "0-byte file"
+
+        with uproot.open(file_path) as f:
+            if "Multiple" in f:
+                tree = f["Multiple"]
+            elif len(f.keys()) > 0:
+                tree = f[f.keys()[0]]
+            else:
+                return run_num, "ERROR", None, "No keys/trees in ROOT file"
+
+            if "Dcentralityscale" not in tree:
+                return run_num, "ERROR", None, "Missing 'Dcentralityscale' branch"
+
+            vals = tree["Dcentralityscale"].array(library="np")
+            if len(vals) == 0:
+                return run_num, "ERROR", None, "Branch 'Dcentralityscale' has 0 entries"
+
+            if len(vals) > 1:
+                unique_vals = np.unique(vals)
+                if len(unique_vals) > 1:
+                    return run_num, "OTHER", None, f"Multiple distinct scale values: {list(unique_vals)}"
+
+            raw_val = vals[0]
+            try:
+                scale_val = float(raw_val)
+            except (ValueError, TypeError):
+                return run_num, "OTHER", None, f"Non-numeric scale value: {raw_val}"
+
+            if np.isnan(scale_val):
+                return run_num, "OTHER", scale_val, "NaN"
+            elif scale_val == 1.0:
+                return run_num, "GOOD", scale_val, ""
+            elif scale_val == 0.0:
+                return run_num, "BAD", scale_val, ""
+            else:
+                return run_num, "OTHER", scale_val, f"Scale = {scale_val}"
+    except Exception as e:
+        return run_num, "ERROR", None, str(e)
+
+
+def verify_scales_directory(
+    scales_dir: Path,
+    scales_runs: Dict[int, str],
+    workers: Optional[int] = None,
+    verbose: bool = False,
+    save_dir: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Inspects all files in scales_dir for Dcentralityscale values and prints
+    the breakdown of Good (1), Bad (0), Other, and error runs.
+    """
+    items = [(r, str(scales_dir / fname)) for r, fname in sorted(scales_runs.items())]
+    if not items:
+        print(f"\nNo scale files found in {scales_dir}.")
+        return {}
+
+    num_workers = workers if workers is not None else min(os.cpu_count() or 4, 16)
+    print(f"\n=======================================================")
+    print(f" Centrality Scale (Dcentralityscale) Verification")
+    print(f"=======================================================")
+    print(f"Scales Directory: {scales_dir}")
+    print(f"Inspecting {len(items)} files with {num_workers} workers...")
+
+    if len(items) > 20 and num_workers > 1:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+            if len(items) > 50:
+                results = list(
+                    tqdm.tqdm(
+                        executor.map(inspect_single_scale_file, items),
+                        total=len(items),
+                        desc="Checking scales",
+                    )
+                )
+            else:
+                results = list(executor.map(inspect_single_scale_file, items))
+    else:
+        results = [inspect_single_scale_file(it) for it in items]
+
+    good_runs: List[int] = []
+    bad_runs: List[int] = []
+    other_runs: Dict[int, Tuple[Optional[float], str]] = {}
+    error_runs: Dict[int, str] = {}
+
+    for run_num, status, val, msg in results:
+        if status == "GOOD":
+            good_runs.append(run_num)
+        elif status == "BAD":
+            bad_runs.append(run_num)
+        elif status == "OTHER":
+            other_runs[run_num] = (val, msg)
+        else:
+            error_runs[run_num] = msg
+
+    total = len(items)
+    pct_good = (len(good_runs) / total * 100) if total else 0.0
+    pct_bad = (len(bad_runs) / total * 100) if total else 0.0
+    pct_other = (len(other_runs) / total * 100) if total else 0.0
+    pct_err = (len(error_runs) / total * 100) if total else 0.0
+
+    headers = ["Classification", "Dcentralityscale", "Count", "Percentage"]
+    rows = [
+        ["Good", "1", str(len(good_runs)), f"{pct_good:6.2f}%"],
+        ["Bad", "0", str(len(bad_runs)), f"{pct_bad:6.2f}%"],
+        ["Other", "!= 0 and != 1", str(len(other_runs)), f"{pct_other:6.2f}%"],
+        ["Unreadable / Error", "N/A", str(len(error_runs)), f"{pct_err:6.2f}%"],
+    ]
+
+    print("\nScale Breakdown:")
+    print_table(headers, rows)
+
+    # Highlight runs with neither 1 nor 0
+    if other_runs:
+        print(f"\n[ALERT] Found {len(other_runs)} run(s) with scale NEITHER 1 NOR 0:")
+        for r, (val, msg) in sorted(other_runs.items()):
+            print(f"    Run {r}: {msg}")
+    else:
+        print("\n[OK] No runs found with scale neither 1 nor 0.")
+
+    if error_runs:
+        print(f"\n[WARNING] Found {len(error_runs)} run(s) with errors reading Dcentralityscale:")
+        for r, msg in sorted(error_runs.items())[:20]:
+            print(f"    Run {r}: {msg}")
+        if len(error_runs) > 20 and not verbose:
+            print(f"    ... and {len(error_runs) - 20} more (use -v to display all)")
+
+    # Print summary of Good vs Bad
+    print(f"\nScale Summary:")
+    print(f"  - Good Runs (Scale = 1): {len(good_runs)}")
+    if verbose or len(good_runs) <= 20:
+        if good_runs:
+            print(f"    {good_runs}")
+    else:
+        print(f"    First 10: {good_runs[:10]}")
+        print(f"    Last 10:  {good_runs[-10:]}")
+        print(f"    (Use -v or --verbose to display all)")
+
+    print(f"  - Bad Runs (Scale = 0): {len(bad_runs)}")
+    if verbose or len(bad_runs) <= 20:
+        if bad_runs:
+            print(f"    {bad_runs}")
+    else:
+        print(f"    First 10: {bad_runs[:10]}")
+        print(f"    Last 10:  {bad_runs[-10:]}")
+        print(f"    (Use -v or --verbose to display all)")
+
+    # Save scale lists if requested
+    if save_dir:
+        out_dir = Path(save_dir).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        good_file = out_dir / "good_scale_runs.list"
+        with open(good_file, "w") as f:
+            for r in good_runs:
+                f.write(f"{r}\n")
+        print(f"\nSaved {len(good_runs)} good scale runs to: {good_file}")
+
+        bad_file = out_dir / "bad_scale_runs.list"
+        with open(bad_file, "w") as f:
+            for r in bad_runs:
+                f.write(f"{r}\n")
+        print(f"Saved {len(bad_runs)} bad scale runs to: {bad_file}")
+
+        if other_runs:
+            other_file = out_dir / "other_scale_runs.list"
+            with open(other_file, "w") as f:
+                for r, (val, msg) in sorted(other_runs.items()):
+                    f.write(f"{r} {msg}\n")
+            print(f"Saved {len(other_runs)} other scale runs to: {other_file}")
+
+    return {
+        "good": good_runs,
+        "bad": bad_runs,
+        "other": other_runs,
+        "error": error_runs,
+    }
 
 
 def main():
@@ -252,14 +478,43 @@ def main():
                 print(f"\n  Subdirectory '{d}' has {len(dir_empty[d])} 0-byte file(s):")
                 print(f"    {dir_empty[d][:10]}")
 
+    # Scales inspection (Dcentralityscale branch verification)
+    scale_results: Dict[str, Any] = {}
+    if args.check_scales:
+        scales_dir_path = None
+        scales_runs: Dict[int, str] = {}
+
+        if "scales" in dir_runs:
+            scales_dir_path = base_dir / "scales"
+            scales_runs = dir_runs["scales"]
+        elif (base_dir / "scales").is_dir():
+            scales_dir_path = base_dir / "scales"
+            scales_runs, _, _ = scan_directory(scales_dir_path, check_empty=args.check_empty)
+
+        if scales_dir_path and scales_runs:
+            scale_results = verify_scales_directory(
+                scales_dir=scales_dir_path,
+                scales_runs=scales_runs,
+                workers=args.workers,
+                verbose=args.verbose,
+                save_dir=args.save_scales,
+            )
+        elif not scales_dir_path and args.verbose:
+            print("\nNote: 'scales' directory not found; skipping Dcentralityscale inspection.")
+
     # Export options
     if args.save_runs:
         out_path = Path(args.save_runs).resolve()
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        runs_to_save = intersection_runs
+        if args.only_good_scales and scale_results.get("good") is not None:
+            runs_to_save = runs_to_save & set(scale_results["good"])
+            print(f"Filtered --save-runs to only good scale (scale=1) runs: {len(runs_to_save)} runs.")
+
         with open(out_path, "w") as f:
-            for r in sorted(intersection_runs):
+            for r in sorted(runs_to_save):
                 f.write(f"{r}\n")
-        print(f"\nSaved {len(intersection_runs)} matching runs to: {out_path}")
+        print(f"\nSaved {len(runs_to_save)} matching runs to: {out_path}")
 
     if args.save_diff and has_discrepancy:
         diff_dir = Path(args.save_diff).resolve()
@@ -273,6 +528,11 @@ def main():
                     for r in missing:
                         f.write(f"{r}\n")
                 print(f"Saved missing runs for '{d}' to: {missing_file}")
+
+    if scale_results.get("other"):
+        has_discrepancy = True
+    if scale_results.get("error"):
+        has_discrepancy = True
 
     print("\nVerification completed.\n")
     sys.exit(1 if has_discrepancy else 0)
