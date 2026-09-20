@@ -225,6 +225,7 @@ def load_tower_csv(csv_path):
                     towers_by_run[run_val] = []
                 if entry not in towers_by_run[run_val]:
                     towers_by_run[run_val].append(entry)
+                    tower_list.append((run_val, *entry))
                 all_runs.add(run_val)
             else:
                 if entry not in tower_list:
@@ -233,9 +234,9 @@ def load_tower_csv(csv_path):
             print(f"Warning: Could not parse numbers from line {line_num} ('{line}'): {e}")
 
     if has_run:
-        return towers_by_run, all_runs, True
+        return towers_by_run, all_runs, True, tower_list
     else:
-        return tower_list, set(), False
+        return tower_list, set(), False, tower_list
 
 
 def make_1d_yproj_plot(
@@ -443,6 +444,126 @@ def make_1d_yproj_plot(
     return True, None
 
 
+def make_5x5_grid_plot(
+    towers_info_list,
+    output_path,
+    run_number=None,
+    hist_name="h2EMCalEnergyTowerIndex",
+    set_idx=0,
+    total_sets=1,
+    ref_tower=None,
+    logy=True,
+    auto_xlim=True,
+):
+    """
+    Generate and save a 5x5 grid plot (up to 25 subplots) of 1D tower energy distributions.
+    Rollover occurs when more than 25 towers are requested.
+    """
+    hep.style.use("ATLAS")
+    n_cols = 5
+    n_towers = min(len(towers_info_list), 25)
+    n_rows = max(1, (n_towers + n_cols - 1) // n_cols)
+    fig_height = 4.4 * n_rows
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(22, fig_height), squeeze=False)
+    axes_flat = axes.flatten()
+
+    for i, t_info in enumerate(towers_info_list):
+        if i >= 25:
+            break
+        ax = axes_flat[i]
+        tower_idx = t_info["tower_idx"]
+        ieta = t_info["ieta"]
+        iphi = t_info["iphi"]
+        r_num = t_info.get("run_number", run_number)
+        proj_y = t_info["proj_y"]
+        yedges = t_info["yedges"]
+        ylabel = t_info.get("ylabel", r"Tower Energy [GeV]")
+        z_score = t_info.get("z_score")
+        frac_bad_chi2 = t_info.get("frac_bad_chi2")
+        calib = t_info.get("calib")
+        proj_y_ref = t_info.get("proj_y_ref")
+        ref_idx = t_info.get("ref_tower_index", ref_tower)
+
+        # Plot tower histogram and optional reference overlay
+        if proj_y_ref is not None:
+            hep.histplot((proj_y, yedges), ax=ax, histtype='step', color='crimson', linewidth=2.0, label=f"Tower {tower_idx}")
+            hep.histplot((proj_y_ref, yedges), ax=ax, histtype='step', color='navy', linewidth=1.5, linestyle='--', label=f"Ref {ref_idx}")
+            ax.legend(fontsize=11, loc='upper left', frameon=True, framealpha=0.7)
+        else:
+            hep.histplot((proj_y, yedges), ax=ax, histtype='step', color='navy', linewidth=2.0)
+
+        ax.set_xlabel(ylabel, fontsize=14, loc='center')
+        ax.set_ylabel("Counts", fontsize=14, loc='center')
+        ax.tick_params(axis='both', which='both', labelsize=12)
+
+        # Log scale
+        if logy and np.any(proj_y > 0):
+            ax.set_yscale('log')
+            ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=10))
+            all_projs = [proj_y]
+            if proj_y_ref is not None and np.any(proj_y_ref > 0):
+                all_projs.append(proj_y_ref)
+            max_val = max(np.max(p) if p.size > 0 else 1 for p in all_projs)
+            top_mult = 30
+            ax.set_ylim(bottom=0.5, top=max(max_val * top_mult, 10))
+
+        # Auto xlim
+        if auto_xlim:
+            comb_y = proj_y + proj_y_ref if proj_y_ref is not None else proj_y
+            nonzero = np.where(comb_y > 0)[0]
+            if len(nonzero) > 0:
+                xmin = float(yedges[nonzero[0]])
+                xmax = float(yedges[nonzero[-1] + 1])
+                span = xmax - xmin
+                padding = max(span * 0.05, 1.0)
+                left = max(xmin - padding, float(np.min(yedges)))
+                right = min(xmax + padding, float(np.max(yedges)))
+                ax.set_xlim(left=left, right=right)
+            else:
+                ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
+        else:
+            ax.set_xlim(left=np.min(yedges), right=np.max(yedges))
+
+        # Subplot Title
+        title_top = f"Tower {tower_idx} (η={ieta}, φ={iphi})"
+        if run_number is None or str(r_num) != str(run_number):
+            title_top = f"Run {r_num} | " + title_top
+        ax.set_title(title_top, fontsize=14, pad=4)
+
+        # In-plot metadata near top right (large size for visibility)
+        info_lines = []
+        if z_score is not None and not (isinstance(z_score, float) and np.isnan(z_score)):
+            info_lines.append(f"z-score: {z_score:+.2f}")
+        if frac_bad_chi2 is not None and not (isinstance(frac_bad_chi2, float) and np.isnan(frac_bad_chi2)):
+            c_str = f"{frac_bad_chi2:.1e}" if 0 < abs(frac_bad_chi2) < 0.01 else f"{frac_bad_chi2:.2f}"
+            info_lines.append(f"badChi2: {c_str}")
+        if calib is not None and not (isinstance(calib, float) and np.isnan(calib)):
+            info_lines.append(f"calib: {calib * 1000.0:.2f} MeV/ADC")
+
+        if info_lines:
+            ax.text(
+                0.96,
+                0.95,
+                "\n".join(info_lines),
+                transform=ax.transAxes,
+                ha='right',
+                va='top',
+                fontsize=15,
+                multialignment='left',
+                bbox=dict(boxstyle='round,pad=0.25', facecolor='white', alpha=0.75, edgecolor='none'),
+            )
+
+    # Hide any unused subplots in the populated rows
+    for j in range(n_towers, n_rows * n_cols):
+        axes_flat[j].axis('off')
+
+    top = 1.0 - (0.55 / fig_height)
+    bottom = 0.77 / fig_height
+    plt.subplots_adjust(top=top, bottom=bottom, left=0.045, right=0.985, hspace=0.31, wspace=0.19)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
 def get_energy_mask(yedges, lower_threshold=None, upper_threshold=None):
     """
     Returns a boolean mask over the energy bins (length len(yedges)-1)
@@ -494,6 +615,7 @@ def process_file(
     cdbtag="newcdbtag",
     ref_tower=None,
     include_coords=False,
+    grid_5x5=False,
 ):
     """Process a single ROOT file and plot the requested towers for its corresponding run."""
     path = Path(path)
@@ -547,6 +669,9 @@ def process_file(
 
             hist2d = file[hist_name]
             values, _, yedges = hist2d.to_numpy()
+            _, ylabel = get_hist_axis_titles(hist2d, hist_name)
+            if not ylabel:
+                ylabel = r"Tower Energy [GeV]"
 
             mask = get_energy_mask(yedges, lower_threshold=lower_threshold, upper_threshold=upper_threshold)
             if mask is not None:
@@ -578,53 +703,76 @@ def process_file(
             ref_z_score = None
             ref_frac_bad_chi2 = None
             ref_calib = None
+            proj_y_ref = None
             if ref_tower is not None and use_cdb and not is_combined:
                 ref_key = get_calo_tower_key(ref_tower, det="EMCal")
                 ref_z_score = bad_tower_map.get(ref_key, {}).get("sigma") if bad_tower_map else None
                 ref_frac_bad_chi2 = frac_bad_chi2_map.get(ref_key) if frac_bad_chi2_map else None
                 ref_calib = calib_map.get(ref_key) if calib_map else None
+                if 0 <= ref_tower < values.shape[0]:
+                    ref_data = values[ref_tower, :]
+                    if np.any(ref_data > 0):
+                        proj_y_ref = ref_data
+                    else:
+                        print(f"Warning: Reference tower {ref_tower} has no positive values; omitting from overlay.")
+                else:
+                    print(f"Warning: Reference tower {ref_tower} out of bounds (0, {values.shape[0]})")
 
             plotted_towers = []
             failed_towers = []
 
-            for ieta, iphi, tower_idx in towers_to_plot:
-                coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
-                out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
-                output_path_tower = run_output_dir / out_filename_tower
+            if grid_5x5:
+                # 5x5 Grid mode: collect all valid towers to plot
+                towers_for_grid = []
+                for ieta, iphi, tower_idx in towers_to_plot:
+                    if not (0 <= tower_idx < values.shape[0]):
+                        failed_towers.append((ieta, iphi, tower_idx, f"Tower index {tower_idx} out of bounds (0, {values.shape[0]})"))
+                        continue
 
-                tower_key = get_calo_tower_key(tower_idx, det="EMCal")
-                z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
-                frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
-                calib = calib_map.get(tower_key) if calib_map else None
+                    proj_y = values[tower_idx, :]
+                    if not np.any(proj_y > 0):
+                        failed_towers.append((ieta, iphi, tower_idx, "Data has no positive values (zero counts)"))
+                        continue
 
-                ok, reason = make_1d_yproj_plot(
-                    hist2d,
-                    run_number,
-                    output_path_tower,
-                    hist_name=hist_name,
-                    tower_index=tower_idx,
-                    ieta=ieta,
-                    iphi=iphi,
-                    z_score=z_score,
-                    frac_bad_chi2=frac_bad_chi2,
-                    calib=calib,
-                    logy=True,
-                    auto_xlim=True,
-                )
+                    tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                    z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                    frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                    calib = calib_map.get(tower_key) if calib_map else None
 
-                if not ok:
-                    failed_towers.append((ieta, iphi, tower_idx, reason))
-                    continue
+                    towers_for_grid.append({
+                        "tower_idx": tower_idx,
+                        "ieta": ieta,
+                        "iphi": iphi,
+                        "run_number": run_number,
+                        "proj_y": proj_y,
+                        "yedges": yedges,
+                        "ylabel": ylabel,
+                        "z_score": z_score,
+                        "frac_bad_chi2": frac_bad_chi2,
+                        "calib": calib,
+                        "proj_y_ref": proj_y_ref,
+                        "ref_tower_index": ref_tower,
+                    })
 
-                plotted_towers.append((ieta, iphi, tower_idx))
+                # In grid_5x5 mode, collect tower info to assemble into a unified grid across runs
+                for item in towers_for_grid:
+                    plotted_towers.append((item["ieta"], item["iphi"], item["tower_idx"]))
 
-                if ref_tower is not None:
-                    out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
-                    output_path_overlay = run_output_dir / out_filename_overlay
-                    make_1d_yproj_plot(
+            else:
+                for ieta, iphi, tower_idx in towers_to_plot:
+                    coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
+                    out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
+                    output_path_tower = run_output_dir / out_filename_tower
+
+                    tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                    z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                    frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                    calib = calib_map.get(tower_key) if calib_map else None
+
+                    ok, reason = make_1d_yproj_plot(
                         hist2d,
                         run_number,
-                        output_path_overlay,
+                        output_path_tower,
                         hist_name=hist_name,
                         tower_index=tower_idx,
                         ieta=ieta,
@@ -632,18 +780,43 @@ def process_file(
                         z_score=z_score,
                         frac_bad_chi2=frac_bad_chi2,
                         calib=calib,
-                        ref_tower_index=ref_tower,
-                        ref_z_score=ref_z_score,
-                        ref_frac_bad_chi2=ref_frac_bad_chi2,
-                        ref_calib=ref_calib,
                         logy=True,
                         auto_xlim=True,
                     )
 
+                    if not ok:
+                        failed_towers.append((ieta, iphi, tower_idx, reason))
+                        continue
+
+                    plotted_towers.append((ieta, iphi, tower_idx))
+
+                    if ref_tower is not None:
+                        out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
+                        output_path_overlay = run_output_dir / out_filename_overlay
+                        make_1d_yproj_plot(
+                            hist2d,
+                            run_number,
+                            output_path_overlay,
+                            hist_name=hist_name,
+                            tower_index=tower_idx,
+                            ieta=ieta,
+                            iphi=iphi,
+                            z_score=z_score,
+                            frac_bad_chi2=frac_bad_chi2,
+                            calib=calib,
+                            ref_tower_index=ref_tower,
+                            ref_z_score=ref_z_score,
+                            ref_frac_bad_chi2=ref_frac_bad_chi2,
+                            ref_calib=ref_calib,
+                            logy=True,
+                            auto_xlim=True,
+                        )
+
+            action_word = "Extracted" if grid_5x5 else "Plotted"
             if failed_towers:
-                print(f"[{path.name}] Plotted {len(plotted_towers)} / {len(towers_to_plot)} tower(s) for run {run_number} ({len(failed_towers)} failed/skipped).")
+                print(f"[{path.name}] {action_word} {len(plotted_towers)} / {len(towers_to_plot)} tower(s) for run {run_number} ({len(failed_towers)} failed/skipped).")
             else:
-                print(f"[{path.name}] Plotted {len(plotted_towers)} tower(s) for run {run_number}.")
+                print(f"[{path.name}] {action_word} {len(plotted_towers)} tower(s) for run {run_number}.")
 
             return {
                 "path": str(path),
@@ -651,6 +824,7 @@ def process_file(
                 "requested": len(towers_to_plot),
                 "plotted": plotted_towers,
                 "failed": failed_towers,
+                "grid_towers": towers_for_grid if grid_5x5 else [],
                 "error": None,
             }
 
@@ -662,6 +836,7 @@ def process_file(
             "requested": len(locals().get("towers_to_plot", [])),
             "plotted": locals().get("plotted_towers", []),
             "failed": locals().get("failed_towers", []),
+            "grid_towers": locals().get("towers_for_grid", []),
             "error": f"Error processing {path}: {e}",
         }
 
@@ -678,6 +853,7 @@ def process_towers_without_runs(
     cdbtag="newcdbtag",
     ref_tower=None,
     include_coords=False,
+    grid_5x5=False,
 ):
     """
     For CSVs with only (ieta, iphi) [no run specified]:
@@ -704,6 +880,7 @@ def process_towers_without_runs(
         unplotted = {tower_idx: (ieta, iphi) for ieta, iphi, tower_idx in tower_list}
         plotted_towers = set()
         failed_towers = []
+        towers_for_grid = []
 
         for path in files:
             if not unplotted:
@@ -735,6 +912,9 @@ def process_towers_without_runs(
 
                     hist2d = file[hist_name]
                     values, xedges, yedges = hist2d.to_numpy()
+                    _, ylabel = get_hist_axis_titles(hist2d, hist_name)
+                    if not ylabel:
+                        ylabel = r"Tower Energy [GeV]"
 
                     mask = get_energy_mask(yedges, lower_threshold=lower_threshold, upper_threshold=upper_threshold)
 
@@ -768,70 +948,137 @@ def process_towers_without_runs(
                     ref_z_score = None
                     ref_frac_bad_chi2 = None
                     ref_calib = None
+                    proj_y_ref = None
                     if ref_tower is not None and use_cdb and not is_combined:
                         ref_key = get_calo_tower_key(ref_tower, det="EMCal")
                         ref_z_score = bad_tower_map.get(ref_key, {}).get("sigma") if bad_tower_map else None
                         ref_frac_bad_chi2 = frac_bad_chi2_map.get(ref_key) if frac_bad_chi2_map else None
                         ref_calib = calib_map.get(ref_key) if calib_map else None
-
-                    for ieta, iphi, tower_idx in towers_to_plot_now:
-                        coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
-                        out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
-                        output_path_tower = output_dir / out_filename_tower
-
-                        tower_key = get_calo_tower_key(tower_idx, det="EMCal")
-                        z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
-                        frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
-                        calib = calib_map.get(tower_key) if calib_map else None
-
-                        ok, reason = make_1d_yproj_plot(
-                            hist2d,
-                            run_number,
-                            output_path_tower,
-                            hist_name=hist_name,
-                            tower_index=tower_idx,
-                            ieta=ieta,
-                            iphi=iphi,
-                            z_score=z_score,
-                            frac_bad_chi2=frac_bad_chi2,
-                            calib=calib,
-                            logy=True,
-                            auto_xlim=True,
-                        )
-
-                        if not ok:
-                            failed_towers.append((run_number, ieta, iphi, tower_idx, reason))
+                        if 0 <= ref_tower < values.shape[0]:
+                            ref_data = values[ref_tower, :]
+                            if np.any(ref_data > 0):
+                                proj_y_ref = ref_data
+                            else:
+                                print(f"Warning: Reference tower {ref_tower} has no positive values; omitting from overlay.")
                         else:
-                            plotted_towers.add(tower_idx)
-                            if ref_tower is not None:
-                                out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
-                                output_path_overlay = output_dir / out_filename_overlay
-                                make_1d_yproj_plot(
-                                    hist2d,
-                                    run_number,
-                                    output_path_overlay,
-                                    hist_name=hist_name,
-                                    tower_index=tower_idx,
-                                    ieta=ieta,
-                                    iphi=iphi,
-                                    z_score=z_score,
-                                    frac_bad_chi2=frac_bad_chi2,
-                                    calib=calib,
-                                    ref_tower_index=ref_tower,
-                                    ref_z_score=ref_z_score,
-                                    ref_frac_bad_chi2=ref_frac_bad_chi2,
-                                    ref_calib=ref_calib,
-                                    logy=True,
-                                    auto_xlim=True,
-                                )
+                            print(f"Warning: Reference tower {ref_tower} out of bounds (0, {values.shape[0]})")
 
-                        unplotted.pop(tower_idx, None)
+                    if grid_5x5:
+                        for ieta, iphi, tower_idx in towers_to_plot_now:
+                            proj_y = values[tower_idx, :]
+                            if not np.any(proj_y > 0):
+                                failed_towers.append((run_number, ieta, iphi, tower_idx, "Data has no positive values (zero counts)"))
+                                unplotted.pop(tower_idx, None)
+                                continue
+
+                            tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                            z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                            frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                            calib = calib_map.get(tower_key) if calib_map else None
+
+                            towers_for_grid.append({
+                                "tower_idx": tower_idx,
+                                "ieta": ieta,
+                                "iphi": iphi,
+                                "run_number": run_number,
+                                "proj_y": proj_y,
+                                "yedges": yedges,
+                                "ylabel": ylabel,
+                                "z_score": z_score,
+                                "frac_bad_chi2": frac_bad_chi2,
+                                "calib": calib,
+                                "proj_y_ref": proj_y_ref,
+                                "ref_tower_index": ref_tower,
+                            })
+                            plotted_towers.add(tower_idx)
+                            unplotted.pop(tower_idx, None)
+                    else:
+                        for ieta, iphi, tower_idx in towers_to_plot_now:
+                            coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
+                            out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
+                            output_path_tower = output_dir / out_filename_tower
+
+                            tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                            z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                            frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                            calib = calib_map.get(tower_key) if calib_map else None
+
+                            ok, reason = make_1d_yproj_plot(
+                                hist2d,
+                                run_number,
+                                output_path_tower,
+                                hist_name=hist_name,
+                                tower_index=tower_idx,
+                                ieta=ieta,
+                                iphi=iphi,
+                                z_score=z_score,
+                                frac_bad_chi2=frac_bad_chi2,
+                                calib=calib,
+                                logy=True,
+                                auto_xlim=True,
+                            )
+
+                            if not ok:
+                                failed_towers.append((run_number, ieta, iphi, tower_idx, reason))
+                            else:
+                                plotted_towers.add(tower_idx)
+                                if ref_tower is not None:
+                                    out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
+                                    output_path_overlay = output_dir / out_filename_overlay
+                                    make_1d_yproj_plot(
+                                        hist2d,
+                                        run_number,
+                                        output_path_overlay,
+                                        hist_name=hist_name,
+                                        tower_index=tower_idx,
+                                        ieta=ieta,
+                                        iphi=iphi,
+                                        z_score=z_score,
+                                        frac_bad_chi2=frac_bad_chi2,
+                                        calib=calib,
+                                        ref_tower_index=ref_tower,
+                                        ref_z_score=ref_z_score,
+                                        ref_frac_bad_chi2=ref_frac_bad_chi2,
+                                        ref_calib=ref_calib,
+                                        logy=True,
+                                        auto_xlim=True,
+                                    )
+
+                            unplotted.pop(tower_idx, None)
 
                     print(f"[{path.name}] Plotted {len(towers_to_plot_now)} tower(s) for run {run_number} ({len(unplotted)} remaining).")
 
             except Exception as e:
                 traceback.print_exc()
                 print(f"Error processing {path}: {e}")
+
+        if grid_5x5 and towers_for_grid:
+            chunk_size = 25
+            total_sets = (len(towers_for_grid) + chunk_size - 1) // chunk_size
+            ref_str = f"_ref{ref_tower}" if ref_tower is not None else ""
+            unique_runs = list(dict.fromkeys(t["run_number"] for t in towers_for_grid))
+            run_prefix = f"run_{unique_runs[0]}_" if len(unique_runs) == 1 else ""
+
+            for set_idx in range(total_sets):
+                chunk = towers_for_grid[set_idx * chunk_size : (set_idx + 1) * chunk_size]
+                out_filename = (
+                    f"{run_prefix}{hist_name}_grid_5x5{ref_str}_set{set_idx + 1}.png"
+                    if total_sets > 1
+                    else f"{run_prefix}{hist_name}_grid_5x5{ref_str}.png"
+                )
+                output_path = output_dir / out_filename
+
+                make_5x5_grid_plot(
+                    chunk,
+                    output_path,
+                    run_number=unique_runs[0] if len(unique_runs) == 1 else None,
+                    hist_name=hist_name,
+                    set_idx=set_idx,
+                    total_sets=total_sets,
+                    ref_tower=ref_tower,
+                    logy=True,
+                    auto_xlim=True,
+                )
 
         total_failed = len(unplotted) + len(failed_towers)
         print("\n" + "=" * 80)
@@ -963,6 +1210,8 @@ def process_towers_without_runs(
 
     plotted_count = 0
     failed_towers = []
+    towers_for_grid_dict = {}
+
     for path, (run_number, win_towers) in towers_by_file.items():
         is_combined = not isinstance(run_number, int) or "combined" in str(run_number).lower()
 
@@ -971,6 +1220,10 @@ def process_towers_without_runs(
                 if hist_name not in file:
                     continue
                 hist2d = file[hist_name]
+                values, _, yedges = hist2d.to_numpy()
+                _, ylabel = get_hist_axis_titles(hist2d, hist_name)
+                if not ylabel:
+                    ylabel = r"Tower Energy [GeV]"
 
                 bad_tower_map = {}
                 frac_bad_chi2_map = {}
@@ -983,49 +1236,66 @@ def process_towers_without_runs(
                 ref_z_score = None
                 ref_frac_bad_chi2 = None
                 ref_calib = None
+                proj_y_ref = None
                 if ref_tower is not None and use_cdb and not is_combined:
                     ref_key = get_calo_tower_key(ref_tower, det="EMCal")
                     ref_z_score = bad_tower_map.get(ref_key, {}).get("sigma") if bad_tower_map else None
                     ref_frac_bad_chi2 = frac_bad_chi2_map.get(ref_key) if frac_bad_chi2_map else None
                     ref_calib = calib_map.get(ref_key) if calib_map else None
+                    if 0 <= ref_tower < values.shape[0]:
+                        ref_data = values[ref_tower, :]
+                        if np.any(ref_data > 0):
+                            proj_y_ref = ref_data
+                        else:
+                            print(f"Warning: Reference tower {ref_tower} has no positive values; omitting from overlay.")
+                    else:
+                        print(f"Warning: Reference tower {ref_tower} out of bounds (0, {values.shape[0]})")
 
-                for ieta, iphi, tower_idx, score in win_towers:
-                    coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
-                    out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
-                    output_path_tower = output_dir / out_filename_tower
+                if grid_5x5:
+                    for ieta, iphi, tower_idx, score in win_towers:
+                        if not (0 <= tower_idx < values.shape[0]):
+                            failed_towers.append((run_number, ieta, iphi, tower_idx, f"Tower index {tower_idx} out of bounds (0, {values.shape[0]})"))
+                            continue
+                        proj_y = values[tower_idx, :]
+                        if not np.any(proj_y > 0):
+                            failed_towers.append((run_number, ieta, iphi, tower_idx, "Data has no positive values (zero counts)"))
+                            continue
 
-                    tower_key = get_calo_tower_key(tower_idx, det="EMCal")
-                    z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
-                    frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
-                    calib = calib_map.get(tower_key) if calib_map else None
+                        tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                        z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                        frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                        calib = calib_map.get(tower_key) if calib_map else None
 
-                    ok, reason = make_1d_yproj_plot(
-                        hist2d,
-                        run_number,
-                        output_path_tower,
-                        hist_name=hist_name,
-                        tower_index=tower_idx,
-                        ieta=ieta,
-                        iphi=iphi,
-                        z_score=z_score,
-                        frac_bad_chi2=frac_bad_chi2,
-                        calib=calib,
-                        logy=True,
-                        auto_xlim=True,
-                    )
+                        towers_for_grid_dict[tower_idx] = {
+                            "tower_idx": tower_idx,
+                            "ieta": ieta,
+                            "iphi": iphi,
+                            "run_number": run_number,
+                            "proj_y": proj_y,
+                            "yedges": yedges,
+                            "ylabel": ylabel,
+                            "z_score": z_score,
+                            "frac_bad_chi2": frac_bad_chi2,
+                            "calib": calib,
+                            "proj_y_ref": proj_y_ref,
+                            "ref_tower_index": ref_tower,
+                        }
+                        plotted_count += 1
+                else:
+                    for ieta, iphi, tower_idx, score in win_towers:
+                        coords_str = f"_eta{ieta}_phi{iphi}" if include_coords else ""
+                        out_filename_tower = f"run_{run_number}_{hist_name}_tower{tower_idx}{coords_str}.png"
+                        output_path_tower = output_dir / out_filename_tower
 
-                    if not ok:
-                        failed_towers.append((run_number, ieta, iphi, tower_idx, reason))
-                        continue
+                        tower_key = get_calo_tower_key(tower_idx, det="EMCal")
+                        z_score = bad_tower_map.get(tower_key, {}).get("sigma") if bad_tower_map else None
+                        frac_bad_chi2 = frac_bad_chi2_map.get(tower_key) if frac_bad_chi2_map else None
+                        calib = calib_map.get(tower_key) if calib_map else None
 
-                    plotted_count += 1
-                    if ref_tower is not None:
-                        out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
-                        output_path_overlay = output_dir / out_filename_overlay
-                        make_1d_yproj_plot(
+                        ok, reason = make_1d_yproj_plot(
                             hist2d,
                             run_number,
-                            output_path_overlay,
+                            output_path_tower,
                             hist_name=hist_name,
                             tower_index=tower_idx,
                             ieta=ieta,
@@ -1033,22 +1303,74 @@ def process_towers_without_runs(
                             z_score=z_score,
                             frac_bad_chi2=frac_bad_chi2,
                             calib=calib,
-                            ref_tower_index=ref_tower,
-                            ref_z_score=ref_z_score,
-                            ref_frac_bad_chi2=ref_frac_bad_chi2,
-                            ref_calib=ref_calib,
                             logy=True,
                             auto_xlim=True,
                         )
 
+                        if not ok:
+                            failed_towers.append((run_number, ieta, iphi, tower_idx, reason))
+                            continue
+
+                        plotted_count += 1
+                        if ref_tower is not None:
+                            out_filename_overlay = f"run_{run_number}_{hist_name}_tower{tower_idx}_ref{ref_tower}{coords_str}.png"
+                            output_path_overlay = output_dir / out_filename_overlay
+                            make_1d_yproj_plot(
+                                hist2d,
+                                run_number,
+                                output_path_overlay,
+                                hist_name=hist_name,
+                                tower_index=tower_idx,
+                                ieta=ieta,
+                                iphi=iphi,
+                                z_score=z_score,
+                                frac_bad_chi2=frac_bad_chi2,
+                                calib=calib,
+                                ref_tower_index=ref_tower,
+                                ref_z_score=ref_z_score,
+                                ref_frac_bad_chi2=ref_frac_bad_chi2,
+                                ref_calib=ref_calib,
+                                logy=True,
+                                auto_xlim=True,
+                            )
+
                 if has_threshold:
-                    print(f"[{path.name}] Plotted {len(win_towers)} tower(s) for run {run_number} (most counts satisfying {thresh_str}).")
+                    print(f"[{path.name}] Processed {len(win_towers)} tower(s) for run {run_number} (most counts satisfying {thresh_str}).")
                 else:
-                    print(f"[{path.name}] Plotted {len(win_towers)} tower(s) for run {run_number} (highest |E| versions).")
+                    print(f"[{path.name}] Processed {len(win_towers)} tower(s) for run {run_number} (highest |E| versions).")
 
         except Exception as e:
             traceback.print_exc()
             print(f"Error plotting from {path}: {e}")
+
+    if grid_5x5:
+        # Preserve original order from tower_list
+        towers_for_grid = [towers_for_grid_dict[t[2]] for t in tower_list if t[2] in towers_for_grid_dict]
+        chunk_size = 25
+        total_sets = (len(towers_for_grid) + chunk_size - 1) // chunk_size if towers_for_grid else 0
+        ref_str = f"_ref{ref_tower}" if ref_tower is not None else ""
+        unique_runs = list(dict.fromkeys(t["run_number"] for t in towers_for_grid))
+        run_prefix = f"run_{unique_runs[0]}_" if len(unique_runs) == 1 else ""
+
+        for set_idx in range(total_sets):
+            chunk = towers_for_grid[set_idx * chunk_size : (set_idx + 1) * chunk_size]
+            out_filename = (
+                f"{run_prefix}{hist_name}_grid_5x5{ref_str}_set{set_idx + 1}.png"
+                if total_sets > 1
+                else f"{run_prefix}{hist_name}_grid_5x5{ref_str}.png"
+            )
+            output_path = output_dir / out_filename
+            make_5x5_grid_plot(
+                chunk,
+                output_path,
+                run_number=unique_runs[0] if len(unique_runs) == 1 else None,
+                hist_name=hist_name,
+                set_idx=set_idx,
+                total_sets=total_sets,
+                ref_tower=ref_tower,
+                logy=True,
+                auto_xlim=True,
+            )
 
     total_failed = len(unplotted) + len(failed_towers)
     print("\n" + "=" * 80)
@@ -1080,6 +1402,7 @@ def process_towers_max_energy(
     cdbtag="newcdbtag",
     ref_tower=None,
     include_coords=False,
+    grid_5x5=False,
 ):
     """Alias for process_towers_without_runs with no threshold (highest |E| mode)."""
     return process_towers_without_runs(
@@ -1094,6 +1417,7 @@ def process_towers_max_energy(
         cdbtag=cdbtag,
         ref_tower=ref_tower,
         include_coords=include_coords,
+        grid_5x5=grid_5x5,
     )
 
 
@@ -1116,6 +1440,7 @@ def main():
     parser.add_argument("--lower", action="store_true", help="Treat -t/--threshold as a lower threshold (counts with E >= threshold).")
     parser.add_argument("--upper", action="store_true", help="Treat -t/--threshold as an upper threshold (counts with E <= threshold).")
     parser.add_argument("--first-match", action="store_true", help="When using an (ieta,iphi) CSV, plot tower from the first available run meeting criteria instead of scanning for the run with the most counts (if threshold given) or highest absolute energy.")
+    parser.add_argument("-g", "--grid", "--grid-5x5", "--five-by-five", action="store_true", dest="grid_5x5", help="Plot 1D tower energy distributions in a 5x5 grid format (up to 25 towers per canvas, rolling over to set 2, etc. if more than 25).")
     parser.add_argument("--workers", type=int, default=None, help="Number of parallel worker processes when run numbers are specified in CSV (default: CPU count or up to 32).")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths")
     args = parser.parse_args()
@@ -1139,7 +1464,7 @@ def main():
         thresh_desc = format_threshold_str(lower_threshold, upper_threshold)
         print(f"Applying energy threshold filter: {thresh_desc}")
 
-    towers_data, all_runs, has_run = load_tower_csv(args.csv)
+    towers_data, all_runs, has_run, ordered_towers = load_tower_csv(args.csv)
     if has_run:
         total_entries = sum(len(v) for v in towers_data.values())
         print(f"Loaded {total_entries} tower entries across {len(all_runs)} unique run(s) from {args.csv}.")
@@ -1189,6 +1514,7 @@ def main():
             cdbtag=args.cdbtag,
             ref_tower=args.ref_tower,
             include_coords=args.include_coords,
+            grid_5x5=args.grid_5x5,
         )
         print(f"Plots saved to {args.output_dir}")
         return
@@ -1205,6 +1531,7 @@ def main():
         cdbtag=args.cdbtag,
         ref_tower=args.ref_tower,
         include_coords=args.include_coords,
+        grid_5x5=args.grid_5x5,
     )
 
     max_workers = args.workers if args.workers is not None else min(os.cpu_count() or 4, 32)
@@ -1234,6 +1561,58 @@ def main():
         elif isinstance(res, str):
             errors.append(res)
             print(res)
+
+    if args.grid_5x5:
+        # Collect all extracted grid towers across processed files
+        all_grid_towers_map = {}
+        for res in results:
+            if isinstance(res, dict):
+                for item in res.get("grid_towers", []):
+                    all_grid_towers_map[(item["run_number"], item["tower_idx"])] = item
+
+        # Re-order according to input CSV ordering
+        ordered_grid_towers = []
+        for run_val, ieta, iphi, tower_idx in ordered_towers:
+            if (run_val, tower_idx) in all_grid_towers_map:
+                ordered_grid_towers.append(all_grid_towers_map[(run_val, tower_idx)])
+            elif ("combined", tower_idx) in all_grid_towers_map:
+                ordered_grid_towers.append(all_grid_towers_map[("combined", tower_idx)])
+
+        # Include any remaining towers that weren't matched in ordered_towers
+        seen = {(t["run_number"], t["tower_idx"]) for t in ordered_grid_towers}
+        for k, v in all_grid_towers_map.items():
+            if k not in seen:
+                ordered_grid_towers.append(v)
+
+        if ordered_grid_towers:
+            chunk_size = 25
+            total_sets = (len(ordered_grid_towers) + chunk_size - 1) // chunk_size
+            ref_str = f"_ref{args.ref_tower}" if args.ref_tower is not None else ""
+            unique_runs = list(dict.fromkeys(t["run_number"] for t in ordered_grid_towers))
+            run_prefix = f"run_{unique_runs[0]}_" if len(unique_runs) == 1 else ""
+
+            print(f"\nGenerating combined 5x5 grid plots for {len(ordered_grid_towers)} tower(s) across {len(unique_runs)} unique run(s) ({total_sets} set(s))...")
+
+            for set_idx in range(total_sets):
+                chunk = ordered_grid_towers[set_idx * chunk_size : (set_idx + 1) * chunk_size]
+                out_filename = (
+                    f"{run_prefix}{args.hist_name}_grid_5x5{ref_str}_set{set_idx + 1}.png"
+                    if total_sets > 1
+                    else f"{run_prefix}{args.hist_name}_grid_5x5{ref_str}.png"
+                )
+                output_path = args.output_dir / out_filename
+                make_5x5_grid_plot(
+                    chunk,
+                    output_path,
+                    run_number=unique_runs[0] if len(unique_runs) == 1 else None,
+                    hist_name=args.hist_name,
+                    set_idx=set_idx,
+                    total_sets=total_sets,
+                    ref_tower=args.ref_tower,
+                    logy=True,
+                    auto_xlim=True,
+                )
+                print(f"[5x5 Grid] Saved set {set_idx + 1}/{total_sets} to {output_path}")
 
     total_requested = sum(len(t) for t in towers_data.values()) if isinstance(towers_data, dict) else len(towers_data)
 
