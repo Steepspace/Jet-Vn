@@ -60,10 +60,7 @@ class sEPDQA
     TH2 *h2sEPD_MBD{nullptr};
     TH2 *h2sEPD_CaloE{nullptr};
     TH2 *h2CaloE_MBD{nullptr};
-    TH2 *h2sEPD_CaloE_cut{nullptr};
-    TH2 *h2CaloE_MBD_cut{nullptr};
     TH2 *h2sEPD_North_South{nullptr};
-    TH2 *h2sEPD_North_South_cut{nullptr};
   };
 
   AnalysisHists m_hists;
@@ -99,7 +96,6 @@ class sEPDQA
   long long m_events_total{0};
   long long m_events_passed{0};
   long long m_events_excluded_calo{0};
-  long long m_events_passed_cut{0};
 
   void setup_chain();
   void init_hists();
@@ -187,20 +183,14 @@ void sEPDQA::init_hists()
   m_hists2D["h2sEPD_MBD"] = std::make_unique<TH2F>("h2sEPD_MBD", "; MBD Total Charge; sEPD Total Charge", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
   m_hists2D["h2sEPD_CaloE"] = std::make_unique<TH2F>("h2sEPD_CaloE", "; Total Calorimeter Energy [GeV]; sEPD Total Charge", bins_Calo_E, Calo_E_low, Calo_E_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
   m_hists2D["h2CaloE_MBD"] = std::make_unique<TH2F>("h2CaloE_MBD", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
-  m_hists2D["h2sEPD_CaloE_cut"] = std::make_unique<TH2F>("h2sEPD_CaloE_cut", "; Total Calorimeter Energy [GeV]; sEPD Total Charge", bins_Calo_E, Calo_E_low, Calo_E_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
-  m_hists2D["h2CaloE_MBD_cut"] = std::make_unique<TH2F>("h2CaloE_MBD_cut", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
   m_hists2D["h2sEPD_North_South"] = std::make_unique<TH2F>("h2sEPD_North_South", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
-  m_hists2D["h2sEPD_North_South_cut"] = std::make_unique<TH2F>("h2sEPD_North_South_cut", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
 
   // Bind pointers for performance
   m_hists.h2sEPD_Centrality = m_hists2D["h2sEPD_Centrality"].get();
   m_hists.h2sEPD_MBD = m_hists2D["h2sEPD_MBD"].get();
   m_hists.h2sEPD_CaloE = m_hists2D["h2sEPD_CaloE"].get();
   m_hists.h2CaloE_MBD = m_hists2D["h2CaloE_MBD"].get();
-  m_hists.h2sEPD_CaloE_cut = m_hists2D["h2sEPD_CaloE_cut"].get();
-  m_hists.h2CaloE_MBD_cut = m_hists2D["h2CaloE_MBD_cut"].get();
   m_hists.h2sEPD_North_South = m_hists2D["h2sEPD_North_South"].get();
-  m_hists.h2sEPD_North_South_cut = m_hists2D["h2sEPD_North_South_cut"].get();
 
   for (auto &[name, hist] : m_hists2D)
   {
@@ -223,7 +213,6 @@ void sEPDQA::process_events()
   m_events_total = n_entries;
   m_events_passed = 0;
   m_events_excluded_calo = 0;
-  m_events_passed_cut = 0;
 
   for (long long event = 0; event < n_entries; ++event)
   {
@@ -256,15 +245,6 @@ void sEPDQA::process_events()
     m_hists.h2CaloE_MBD->Fill(mbd_total, total_calo_e);
     m_hists.h2sEPD_North_South->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
 
-    // Event cut: y > (76/7)x + 1000 where y is sEPD total charge and x is MBD total charge
-    if (sepd_total > (76.0 / 7.0) * mbd_total + 1000.0)
-    {
-      ++m_events_passed_cut;
-      m_hists.h2sEPD_CaloE_cut->Fill(total_calo_e, sepd_total);
-      m_hists.h2CaloE_MBD_cut->Fill(mbd_total, total_calo_e);
-      m_hists.h2sEPD_North_South_cut->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
-    }
-
     if (m_verbosity > 0)
     {
       print_event_info(event);
@@ -295,14 +275,11 @@ void sEPDQA::print_summary() const
   double pct_excluded = frac_excluded * 100.0;
   double frac_passed = m_events_total > 0 ? static_cast<double>(m_events_passed) / static_cast<double>(m_events_total) : 0.0;
   double pct_passed = frac_passed * 100.0;
-  double frac_passed_cut = m_events_passed > 0 ? static_cast<double>(m_events_passed_cut) / static_cast<double>(m_events_passed) : 0.0;
-  double pct_passed_cut = frac_passed_cut * 100.0;
 
   std::cout << std::format("\n{:=^70}\n", " Event Processing Summary ");
-  std::cout << std::format(" Total Events Analyzed           : {}\n", m_events_total);
-  std::cout << std::format(" Passed (Total Calo E > 0)       : {} ({:.2f}% / fraction: {:.4f})\n", m_events_passed, pct_passed, frac_passed);
-  std::cout << std::format(" Excluded (Total Calo E <= 0)    : {} ({:.2f}% / fraction: {:.4f})\n", m_events_excluded_calo, pct_excluded, frac_excluded);
-  std::cout << std::format(" Passed Cut (sEPD > 76/7*MBD+1000): {} ({:.2f}% of passed / {:.2f}% of total)\n", m_events_passed_cut, pct_passed_cut, m_events_total > 0 ? static_cast<double>(m_events_passed_cut) * 100.0 / static_cast<double>(m_events_total) : 0.0);
+  std::cout << std::format(" Total Events Analyzed        : {}\n", m_events_total);
+  std::cout << std::format(" Passed (Total Calo E > 0)    : {} ({:.2f}% / fraction: {:.4f})\n", m_events_passed, pct_passed, frac_passed);
+  std::cout << std::format(" Excluded (Total Calo E <= 0) : {} ({:.2f}% / fraction: {:.4f})\n", m_events_excluded_calo, pct_excluded, frac_excluded);
   std::cout << std::format("{:=^70}\n\n", "");
 }
 
