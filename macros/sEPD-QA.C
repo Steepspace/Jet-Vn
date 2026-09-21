@@ -96,10 +96,16 @@ class sEPDQA
 
   std::map<std::string, std::unique_ptr<TH2>> m_hists2D;
 
+  long long m_events_total{0};
+  long long m_events_passed{0};
+  long long m_events_excluded_calo{0};
+  long long m_events_passed_cut{0};
+
   void setup_chain();
   void init_hists();
   void process_events();
   void print_event_info(long long event_idx) const;
+  void print_summary() const;
   void save_results() const;
 };
 
@@ -214,6 +220,11 @@ void sEPDQA::process_events()
     n_entries = std::min(m_events_to_process, n_entries);
   }
 
+  m_events_total = n_entries;
+  m_events_passed = 0;
+  m_events_excluded_calo = 0;
+  m_events_passed_cut = 0;
+
   for (long long event = 0; event < n_entries; ++event)
   {
     m_chain->GetEntry(event);
@@ -223,9 +234,19 @@ void sEPDQA::process_events()
       std::cout << std::format("Processing {}/{}: {:.2f} %", event, n_entries, static_cast<double>(event) * 100. / static_cast<double>(n_entries)) << std::endl;
     }
 
+    double total_calo_e = m_event_data.emcal_energy + m_event_data.ihcal_energy + m_event_data.ohcal_energy;
+
+    // Requirement: exclude events with total calo E <= 0 prior to filling any hists
+    if (total_calo_e <= 0.0)
+    {
+      ++m_events_excluded_calo;
+      continue;
+    }
+
+    ++m_events_passed;
+
     double sepd_total = m_event_data.sepd_charge_south + m_event_data.sepd_charge_north;
     double mbd_total = m_event_data.mbd_charge_south + m_event_data.mbd_charge_north;
-    double total_calo_e = m_event_data.emcal_energy + m_event_data.ihcal_energy + m_event_data.ohcal_energy;
     double cent = m_event_data.centrality;
 
     // Fill Core 2D Histograms
@@ -238,6 +259,7 @@ void sEPDQA::process_events()
     // Event cut: y > (76/7)x + 1000 where y is sEPD total charge and x is MBD total charge
     if (sepd_total > (76.0 / 7.0) * mbd_total + 1000.0)
     {
+      ++m_events_passed_cut;
       m_hists.h2sEPD_CaloE_cut->Fill(total_calo_e, sepd_total);
       m_hists.h2CaloE_MBD_cut->Fill(mbd_total, total_calo_e);
       m_hists.h2sEPD_North_South_cut->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
@@ -250,6 +272,7 @@ void sEPDQA::process_events()
   }
 
   std::cout << "Finished... process_events" << std::endl;
+  print_summary();
 }
 
 void sEPDQA::print_event_info(long long event_idx) const
@@ -264,6 +287,23 @@ void sEPDQA::print_event_info(long long event_idx) const
   std::cout << std::format(" MBD Charge   - Total: {:.2f}, South: {:.2f}, North: {:.2f}\n", mbd_total, m_event_data.mbd_charge_south, m_event_data.mbd_charge_north);
   std::cout << std::format(" Calo Energy  - Total: {:.2f} GeV, EMCal: {:.2f}, IHCal: {:.2f}, OHCal: {:.2f}\n", total_calo_e, m_event_data.emcal_energy, m_event_data.ihcal_energy, m_event_data.ohcal_energy);
   std::cout << std::format("{:=^70}\n", "");
+}
+
+void sEPDQA::print_summary() const
+{
+  double frac_excluded = m_events_total > 0 ? static_cast<double>(m_events_excluded_calo) / static_cast<double>(m_events_total) : 0.0;
+  double pct_excluded = frac_excluded * 100.0;
+  double frac_passed = m_events_total > 0 ? static_cast<double>(m_events_passed) / static_cast<double>(m_events_total) : 0.0;
+  double pct_passed = frac_passed * 100.0;
+  double frac_passed_cut = m_events_passed > 0 ? static_cast<double>(m_events_passed_cut) / static_cast<double>(m_events_passed) : 0.0;
+  double pct_passed_cut = frac_passed_cut * 100.0;
+
+  std::cout << std::format("\n{:=^70}\n", " Event Processing Summary ");
+  std::cout << std::format(" Total Events Analyzed           : {}\n", m_events_total);
+  std::cout << std::format(" Passed (Total Calo E > 0)       : {} ({:.2f}% / fraction: {:.4f})\n", m_events_passed, pct_passed, frac_passed);
+  std::cout << std::format(" Excluded (Total Calo E <= 0)    : {} ({:.2f}% / fraction: {:.4f})\n", m_events_excluded_calo, pct_excluded, frac_excluded);
+  std::cout << std::format(" Passed Cut (sEPD > 76/7*MBD+1000): {} ({:.2f}% of passed / {:.2f}% of total)\n", m_events_passed_cut, pct_passed_cut, m_events_total > 0 ? static_cast<double>(m_events_passed_cut) * 100.0 / static_cast<double>(m_events_total) : 0.0);
+  std::cout << std::format("{:=^70}\n\n", "");
 }
 
 void sEPDQA::save_results() const
