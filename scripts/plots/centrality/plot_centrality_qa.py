@@ -21,7 +21,7 @@ from matplotlib.ticker import LogLocator, ScalarFormatter
 def clean_root_latex(text):
     if not text:
         return ""
-    text = text.strip()
+    text = re.sub(r'\s+', ' ', text).strip()
     # Replace ROOT TLatex # with \ for LaTeX math
     text = text.replace("#", "\\")
     if "$" not in text:
@@ -101,7 +101,55 @@ class EngScalarFormatter(ScalarFormatter):
         if self._orderOfMagnitude != 0:
             self._orderOfMagnitude = (self._orderOfMagnitude // 3) * 3
 
-def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=None, extra_labels=None, logy=False, xlim=None):
+def compute_centrality_average(values, edges, cent_min=10.0, cent_max=70.0):
+    """
+    Compute average y-value excluding outliers at the edges (e.g. low-centrality
+    turn-on / uncalibrated bins and high-centrality trigger roll-off / zeros).
+    """
+    bin_centers = 0.5 * (edges[:-1] + edges[1:])
+    mask = (bin_centers >= cent_min) & (bin_centers <= cent_max) & (values > 0)
+    if np.sum(mask) >= 3:
+        vals = values[mask]
+        med = np.median(vals)
+        good = np.abs(vals - med) < 0.3 * med
+        if np.any(good):
+            return float(np.mean(vals[good]))
+        return float(np.mean(vals))
+    pos_vals = values[values > 0]
+    if len(pos_vals) > 0:
+        return float(np.median(pos_vals))
+    return 0.0
+
+def get_ratio_ylim(ratio_vals, edges, xlim=None):
+    """
+    Determine tightly fitted y-axis limits for ratio plots:
+    - Captures the lowest non-zero bin cleanly with a modest margin below it (without going down to 0).
+    - Caps the top tightly above 1.0 (and above the max non-zero bin) to minimize excess white space.
+    """
+    if xlim is not None:
+        mask = (edges[1:] > xlim[0]) & (edges[:-1] < xlim[1])
+        visible_ratios = ratio_vals[mask]
+    else:
+        visible_ratios = ratio_vals
+
+    pos_ratios = visible_ratios[visible_ratios > 0]
+    if len(pos_ratios) == 0:
+        return (0.8, 1.1)
+
+    min_pos = float(np.min(pos_ratios))
+    max_pos = float(np.max(pos_ratios))
+
+    # Give a clear margin below the lowest non-zero bin (without extending to 0)
+    margin_bottom = max((1.0 - min_pos) * 0.15, 0.04) if min_pos < 1.0 else 0.04
+    y_bottom = max(0.0, min_pos - margin_bottom)
+
+    # Tight margin above 1.0 / highest bin to avoid large white space above 1.0
+    margin_top = max((max_pos - 1.0) * 1.5, 0.04) if max_pos > 1.0 else 0.04
+    y_top = max(max_pos, 1.0) + margin_top
+
+    return (y_bottom, y_top)
+
+def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=None, extra_labels=None, logy=False, xlim=None, ylim=None, hline=None):
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -120,20 +168,33 @@ def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=Non
     if not ylabel:
         ylabel = "Events"
 
-    has_positive = np.any(values > 0)
+    if xlim is not None:
+        mask = (edges[1:] > xlim[0]) & (edges[:-1] < xlim[1])
+        visible_values = values[mask] if np.any(mask) else values
+    else:
+        visible_values = values
 
-    if logy and has_positive:
-        hep.histplot((values, edges), ax=ax, histtype='step', color='blue', linewidth=3)
+    has_positive = np.any(visible_values > 0)
+    max_val = np.max(visible_values) if has_positive else 0
+    top_ref = max(max_val, hline) if (hline is not None and hline > 0) else max_val
+
+    hep.histplot((values, edges), ax=ax, histtype='step', color='blue', linewidth=3)
+
+    if ylim is not None:
+        ax.set_ylim(ylim)
+    elif logy and has_positive:
         ax.set_yscale('log')
         ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
-        ax.set_ylim(bottom=0.5, top=np.max(values) * 10)
+        ax.set_ylim(bottom=0.5, top=top_ref * 10)
     else:
-        hep.histplot((values, edges), ax=ax, histtype='step', color='blue', linewidth=3)
-        ax.set_ylim(bottom=0, top=np.max(values) * 1.3 if has_positive else 10)
-        if np.max(values) >= 1000:
+        ax.set_ylim(bottom=0, top=top_ref * 1.3 if has_positive else 10)
+        if top_ref >= 1000:
             formatter_y = EngScalarFormatter(useMathText=True)
             formatter_y.set_powerlimits((0, 3))
             ax.yaxis.set_major_formatter(formatter_y)
+
+    if hline is not None:
+        ax.axhline(hline, color='red', linestyle='--', linewidth=2, alpha=0.85)
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
@@ -150,6 +211,57 @@ def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=Non
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+
+def make_ratio_overlay_plot(hist_data_list, run_number, output_path, xlabel="Centrality [%]", ylabel="Ratio to Average", xlim=(-0.5, 10.5), hline=1.0):
+    """
+    Plots an overlay of multiple 1D histogram ratios on the same axes with proper legends.
+    hist_data_list: list of tuples (ratio_vals, edges, label, color)
+    """
+    hep.style.use("ATLAS")
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    all_pos_ratios = []
+    for ratio_vals, edges, label, color in hist_data_list:
+        if xlim is not None:
+            mask = (edges[1:] > xlim[0]) & (edges[:-1] < xlim[1])
+            vis = ratio_vals[mask]
+        else:
+            vis = ratio_vals
+        pos = vis[vis > 0]
+        if len(pos) > 0:
+            all_pos_ratios.extend(pos)
+
+        hep.histplot((ratio_vals, edges), ax=ax, histtype='step', color=color, linewidth=2.5, label=label)
+
+    if hline is not None:
+        ax.axhline(hline, color='gray', linestyle='--', linewidth=1.5, alpha=0.8)
+
+    if len(all_pos_ratios) > 0:
+        min_pos = float(np.min(all_pos_ratios))
+        max_pos = float(np.max(all_pos_ratios))
+        margin_bottom = max((1.0 - min_pos) * 0.15, 0.04) if min_pos < 1.0 else 0.04
+        y_bottom = max(0.0, min_pos - margin_bottom)
+        margin_top = max((max_pos - 1.0) * 1.5, 0.04) if max_pos > 1.0 else 0.04
+        y_top = max(max_pos, 1.0) + margin_top
+        ax.set_ylim(y_bottom, y_top)
+
+    if xlim is not None:
+        ax.set_xlim(xlim)
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+
+    ax.legend(loc="lower right", fontsize=20, frameon=True, framealpha=0.9, edgecolor="none")
+    ax.text(1.0, 1.01, rf"Run: {run_number}", transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
+
+    fig.tight_layout()
+    plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
@@ -205,10 +317,12 @@ def make_zvertex_cent_slices_plot(hist2d, run_number, output_path, slices=(1, 2,
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.08, right=0.97, bottom=0.15, top=0.92)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def process_file(path, output_dir=None, logy=False, run_subdirs=False):
+def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat_min=10.0, cent_flat_max=70.0):
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -226,72 +340,233 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
         run_output_dir = output_dir if output_dir is not None else Path(".")
         if run_subdirs:
             run_output_dir = run_output_dir / f"{run_number}"
-        run_output_dir.mkdir(parents=True, exist_ok=True)
+
+        dir_cent = run_output_dir / "centrality"
+        dir_cent_zoom = run_output_dir / "centrality_zoom"
+        dir_ratio = run_output_dir / "ratio"
+        dir_ratio_zoom = run_output_dir / "ratio_zoom"
+        dir_overlay = run_output_dir / "overlay"
+        dir_zvtx = run_output_dir / "z_vertex"
 
         with uproot.open(path) as file:
             plots_made = 0
+            cent_ratios = {}
 
-            # 1. 1D Centrality plot
-            if "hCentrality" in file:
-                hist1d = file["hCentrality"]
-                values, _ = hist1d.to_numpy()
-                total_events = np.sum(values)
+            # 1. 1D Centrality plots (full 0-100% and zoomed first 11 bins: -0.5 to 10.5)
+            cent_hist_names = [
+                "hCentrality",
+                "hCentrality_Trig12",
+                "hCentrality_Trig12_MB",
+                "hCentrality_Trig14",
+                "hCentrality_Trig14_MB",
+                "hCentralityZ150",
+                "hCentralityZ150_Trig14",
+                "hCentralityZOuter",
+                "hCentralityZOuter_Trig14",
+            ]
+            for hist_name in cent_hist_names:
+                if hist_name in file:
+                    hist1d = file[hist_name]
+                    values, edges = hist1d.to_numpy()
+                    total_events = np.sum(values)
 
-                extra_labels = []
-                title = hist1d.title
-                if title:
-                    if ";" in title:
-                        title = title.split(";")[0].strip()
-                    cleaned_title = clean_root_latex(title)
-                    if cleaned_title:
-                        extra_labels.append(cleaned_title)
-                extra_labels.append(f"Total: {total_events:.2e}")
+                    base_labels = []
+                    cleaned_title = ""
+                    title = hist1d.title
+                    if title:
+                        if ";" in title:
+                            title = title.split(";")[0].strip()
+                        cleaned_title = clean_root_latex(title)
+                        if cleaned_title:
+                            base_labels.append(cleaned_title)
 
-                output_path = run_output_dir / f"run_{run_number}_hCentrality.png"
-                make_1d_plot(
-                    hist1d,
+                    # Compute flat average excluding edge outliers
+                    avg_val = compute_centrality_average(
+                        values, edges, cent_min=cent_flat_min, cent_max=cent_flat_max
+                    )
+                    avg_label = [f"Average: {avg_val:.2e}"] if avg_val > 0 else []
+
+                    # Full 0-100% distribution with average line
+                    extra_labels = base_labels + [f"Total: {total_events:.2e}"] + avg_label
+                    output_path = dir_cent / f"run_{run_number}_{hist_name}.png"
+                    make_1d_plot(
+                        hist1d,
+                        run_number,
+                        output_path,
+                        xlabel="Centrality [%]",
+                        ylabel="Events",
+                        extra_labels=extra_labels,
+                        logy=logy,
+                        xlim=(0, 100),
+                        hline=avg_val if avg_val > 0 else None,
+                    )
+                    plots_made += 1
+
+                    # Full 0-100% ratio to average
+                    if avg_val > 0:
+                        ratio_vals = np.where(values > 0, values / avg_val, 0.0)
+                        cent_ratios[hist_name] = (ratio_vals, edges, cleaned_title)
+                        ylim_full_ratio = get_ratio_ylim(ratio_vals, edges, xlim=(0, 100))
+                        output_path_ratio = dir_ratio / f"run_{run_number}_{hist_name}_ratio.png"
+                        make_1d_plot(
+                            (ratio_vals, edges),
+                            run_number,
+                            output_path_ratio,
+                            xlabel="Centrality [%]",
+                            ylabel="Ratio to Average",
+                            extra_labels=base_labels + avg_label,
+                            logy=False,
+                            xlim=(0, 100),
+                            ylim=ylim_full_ratio,
+                            hline=1.0,
+                        )
+                        plots_made += 1
+
+                    # Zoomed 0-10% centrality (first 11 bins: -0.5 to 10.5) with average line
+                    mask_zoom = (edges[1:] > -0.5) & (edges[:-1] < 10.5)
+                    total_events_zoom = np.sum(values[mask_zoom])
+                    extra_labels_zoom = base_labels + [f"Total: {total_events_zoom:.2e}"] + avg_label
+
+                    output_path_zoom = dir_cent_zoom / f"run_{run_number}_{hist_name}_zoom.png"
+                    make_1d_plot(
+                        hist1d,
+                        run_number,
+                        output_path_zoom,
+                        xlabel="Centrality [%]",
+                        ylabel="Events",
+                        extra_labels=extra_labels_zoom,
+                        logy=logy,
+                        xlim=(-0.5, 10.5),
+                        hline=avg_val if avg_val > 0 else None,
+                    )
+                    plots_made += 1
+
+                    # Zoomed 0-10% ratio to average
+                    if avg_val > 0:
+                        ylim_zoom_ratio = get_ratio_ylim(ratio_vals, edges, xlim=(-0.5, 10.5))
+                        output_path_zoom_ratio = dir_ratio_zoom / f"run_{run_number}_{hist_name}_zoom_ratio.png"
+                        make_1d_plot(
+                            (ratio_vals, edges),
+                            run_number,
+                            output_path_zoom_ratio,
+                            xlabel="Centrality [%]",
+                            ylabel="Ratio to Average",
+                            extra_labels=base_labels + avg_label,
+                            logy=False,
+                            xlim=(-0.5, 10.5),
+                            ylim=ylim_zoom_ratio,
+                            hline=1.0,
+                        )
+                        plots_made += 1
+                else:
+                    print(f"Warning: '{hist_name}' not found in {path}")
+
+            # Overlay of zoomed ratio plots: hCentrality_zoom and hCentralityZ150_Trig14_zoom
+            if "hCentrality" in cent_ratios and "hCentralityZ150_Trig14" in cent_ratios:
+                r1, e1, t1 = cent_ratios["hCentrality"]
+                r2, e2, t2 = cent_ratios["hCentralityZ150_Trig14"]
+
+                label1 = t1 if t1 else "|z| < 10 cm and MB"
+                label2 = t2 if t2 else "|z| < 150 cm and Trig 14"
+                label2 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label2).strip()
+
+                output_path_overlay = dir_overlay / f"run_{run_number}_hCentrality_vs_hCentralityZ150_Trig14_zoom_ratio.png"
+                make_ratio_overlay_plot(
+                    [
+                        (r1, e1, label1, "blue"),
+                        (r2, e2, label2, "crimson"),
+                    ],
                     run_number,
-                    output_path,
+                    output_path_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Events",
-                    extra_labels=extra_labels,
-                    logy=logy,
-                    xlim=(0, 100),
+                    ylabel="Ratio to Average",
+                    xlim=(-0.5, 10.5),
+                    hline=1.0,
                 )
                 plots_made += 1
-            else:
-                print(f"Warning: 'hCentrality' not found in {path}")
 
-            # 2. 1D Centrality Z150 Trig14 plot
-            if "hCentralityZ150_Trig14" in file:
-                hist1d_z150 = file["hCentralityZ150_Trig14"]
-                values_z150, _ = hist1d_z150.to_numpy()
-                total_events_z150 = np.sum(values_z150)
+            # Overlay of zoomed ratio plots: hCentrality, hCentrality_Trig12, and hCentrality_Trig14
+            if "hCentrality" in cent_ratios and "hCentrality_Trig12" in cent_ratios and "hCentrality_Trig14" in cent_ratios:
+                r_mb, e_mb, t_mb = cent_ratios["hCentrality"]
+                r_12, e_12, t_12 = cent_ratios["hCentrality_Trig12"]
+                r_14, e_14, t_14 = cent_ratios["hCentrality_Trig14"]
 
-                extra_labels_z150 = []
-                title_z150 = hist1d_z150.title
-                if title_z150:
-                    if ";" in title_z150:
-                        title_z150 = title_z150.split(";")[0].strip()
-                    cleaned_title_z150 = clean_root_latex(title_z150)
-                    if cleaned_title_z150:
-                        extra_labels_z150.append(cleaned_title_z150)
-                extra_labels_z150.append(f"Total: {total_events_z150:.2e}")
+                label_mb = t_mb if t_mb else "|z| < 10 cm and MB"
+                label_12 = t_12 if t_12 else "|z| < 10 cm and Trig 12"
+                label_12 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 12', label_12).strip()
+                label_14 = t_14 if t_14 else "|z| < 10 cm and Trig 14"
+                label_14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_14).strip()
 
-                output_path_z150 = run_output_dir / f"run_{run_number}_hCentralityZ150_Trig14.png"
-                make_1d_plot(
-                    hist1d_z150,
+                output_path_trig_overlay = dir_overlay / f"run_{run_number}_hCentrality_Trig12_Trig14_zoom_ratio.png"
+                make_ratio_overlay_plot(
+                    [
+                        (r_mb, e_mb, label_mb, "blue"),
+                        (r_12, e_12, label_12, "forestgreen"),
+                        (r_14, e_14, label_14, "crimson"),
+                    ],
                     run_number,
-                    output_path_z150,
+                    output_path_trig_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Events",
-                    extra_labels=extra_labels_z150,
-                    logy=logy,
-                    xlim=(0, 100),
+                    ylabel="Ratio to Average",
+                    xlim=(-0.5, 10.5),
+                    hline=1.0,
                 )
                 plots_made += 1
-            else:
-                print(f"Warning: 'hCentralityZ150_Trig14' not found in {path}")
+
+            # Overlay of zoomed ratio plots: hCentrality, hCentralityZ150, and hCentralityZOuter
+            if "hCentrality" in cent_ratios and "hCentralityZ150" in cent_ratios and "hCentralityZOuter" in cent_ratios:
+                r_mb, e_mb, t_mb = cent_ratios["hCentrality"]
+                r_z150, e_z150, t_z150 = cent_ratios["hCentralityZ150"]
+                r_zout, e_zout, t_zout = cent_ratios["hCentralityZOuter"]
+
+                label_mb = t_mb if t_mb else "|z| < 10 cm and MB"
+                label_z150 = t_z150 if t_z150 else "|z| < 150 cm and MB"
+                label_zout = t_zout if t_zout else "10 cm < |z| < 150 cm and MB"
+
+                output_path_z_overlay = dir_overlay / f"run_{run_number}_hCentrality_Z150_ZOuter_zoom_ratio.png"
+                make_ratio_overlay_plot(
+                    [
+                        (r_mb, e_mb, label_mb, "blue"),
+                        (r_z150, e_z150, label_z150, "crimson"),
+                        (r_zout, e_zout, label_zout, "forestgreen"),
+                    ],
+                    run_number,
+                    output_path_z_overlay,
+                    xlabel="Centrality [%]",
+                    ylabel="Ratio to Average",
+                    xlim=(-0.5, 10.5),
+                    hline=1.0,
+                )
+                plots_made += 1
+
+            # Overlay of zoomed ratio plots: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14
+            if "hCentrality_Trig14" in cent_ratios and "hCentralityZ150_Trig14" in cent_ratios and "hCentralityZOuter_Trig14" in cent_ratios:
+                r_t14, e_t14, t_t14 = cent_ratios["hCentrality_Trig14"]
+                r_z150_t14, e_z150_t14, t_z150_t14 = cent_ratios["hCentralityZ150_Trig14"]
+                r_zout_t14, e_zout_t14, t_zout_t14 = cent_ratios["hCentralityZOuter_Trig14"]
+
+                label_t14 = t_t14 if t_t14 else "|z| < 10 cm and Trig 14"
+                label_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_t14).strip()
+                label_z150_t14 = t_z150_t14 if t_z150_t14 else "|z| < 150 cm and Trig 14"
+                label_z150_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_z150_t14).strip()
+                label_zout_t14 = t_zout_t14 if t_zout_t14 else "10 cm < |z| < 150 cm and Trig 14"
+                label_zout_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_zout_t14).strip()
+
+                output_path_z_trig14_overlay = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_zoom_ratio.png"
+                make_ratio_overlay_plot(
+                    [
+                        (r_t14, e_t14, label_t14, "blue"),
+                        (r_z150_t14, e_z150_t14, label_z150_t14, "crimson"),
+                        (r_zout_t14, e_zout_t14, label_zout_t14, "forestgreen"),
+                    ],
+                    run_number,
+                    output_path_z_trig14_overlay,
+                    xlabel="Centrality [%]",
+                    ylabel="Ratio to Average",
+                    xlim=(-0.5, 10.5),
+                    hline=1.0,
+                )
+                plots_made += 1
 
             # 3. 1D Z vertex plot (full X projection of h2ZVertexCentrality)
             if "h2ZVertexCentrality" in file:
@@ -301,7 +576,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 total_zvtx = np.sum(proj_x)
 
                 extra_labels_zvtx = ["MB", f"Total: {total_zvtx:.2e}"]
-                output_path_zvtx = run_output_dir / f"run_{run_number}_z_vertex.png"
+                output_path_zvtx = dir_zvtx / f"run_{run_number}_z_vertex.png"
                 make_1d_plot(
                     (proj_x, edges_x),
                     run_number,
@@ -314,7 +589,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 )
 
                 # 4. 1x3 panel Z vertex 1D projections for centrality slices 1%, 2%, 3%
-                output_path_slices = run_output_dir / f"run_{run_number}_z_vertex_cent_slices.png"
+                output_path_slices = dir_zvtx / f"run_{run_number}_z_vertex_cent_slices.png"
                 make_zvertex_cent_slices_plot(
                     hist2d,
                     run_number,
@@ -342,6 +617,8 @@ def main():
     parser.add_argument("--logy", action="store_true", help="Use log scale for y-axis.")
     parser.add_argument("--run-subdirs", action="store_true", help="Save plots in run-numbered subdirectories.")
     parser.add_argument("-j", "--workers", type=int, default=None, help="Number of parallel worker processes (default: min(os.cpu_count(), 32)).")
+    parser.add_argument("--cent-flat-min", type=float, default=10.0, help="Minimum centrality [%] for computing flat average (default: 10.0).")
+    parser.add_argument("--cent-flat-max", type=float, default=70.0, help="Maximum centrality [%] for computing flat average (default: 70.0).")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths.")
     args = parser.parse_args()
 
@@ -376,6 +653,8 @@ def main():
         output_dir=args.output_dir,
         logy=args.logy,
         run_subdirs=args.run_subdirs,
+        cent_flat_min=args.cent_flat_min,
+        cent_flat_max=args.cent_flat_max,
     )
 
     max_workers = args.workers if args.workers is not None else min(os.cpu_count() or 4, 32)
