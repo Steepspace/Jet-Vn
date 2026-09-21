@@ -6,6 +6,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import ScalarFormatter
+from matplotlib.patches import Patch
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import mplhep as hep
 import os
@@ -28,6 +29,11 @@ HIST_NAMES = [
     "h2sEPD_CaloE",
     "h2CaloE_MBD",
     "h2sEPD_North_South",
+    "h2sEPD_Centrality_cut",
+    "h2sEPD_MBD_cut",
+    "h2sEPD_CaloE_cut",
+    "h2CaloE_MBD_cut",
+    "h2sEPD_North_South_cut",
 ]
 
 CENTRALITY_INTERVALS = [
@@ -167,7 +173,31 @@ def get_best_label_corner(values, xedges, yedges, x_min, x_max, y_min, y_max):
     return best_corner
 
 
-def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", ylabel="", hist_name="", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False):
+def compute_profile_x_spread(values, xedges, yedges):
+    """
+    Computes mean and standard deviation (spread) for each X bin,
+    matching ROOT's ProfileX("...", 1, -1, "s").
+    """
+    y_centers = (yedges[:-1] + yedges[1:]) / 2.0
+    x_centers = (xedges[:-1] + xedges[1:]) / 2.0
+
+    weights_sum = np.sum(values, axis=1)
+    valid = weights_sum > 0
+
+    mean = np.zeros(len(x_centers))
+    std = np.zeros(len(x_centers))
+
+    mean[valid] = np.sum(values[valid] * y_centers, axis=1) / weights_sum[valid]
+    mean_sq = np.zeros(len(x_centers))
+    mean_sq[valid] = np.sum(values[valid] * (y_centers ** 2), axis=1) / weights_sum[valid]
+
+    var = np.maximum(0.0, mean_sq - mean ** 2)
+    std = np.sqrt(var)
+
+    return x_centers, mean, std
+
+
+def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", ylabel="", hist_name="", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, calo_mbd_cut_profile=None, sigma_cut=3.5, custom_max_coord=None, custom_xlim=None, custom_ylim=None):
     if date_str is None:
         date_str = datetime.now().strftime("%m/%d/%Y")
 
@@ -192,22 +222,64 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
         ax.set_ylabel(ylabel, loc='center', labelpad=10)
 
     # Set x-limits based on histogram type
-    if hist_name in ["h2sEPD_MBD", "h2CaloE_MBD"]:
+    if custom_xlim is not None:
+        ax.set_xlim(custom_xlim)
+    elif hist_name in ["h2CaloE_MBD", "h2CaloE_MBD_cut"]:
         ax.set_xlim(left=0, right=2100)
-    elif hist_name == "h2sEPD_CaloE":
-        ax.set_xlim(left=xedges[0], right=2100)
-    elif hist_name == "h2sEPD_Centrality":
+    elif hist_name in ["h2sEPD_CaloE", "h2sEPD_CaloE_cut"]:
+        nonzero_x, _ = np.where(values > 0)
+        if len(nonzero_x) > 0:
+            min_x = float(xedges[np.min(nonzero_x)])
+            max_x = float(xedges[np.max(nonzero_x) + 1])
+        else:
+            min_x = float(xedges[0])
+            max_x = float(xedges[-1])
+        if min_x >= max_x:
+            min_x = float(xedges[0])
+            max_x = float(xedges[-1])
+        ax.set_xlim(left=min_x, right=max_x)
+    elif hist_name in ["h2sEPD_MBD", "h2sEPD_MBD_cut"]:
+        nonzero_x, _ = np.where(values > 0)
+        if len(nonzero_x) > 0:
+            max_x = float(xedges[np.max(nonzero_x) + 1])
+        else:
+            max_x = float(xedges[-1])
+        if max_x <= 0:
+            max_x = float(xedges[-1])
+        ax.set_xlim(left=0, right=max_x)
+    elif hist_name in ["h2sEPD_Centrality", "h2sEPD_Centrality_cut"]:
         ax.set_xlim(left=0, right=100)
-    elif hist_name == "h2sEPD_North_South":
-        ax.set_xlim(left=0, right=xedges[-1])
+    elif hist_name in ["h2sEPD_North_South", "h2sEPD_North_South_cut"]:
+        if custom_max_coord is not None:
+            max_coord = float(custom_max_coord)
+        else:
+            nonzero_x, nonzero_y = np.where(values > 0)
+            if len(nonzero_x) > 0:
+                max_coord = float(max(xedges[np.max(nonzero_x) + 1], yedges[np.max(nonzero_y) + 1]))
+            else:
+                max_coord = float(min(xedges[-1], yedges[-1]))
+            if max_coord <= 0:
+                max_coord = float(xedges[-1])
+        ax.set_xlim(left=0, right=max_coord)
     else:
         ax.set_xlim(left=xedges[0], right=xedges[-1])
 
     # Set y-limits based on histogram type
-    if hist_name == "h2CaloE_MBD":
+    if custom_ylim is not None:
+        ax.set_ylim(custom_ylim)
+    elif hist_name in ["h2CaloE_MBD", "h2CaloE_MBD_cut"]:
         ax.set_ylim(bottom=yedges[0], top=2100)
-    elif hist_name == "h2sEPD_North_South":
-        ax.set_ylim(bottom=0, top=yedges[-1])
+    elif hist_name in ["h2sEPD_North_South", "h2sEPD_North_South_cut"]:
+        ax.set_ylim(bottom=0, top=max_coord)
+    elif hist_name in ["h2sEPD_CaloE", "h2sEPD_CaloE_cut", "h2sEPD_Centrality", "h2sEPD_Centrality_cut", "h2sEPD_MBD", "h2sEPD_MBD_cut"]:
+        _, nonzero_y = np.where(values > 0)
+        if len(nonzero_y) > 0:
+            max_y = float(yedges[np.max(nonzero_y) + 1])
+        else:
+            max_y = float(yedges[-1])
+        if max_y <= 0:
+            max_y = float(yedges[-1])
+        ax.set_ylim(bottom=0, top=max_y)
     else:
         # sEPD total charge max is 20000 on y-axis
         ax.set_ylim(bottom=0, top=20000)
@@ -215,15 +287,32 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
     cur_xlim = ax.get_xlim()
     cur_ylim = ax.get_ylim()
 
+    if calo_mbd_cut_profile is not None:
+        prof_x, prof_mean, prof_std = calo_mbd_cut_profile
+        mask = (prof_std > 0.0) & (prof_x >= cur_xlim[0]) & (prof_x <= cur_xlim[1])
+        if np.any(mask):
+            x_vals = prof_x[mask]
+            y_upper = prof_mean[mask] + sigma_cut * prof_std[mask]
+            y_lower = prof_mean[mask] - sigma_cut * prof_std[mask]
+
+            ax.plot(x_vals, y_upper, color='red', linewidth=2)
+            ax.plot(x_vals, y_lower, color='red', linewidth=2)
+
+            ax.fill_between(x_vals, np.clip(y_upper, cur_ylim[0], cur_ylim[1]), cur_ylim[1], color='red', alpha=0.15)
+            ax.fill_between(x_vals, cur_ylim[0], np.clip(y_lower, cur_ylim[0], cur_ylim[1]), color='red', alpha=0.15)
+
+            patch = Patch(facecolor=(1, 0, 0, 0.15), edgecolor='red', linewidth=2, label=rf"Excluded: $|E_{{\mathrm{{Calo}}}} - \mu| > {sigma_cut:g}\sigma$")
+            ax.legend(handles=[patch], loc='lower right', frameon=False, fontsize=16, title=r"$|z| < 10$ cm & MB", title_fontsize=18, alignment='right')
+
     if np.max(np.abs(cur_xlim)) >= 1000:
         formatter_x = ScalarFormatter(useMathText=True)
         formatter_x.set_powerlimits((3, 3))
         ax.xaxis.set_major_formatter(formatter_x)
 
-    has_y_offset = np.max(np.abs(cur_ylim)) >= 500
+    has_y_offset = np.max(np.abs(cur_ylim)) >= 1000
     if has_y_offset:
         formatter_y = ScalarFormatter(useMathText=True)
-        formatter_y.set_powerlimits((0, 2))
+        formatter_y.set_powerlimits((3, 3))
         ax.yaxis.set_major_formatter(formatter_y)
 
     # Top border labels: sPHENIX on left (shifted to avoid overlap with y-axis x10^3 multiplier), Run & Date on right
@@ -233,10 +322,11 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
     right_text = f"Run: {run_number}, {date_str}" if run_number is not None else date_str
     ax.text(1.0, 1.01, right_text, transform=ax.transAxes, ha='right', va='bottom', fontsize=15)
 
-    # Auto-place event selection label in the corner with the least data overlap
-    lbl_x, lbl_y, lbl_ha, lbl_va = get_best_label_corner(values, xedges, yedges, cur_xlim[0], cur_xlim[1], cur_ylim[0], cur_ylim[1])
-    label_text = r"$|z| < 10$ cm & MB"
-    ax.text(lbl_x, lbl_y, label_text, transform=ax.transAxes, ha=lbl_ha, va=lbl_va, fontsize=18)
+    # Auto-place event selection label in the corner with the least data overlap (for non-cutline plots)
+    if calo_mbd_cut_profile is None:
+        lbl_x, lbl_y, lbl_ha, lbl_va = get_best_label_corner(values, xedges, yedges, cur_xlim[0], cur_xlim[1], cur_ylim[0], cur_ylim[1])
+        label_text = r"$|z| < 10$ cm & MB"
+        ax.text(lbl_x, lbl_y, label_text, transform=ax.transAxes, ha=lbl_ha, va=lbl_va, fontsize=18)
 
     fig.tight_layout()
     plt.subplots_adjust(left=0.12, bottom=0.13, top=0.93)
@@ -248,7 +338,7 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
     plt.close(fig)
 
 
-def make_centrality_slices_plot(values, xedges, yedges, run_number, output_path, xlabel="sEPD Total Charge", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False):
+def make_centrality_slices_plot(values, xedges, yedges, run_number, output_path, xlabel="sEPD Total Charge", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, custom_xmax=None):
     if date_str is None:
         date_str = datetime.now().strftime("%m/%d/%Y")
 
@@ -270,8 +360,16 @@ def make_centrality_slices_plot(values, xedges, yedges, run_number, output_path,
     max_y_top = max(np.max(projections[i]) for i in range(3)) if len(projections) >= 3 else 1
     max_y_bottom = max(np.max(projections[i]) for i in range(3, 6)) if len(projections) >= 6 else 1
 
-    # sEPD total charge max is 20000
-    xmax = 20000
+    if custom_xmax is not None:
+        xmax = float(custom_xmax)
+    else:
+        nonzero_y = np.where(np.sum(values, axis=0) > 0)[0]
+        if len(nonzero_y) > 0:
+            xmax = float(yedges[np.max(nonzero_y) + 1])
+        else:
+            xmax = float(yedges[-1])
+        if xmax <= 0:
+            xmax = float(yedges[-1])
 
     for r in range(2):
         for c in range(3):
@@ -375,7 +473,7 @@ def make_1d_plot(values, bin_edges, run_number, output_path, xlabel="", ylabel="
     plt.close(fig)
 
 
-def make_1d_slice_plot(values, yedges, cent_min, cent_max, run_number, output_path, xlabel="sEPD Total Charge", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False):
+def make_1d_slice_plot(values, yedges, cent_min, cent_max, run_number, output_path, xlabel="sEPD Total Charge", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, custom_xmax=None):
     if date_str is None:
         date_str = datetime.now().strftime("%m/%d/%Y")
 
@@ -384,8 +482,17 @@ def make_1d_slice_plot(values, yedges, cent_min, cent_max, run_number, output_pa
 
     hep.histplot((values, yedges), ax=ax, histtype='step', color='navy', linewidth=2)
 
-    # Fix x-axis range for sEPD total charge at 20000
-    xmax = 20000
+    if custom_xmax is not None:
+        xmax = float(custom_xmax)
+    else:
+        nonzero = np.where(values > 0)[0]
+        if len(nonzero) > 0:
+            xmax = float(yedges[np.max(nonzero) + 1])
+        else:
+            xmax = float(yedges[-1])
+        if xmax <= 0:
+            xmax = float(yedges[-1])
+
     ax.set_xlim(left=0, right=xmax)
     max_y = np.max(values) if len(values) > 0 else 0
     ax.set_ylim(bottom=0, top=max_y * 1.15 if max_y > 0 else 1)
@@ -425,7 +532,7 @@ def make_1d_slice_plot(values, yedges, cent_min, cent_max, run_number, output_pa
     plt.close(fig)
 
 
-def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False):
+def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, ref_profile=None, sigma_cut=3.5):
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -437,6 +544,82 @@ def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABE
     try:
         with uproot.open(path) as file:
             plotted_any = False
+
+            # If h2sEPD_North_South is present, compute its max_coord for matching bounds
+            ns_uncut_max_coord = None
+            if "h2sEPD_North_South" in file:
+                ns_vals, ns_xe, ns_ye = file["h2sEPD_North_South"].to_numpy()
+                nz_x, nz_y = np.where(ns_vals > 0)
+                if len(nz_x) > 0:
+                    ns_uncut_max_coord = float(max(ns_xe[np.max(nz_x) + 1], ns_ye[np.max(nz_y) + 1]))
+                else:
+                    ns_uncut_max_coord = float(min(ns_xe[-1], ns_ye[-1]))
+                if ns_uncut_max_coord <= 0:
+                    ns_uncut_max_coord = float(ns_xe[-1])
+
+            # If h2sEPD_CaloE is present, compute its bounds for matching bounds
+            caloe_uncut_xlim = None
+            caloe_uncut_ylim = None
+            if "h2sEPD_CaloE" in file:
+                ce_vals, ce_xe, ce_ye = file["h2sEPD_CaloE"].to_numpy()
+                nz_x, _ = np.where(ce_vals > 0)
+                if len(nz_x) > 0:
+                    ce_min_x = float(ce_xe[np.min(nz_x)])
+                    ce_max_x = float(ce_xe[np.max(nz_x) + 1])
+                else:
+                    ce_min_x = float(ce_xe[0])
+                    ce_max_x = float(ce_xe[-1])
+                if ce_min_x >= ce_max_x:
+                    ce_min_x = float(ce_xe[0])
+                    ce_max_x = float(ce_xe[-1])
+                caloe_uncut_xlim = (ce_min_x, ce_max_x)
+
+                _, nz_y = np.where(ce_vals > 0)
+                if len(nz_y) > 0:
+                    ce_max_y = float(ce_ye[np.max(nz_y) + 1])
+                else:
+                    ce_max_y = float(ce_ye[-1])
+                if ce_max_y <= 0:
+                    ce_max_y = float(ce_ye[-1])
+                caloe_uncut_ylim = (0.0, ce_max_y)
+
+            # If h2sEPD_Centrality is present, compute its bounds for matching bounds
+            cent_uncut_xlim = (0.0, 100.0)
+            cent_uncut_ylim = None
+            if "h2sEPD_Centrality" in file:
+                cnt_vals, cnt_xe, cnt_ye = file["h2sEPD_Centrality"].to_numpy()
+                _, nz_y = np.where(cnt_vals > 0)
+                if len(nz_y) > 0:
+                    cnt_max_y = float(cnt_ye[np.max(nz_y) + 1])
+                else:
+                    cnt_max_y = float(cnt_ye[-1])
+                if cnt_max_y <= 0:
+                    cnt_max_y = float(cnt_ye[-1])
+                cent_uncut_ylim = (0.0, cnt_max_y)
+
+            # If h2sEPD_MBD is present, compute its bounds for matching bounds
+            mbd_uncut_xlim = None
+            mbd_uncut_ylim = None
+            if "h2sEPD_MBD" in file:
+                mbd_vals, mbd_xe, mbd_ye = file["h2sEPD_MBD"].to_numpy()
+                nz_x, _ = np.where(mbd_vals > 0)
+                if len(nz_x) > 0:
+                    mbd_max_x = float(mbd_xe[np.max(nz_x) + 1])
+                else:
+                    mbd_max_x = float(mbd_xe[-1])
+                if mbd_max_x <= mbd_xe[0]:
+                    mbd_max_x = float(mbd_xe[-1])
+                mbd_uncut_xlim = (float(mbd_xe[0]), mbd_max_x)
+
+                _, nz_y = np.where(mbd_vals > 0)
+                if len(nz_y) > 0:
+                    mbd_max_y = float(mbd_ye[np.max(nz_y) + 1])
+                else:
+                    mbd_max_y = float(mbd_ye[-1])
+                if mbd_max_y <= 0:
+                    mbd_max_y = float(mbd_ye[-1])
+                mbd_uncut_ylim = (0.0, mbd_max_y)
+
             for name in HIST_NAMES:
                 if name in file:
                     obj = file[name]
@@ -447,8 +630,28 @@ def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABE
                     out_path = output_dir / f"{prefix}{name}.png"
                     make_2d_plot(values, xedges, yedges, run_number, out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf)
 
+                    if name == "h2CaloE_MBD":
+                        cut_out_path = output_dir / f"{prefix}{name}_cut_region.png"
+                        prof = ref_profile if ref_profile is not None else compute_profile_x_spread(values, xedges, yedges)
+                        make_2d_plot(values, xedges, yedges, run_number, cut_out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, calo_mbd_cut_profile=prof, sigma_cut=sigma_cut)
 
-                    if name == "h2sEPD_Centrality":
+                    if name == "h2sEPD_North_South_cut" and ns_uncut_max_coord is not None:
+                        matched_out_path = output_dir / f"{prefix}{name}_matched_bounds.png"
+                        make_2d_plot(values, xedges, yedges, run_number, matched_out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_max_coord=ns_uncut_max_coord)
+
+                    if name == "h2sEPD_CaloE_cut" and caloe_uncut_xlim is not None:
+                        matched_out_path = output_dir / f"{prefix}{name}_matched_bounds.png"
+                        make_2d_plot(values, xedges, yedges, run_number, matched_out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_xlim=caloe_uncut_xlim, custom_ylim=caloe_uncut_ylim)
+
+                    if name == "h2sEPD_Centrality_cut" and cent_uncut_ylim is not None:
+                        matched_out_path = output_dir / f"{prefix}{name}_matched_bounds.png"
+                        make_2d_plot(values, xedges, yedges, run_number, matched_out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_xlim=cent_uncut_xlim, custom_ylim=cent_uncut_ylim)
+
+                    if name == "h2sEPD_MBD_cut" and mbd_uncut_xlim is not None and mbd_uncut_ylim is not None:
+                        matched_out_path = output_dir / f"{prefix}{name}_matched_bounds.png"
+                        make_2d_plot(values, xedges, yedges, run_number, matched_out_path, xlabel=xlabel, ylabel=ylabel, hist_name=name, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_xlim=mbd_uncut_xlim, custom_ylim=mbd_uncut_ylim)
+
+                    if name in ["h2sEPD_Centrality", "h2sEPD_Centrality_cut"]:
                         slices_out_path = output_dir / f"{prefix}{name}_slices.png"
                         make_centrality_slices_plot(values, xedges, yedges, run_number, slices_out_path, xlabel=ylabel, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf)
 
@@ -462,6 +665,19 @@ def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABE
                                 proj_1d = np.zeros(len(yedges) - 1)
                             slice_out_path = output_dir / f"{prefix}{name}_slice_{cent_min}_{cent_max}.png"
                             make_1d_slice_plot(proj_1d, yedges, cent_min, cent_max, run_number, slice_out_path, xlabel=ylabel if ylabel else "sEPD Total Charge", sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf)
+
+                        if name == "h2sEPD_Centrality_cut" and cent_uncut_ylim is not None:
+                            matched_slices_out_path = output_dir / f"{prefix}{name}_slices_matched_bounds.png"
+                            make_centrality_slices_plot(values, xedges, yedges, run_number, matched_slices_out_path, xlabel=ylabel, sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_xmax=cent_uncut_ylim[1])
+
+                            for cent_min, cent_max in CENTRALITY_INTERVALS:
+                                mask = (bin_centers_x >= cent_min) & (bin_centers_x < cent_max)
+                                if np.any(mask):
+                                    proj_1d = np.sum(values[mask, :], axis=0)
+                                else:
+                                    proj_1d = np.zeros(len(yedges) - 1)
+                                matched_slice_out_path = output_dir / f"{prefix}{name}_slice_{cent_min}_{cent_max}_matched_bounds.png"
+                                make_1d_slice_plot(proj_1d, yedges, cent_min, cent_max, run_number, matched_slice_out_path, xlabel=ylabel if ylabel else "sEPD Total Charge", sphenix_label=sphenix_label, date_str=date_str, save_pdf=save_pdf, custom_xmax=cent_uncut_ylim[1])
 
                         cent_1d_out_path = output_dir / f"{prefix}{name}_1D.png"
                         proj_cent = np.sum(values, axis=1)
@@ -481,6 +697,8 @@ def main():
     parser = argparse.ArgumentParser(description="Plot sEPD QA histograms from ROOT files.")
     parser.add_argument("-f", "--file", type=Path, help="Path to a text/list file containing ROOT file paths (one per line).")
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("plots/sepd_qa"), help="Directory to save the plots (default: plots/sepd_qa).")
+    parser.add_argument("-c", "--calo-mbd-file", type=Path, default=None, help="Optional ROOT file containing reference h2CaloE_MBD for profile cut bounds.")
+    parser.add_argument("--sigma-cut", type=float, default=3.5, help="Sigma cut threshold for Calo-MBD cut region (default: 3.5).")
     parser.add_argument("--label", "--sphenix-label", type=str, default=SPHENIX_LABEL, help=f"sPHENIX label status (e.g. Internal, Performance, Preliminary). Default: {SPHENIX_LABEL}")
     parser.add_argument("--date", type=str, default=datetime.now().strftime("%m/%d/%Y"), help=f"Date string in mm/dd/yyyy format. Default: today's date ({datetime.now().strftime('%m/%d/%Y')})")
     parser.add_argument("--save-pdf", action="store_true", help="Enable saving of plots in PDF format (in addition to PNG).")
@@ -512,6 +730,22 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
     runs_to_filter = set(args.runs) if args.runs else None
 
+    ref_profile = None
+    if args.calo_mbd_file:
+        if not args.calo_mbd_file.exists():
+            print(f"Warning: Calo-MBD file does not exist: {args.calo_mbd_file}. Will use each file's h2CaloE_MBD.")
+        else:
+            try:
+                with uproot.open(args.calo_mbd_file) as rf:
+                    if "h2CaloE_MBD" in rf:
+                        ref_obj = rf["h2CaloE_MBD"]
+                        ref_vals, ref_xe, ref_ye = ref_obj.to_numpy()
+                        ref_profile = compute_profile_x_spread(ref_vals, ref_xe, ref_ye)
+                    else:
+                        print(f"Warning: h2CaloE_MBD not found in {args.calo_mbd_file}. Will use each file's h2CaloE_MBD.")
+            except Exception as e:
+                print(f"Warning: Could not read {args.calo_mbd_file}: {e}. Will use each file's h2CaloE_MBD.")
+
     print(f"Found {len(file_list)} input file(s). Starting plotting...")
 
     max_workers = args.max_workers or min(os.cpu_count() or 4, 32)
@@ -521,7 +755,9 @@ def main():
         runs_to_plot=runs_to_filter,
         sphenix_label=args.label,
         date_str=args.date,
-        save_pdf=args.save_pdf
+        save_pdf=args.save_pdf,
+        ref_profile=ref_profile,
+        sigma_cut=args.sigma_cut,
     )
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
