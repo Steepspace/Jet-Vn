@@ -9,6 +9,7 @@
 // ====================================================================
 // Standard C++ Includes
 // ====================================================================
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -26,6 +27,7 @@
 #include <TChain.h>
 #include <TFile.h>
 #include <TH2.h>
+#include <TProfile.h>
 #include <TROOT.h>
 #include <TTree.h>
 
@@ -35,15 +37,18 @@
 class sEPDQA
 {
  public:
-  sEPDQA(std::string input_file, long long events, std::string output_dir)
+  sEPDQA(std::string input_file, long long events, std::string output_dir, std::string calo_mbd_file = "", double sigma_cut = 3.5)
     : m_input_file(std::move(input_file))
     , m_events_to_process(events)
     , m_output_dir(std::move(output_dir))
+    , m_calo_mbd_file(std::move(calo_mbd_file))
+    , m_sigma_cut(sigma_cut)
   {
   }
 
   void run()
   {
+    setup_calo_mbd_cut();
     setup_chain();
     init_hists();
     process_events();
@@ -53,6 +58,12 @@ class sEPDQA
   void set_verbosity(int verbosity) { m_verbosity = verbosity; }
   int get_verbosity() const { return m_verbosity; }
 
+  void set_calo_mbd_file(std::string file) { m_calo_mbd_file = std::move(file); }
+  const std::string &get_calo_mbd_file() const { return m_calo_mbd_file; }
+
+  void set_sigma_cut(double sigma) { m_sigma_cut = sigma; }
+  double get_sigma_cut() const { return m_sigma_cut; }
+
  private:
   struct AnalysisHists
   {
@@ -61,6 +72,12 @@ class sEPDQA
     TH2 *h2sEPD_CaloE{nullptr};
     TH2 *h2CaloE_MBD{nullptr};
     TH2 *h2sEPD_North_South{nullptr};
+
+    TH2 *h2sEPD_Centrality_cut{nullptr};
+    TH2 *h2sEPD_MBD_cut{nullptr};
+    TH2 *h2sEPD_CaloE_cut{nullptr};
+    TH2 *h2CaloE_MBD_cut{nullptr};
+    TH2 *h2sEPD_North_South_cut{nullptr};
   };
 
   AnalysisHists m_hists;
@@ -93,10 +110,17 @@ class sEPDQA
 
   std::map<std::string, std::unique_ptr<TH2>> m_hists2D;
 
+  std::string m_calo_mbd_file;
+  double m_sigma_cut{3.5};
+  bool m_has_calo_mbd_cut{false};
+  std::unique_ptr<TProfile> m_profile_calo_mbd{nullptr};
+
   long long m_events_total{0};
   long long m_events_passed{0};
   long long m_events_excluded_calo{0};
+  long long m_events_passed_cut{0};
 
+  void setup_calo_mbd_cut();
   void setup_chain();
   void init_hists();
   void process_events();
@@ -104,6 +128,48 @@ class sEPDQA
   void print_summary() const;
   void save_results() const;
 };
+
+void sEPDQA::setup_calo_mbd_cut()
+{
+  if (m_calo_mbd_file.empty())
+  {
+    return;
+  }
+
+  if (!std::filesystem::exists(m_calo_mbd_file))
+  {
+    std::cout << std::format("Warning: Calo-MBD file does not exist: {}. Calo-MBD cut will not be applied.\n", m_calo_mbd_file);
+    return;
+  }
+
+  auto tfile = std::unique_ptr<TFile>(TFile::Open(m_calo_mbd_file.c_str(), "READ"));
+  if (!tfile || tfile->IsZombie())
+  {
+    std::cout << std::format("Warning: Could not open Calo-MBD file: {}. Calo-MBD cut will not be applied.\n", m_calo_mbd_file);
+    return;
+  }
+
+  TH2 *h2 = dynamic_cast<TH2 *>(tfile->Get("h2CaloE_MBD"));
+  if (!h2)
+  {
+    std::cout << std::format("Warning: h2CaloE_MBD not found in {}. Calo-MBD cut will not be applied.\n", m_calo_mbd_file);
+    return;
+  }
+
+  // Profile X with "s" option so error is spread (standard deviation)
+  TProfile *pfx = h2->ProfileX("pfx_calo_mbd_cut", 1, -1, "s");
+  if (!pfx)
+  {
+    std::cout << std::format("Warning: Failed to create ProfileX from h2CaloE_MBD in {}.\n", m_calo_mbd_file);
+    return;
+  }
+
+  pfx->SetDirectory(nullptr);
+  m_profile_calo_mbd = std::unique_ptr<TProfile>(pfx);
+  m_has_calo_mbd_cut = true;
+
+  std::cout << std::format("Successfully loaded h2CaloE_MBD from {} and created ProfileX with 's' option (sigma cut: {:.2f})\n", m_calo_mbd_file, m_sigma_cut);
+}
 
 void sEPDQA::setup_chain()
 {
@@ -185,6 +251,21 @@ void sEPDQA::init_hists()
   m_hists2D["h2CaloE_MBD"] = std::make_unique<TH2F>("h2CaloE_MBD", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
   m_hists2D["h2sEPD_North_South"] = std::make_unique<TH2F>("h2sEPD_North_South", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
 
+  if (m_has_calo_mbd_cut)
+  {
+    m_hists2D["h2sEPD_Centrality_cut"] = std::make_unique<TH2F>("h2sEPD_Centrality_cut", "; Centrality [%]; sEPD Total Charge", bins_cent, cent_low, cent_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
+    m_hists2D["h2sEPD_MBD_cut"] = std::make_unique<TH2F>("h2sEPD_MBD_cut", "; MBD Total Charge; sEPD Total Charge", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
+    m_hists2D["h2sEPD_CaloE_cut"] = std::make_unique<TH2F>("h2sEPD_CaloE_cut", "; Total Calorimeter Energy [GeV]; sEPD Total Charge", bins_Calo_E, Calo_E_low, Calo_E_high, bins_sepd_total_charge, sepd_total_charge_low, sepd_total_charge_high);
+    m_hists2D["h2CaloE_MBD_cut"] = std::make_unique<TH2F>("h2CaloE_MBD_cut", "; MBD Total Charge; Total Calorimeter Energy [GeV]", bins_mbd_total_charge, mbd_total_charge_low, mbd_total_charge_high, bins_Calo_E, Calo_E_low, Calo_E_high);
+    m_hists2D["h2sEPD_North_South_cut"] = std::make_unique<TH2F>("h2sEPD_North_South_cut", "; sEPD South Total Charge; sEPD North Total Charge", bins_sepd_charge, sepd_charge_low, sepd_charge_high, bins_sepd_charge, sepd_charge_low, sepd_charge_high);
+
+    m_hists.h2sEPD_Centrality_cut = m_hists2D["h2sEPD_Centrality_cut"].get();
+    m_hists.h2sEPD_MBD_cut = m_hists2D["h2sEPD_MBD_cut"].get();
+    m_hists.h2sEPD_CaloE_cut = m_hists2D["h2sEPD_CaloE_cut"].get();
+    m_hists.h2CaloE_MBD_cut = m_hists2D["h2CaloE_MBD_cut"].get();
+    m_hists.h2sEPD_North_South_cut = m_hists2D["h2sEPD_North_South_cut"].get();
+  }
+
   // Bind pointers for performance
   m_hists.h2sEPD_Centrality = m_hists2D["h2sEPD_Centrality"].get();
   m_hists.h2sEPD_MBD = m_hists2D["h2sEPD_MBD"].get();
@@ -213,6 +294,7 @@ void sEPDQA::process_events()
   m_events_total = n_entries;
   m_events_passed = 0;
   m_events_excluded_calo = 0;
+  m_events_passed_cut = 0;
 
   for (long long event = 0; event < n_entries; ++event)
   {
@@ -238,12 +320,32 @@ void sEPDQA::process_events()
     double mbd_total = m_event_data.mbd_charge_south + m_event_data.mbd_charge_north;
     double cent = m_event_data.centrality;
 
-    // Fill Core 2D Histograms
+    // Fill Core 2D Histograms (uncut set)
     m_hists.h2sEPD_Centrality->Fill(cent, sepd_total);
     m_hists.h2sEPD_MBD->Fill(mbd_total, sepd_total);
     m_hists.h2sEPD_CaloE->Fill(total_calo_e, sepd_total);
     m_hists.h2CaloE_MBD->Fill(mbd_total, total_calo_e);
     m_hists.h2sEPD_North_South->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
+
+    // Apply Calo-MBD cut if configured
+    if (m_has_calo_mbd_cut && m_profile_calo_mbd)
+    {
+      int bin = m_profile_calo_mbd->FindBin(mbd_total);
+      if (bin >= 1 && bin <= m_profile_calo_mbd->GetNbinsX())
+      {
+        double mean = m_profile_calo_mbd->GetBinContent(bin);
+        double sigma = m_profile_calo_mbd->GetBinError(bin);
+        if (sigma > 0.0 && std::abs(total_calo_e - mean) <= m_sigma_cut * sigma)
+        {
+          ++m_events_passed_cut;
+          m_hists.h2sEPD_Centrality_cut->Fill(cent, sepd_total);
+          m_hists.h2sEPD_MBD_cut->Fill(mbd_total, sepd_total);
+          m_hists.h2sEPD_CaloE_cut->Fill(total_calo_e, sepd_total);
+          m_hists.h2CaloE_MBD_cut->Fill(mbd_total, total_calo_e);
+          m_hists.h2sEPD_North_South_cut->Fill(m_event_data.sepd_charge_south, m_event_data.sepd_charge_north);
+        }
+      }
+    }
 
     if (m_verbosity > 0)
     {
@@ -277,9 +379,17 @@ void sEPDQA::print_summary() const
   double pct_passed = frac_passed * 100.0;
 
   std::cout << std::format("\n{:=^70}\n", " Event Processing Summary ");
-  std::cout << std::format(" Total Events Analyzed        : {}\n", m_events_total);
-  std::cout << std::format(" Passed (Total Calo E > 0)    : {} ({:.2f}% / fraction: {:.4f})\n", m_events_passed, pct_passed, frac_passed);
-  std::cout << std::format(" Excluded (Total Calo E <= 0) : {} ({:.2f}% / fraction: {:.4f})\n", m_events_excluded_calo, pct_excluded, frac_excluded);
+  std::cout << std::format(" Total Events Analyzed           : {}\n", m_events_total);
+  std::cout << std::format(" Passed (Total Calo E > 0)       : {} ({:.2f}% / fraction: {:.4f})\n", m_events_passed, pct_passed, frac_passed);
+  std::cout << std::format(" Excluded (Total Calo E <= 0)    : {} ({:.2f}% / fraction: {:.4f})\n", m_events_excluded_calo, pct_excluded, frac_excluded);
+  if (m_has_calo_mbd_cut)
+  {
+    double frac_passed_cut = m_events_passed > 0 ? static_cast<double>(m_events_passed_cut) / static_cast<double>(m_events_passed) : 0.0;
+    double pct_passed_cut = frac_passed_cut * 100.0;
+    std::cout << std::format(" Passed Calo-MBD Cut ({:.1f} sigma): {} ({:.2f}% of passed / {:.2f}% of total)\n",
+                             m_sigma_cut, m_events_passed_cut, pct_passed_cut,
+                             m_events_total > 0 ? static_cast<double>(m_events_passed_cut) * 100.0 / static_cast<double>(m_events_total) : 0.0);
+  }
   std::cout << std::format("{:=^70}\n\n", "");
 }
 
@@ -309,9 +419,9 @@ void sEPDQA::save_results() const
 }
 
 // Interactive ROOT macro function
-void sEPD_QA(const std::string &input_file = "tree.root", long long events = 0, const std::string &output_dir = ".")
+void sEPD_QA(const std::string &input_file = "tree.root", long long events = 0, const std::string &output_dir = ".", const std::string &calo_mbd_file = "", double sigma_cut = 3.5)
 {
-  sEPDQA analysis(input_file, events, output_dir);
+  sEPDQA analysis(input_file, events, output_dir, calo_mbd_file, sigma_cut);
   analysis.run();
 }
 
@@ -323,9 +433,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 2 || argc > 5)
+  if (argc < 2 || argc > 7)
   {
-    std::cout << "Usage: " << argv[0] << " input_file [events] [output_directory] [verbosity]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file [events] [output_directory] [verbosity] [calo_mbd_file] [sigma_cut]" << std::endl;
     return 1;
   }
 
@@ -334,6 +444,8 @@ int main(int argc, const char *const argv[])
   long long events = (argc >= ctr + 1) ? std::atoll(argv[ctr++]) : 0;
   std::string output_dir = (argc >= ctr + 1) ? argv[ctr++] : ".";
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
+  std::string calo_mbd_file = (argc >= ctr + 1) ? argv[ctr++] : "";
+  double sigma_cut = (argc >= ctr + 1) ? std::atof(argv[ctr++]) : 3.5;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -341,11 +453,16 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Events: {}\n", events);
   std::cout << std::format("Output Dir: {}\n", output_dir);
   std::cout << std::format("Verbosity: {}\n", verbosity);
+  if (!calo_mbd_file.empty())
+  {
+    std::cout << std::format("Calo-MBD File: {}\n", calo_mbd_file);
+    std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
+  }
   std::cout << std::format("{:#<20}\n", "");
 
   try
   {
-    sEPDQA analysis(input_file, events, output_dir);
+    sEPDQA analysis(input_file, events, output_dir, calo_mbd_file, sigma_cut);
     analysis.set_verbosity(verbosity);
     analysis.run();
   }

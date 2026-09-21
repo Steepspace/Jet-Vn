@@ -72,20 +72,30 @@ def create_sepd_qa_jobs(args):
     manager = CondorJobManager(args, job_name="sEPD QA")
     manager.add_file_to_check(args.sepd_macro)
     manager.add_file_to_check(args.sepd_bin)
+    if args.calo_mbd_file:
+        manager.add_file_to_check(args.calo_mbd_file)
     manager.validate_paths()
 
     files_per_job = args.files_per_job
 
-    manager.log_initialization({
+    init_info = {
         'Files Per Job': files_per_job,
         'Events': args.events if args.events else "All",
         'Verbosity': args.verbosity,
         'sEPD QA Macro': Path(args.sepd_macro).resolve(),
         'sEPD QA Bin': Path(args.sepd_bin).resolve(),
-    })
+    }
+    if args.calo_mbd_file:
+        init_info['Calo-MBD File'] = Path(args.calo_mbd_file).resolve()
+        init_info['Sigma Cut'] = args.sigma_cut
+
+    manager.log_initialization(init_info)
 
     files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.sepd_macro, args.sepd_bin])
+    extra_files = [args.sepd_macro, args.sepd_bin]
+    if args.calo_mbd_file:
+        extra_files.append(args.calo_mbd_file)
+    manager.copy_dependencies(extra_files=extra_files)
 
     run_trees = {}
     input_lines = manager.input_list.read_text(encoding='utf-8').splitlines()
@@ -117,7 +127,8 @@ def create_sepd_qa_jobs(args):
 
     manager.logger.info(f"Total jobs prepared: {total_jobs}")
 
-    arguments = f"{manager.output_dir / Path(args.sepd_bin).name} $(input_tree_list) {args.events} {manager.output_dir}/output {args.verbosity}"
+    calo_mbd_arg = f" {manager.output_dir / Path(args.calo_mbd_file).name} {args.sigma_cut}" if args.calo_mbd_file else ""
+    arguments = f"{manager.output_dir / Path(args.sepd_bin).name} $(input_tree_list) {args.events} {manager.output_dir}/output {args.verbosity}{calo_mbd_arg}"
     queue_arg = "input_tree_list from jobs.list"
 
     sub_file_name = f"{manager.condor_script.stem}.sub"
@@ -162,6 +173,8 @@ def setup_qa_subparsers(subparsers):
     sepd_qa.add_argument('-b', '--sepd-bin', type=str, default='bin/sEPD-QA', help='sEPD-QA Bin. Default: bin/sEPD-QA')
     sepd_qa.add_argument('-p', '--files-per-job', type=int, default=100, help='Number of trees per job list. Default: 100')
     sepd_qa.add_argument('-v', '--verbosity', type=int, default=0, help='Verbosity. Default: 0')
+    sepd_qa.add_argument('-c', '--calo-mbd-file', type=str, default=None, help='Optional ROOT file containing h2CaloE_MBD for sigma cut.')
+    sepd_qa.add_argument('--sigma-cut', type=float, default=3.5, help='Sigma cut threshold for Calo-MBD cut. Default: 3.5')
     sepd_qa.set_defaults(
         memory=1.0,
         condor_script='scripts/gensEPDQA.sh',

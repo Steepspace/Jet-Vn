@@ -10,6 +10,8 @@ input=${2}
 nEvents=${3:-0}
 submitDir=${4}
 verbosity=${5:-0}
+calo_mbd_file=${6:-""}
+sigma_cut=${7:-3.5}
 
 # extract runnumber from file name or first line
 run=$(head -n 1 "$input" | grep -oP '(?<=/)\d+(?=/tree/)' || head -n 1 "$input" | grep -oP '\d{5,8}')
@@ -41,7 +43,11 @@ printenv
 
 mkdir -p "$run"
 
-$sepdQA_bin "$input_file" "$nEvents" "$run" "$verbosity"
+if [ -n "$calo_mbd_file" ]; then
+    $sepdQA_bin "$input_file" "$nEvents" "$run" "$verbosity" "$calo_mbd_file" "$sigma_cut"
+else
+    $sepdQA_bin "$input_file" "$nEvents" "$run" "$verbosity"
+fi
 
 if [ $? -ne 0 ]; then
     echo "Error: sEPD-QA binary failed! Aborting transfer." >&2
