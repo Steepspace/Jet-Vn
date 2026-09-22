@@ -225,7 +225,9 @@ def make_ratio_overlay_plot(hist_data_list, run_number, output_path, xlabel="Cen
     fig, ax = plt.subplots(figsize=(8, 6))
 
     all_pos_ratios = []
-    for ratio_vals, edges, label, color in hist_data_list:
+    for item in hist_data_list:
+        ratio_vals, edges, label, color = item[0], item[1], item[2], item[3]
+        ls = item[4] if len(item) > 4 else '-'
         if xlim is not None:
             mask = (edges[1:] > xlim[0]) & (edges[:-1] < xlim[1])
             vis = ratio_vals[mask]
@@ -235,7 +237,7 @@ def make_ratio_overlay_plot(hist_data_list, run_number, output_path, xlabel="Cen
         if len(pos) > 0:
             all_pos_ratios.extend(pos)
 
-        hep.histplot((ratio_vals, edges), ax=ax, histtype='step', color=color, linewidth=2.5, label=label)
+        hep.histplot((ratio_vals, edges), ax=ax, histtype='step', color=color, linestyle=ls, linewidth=2.5, label=label)
 
     if hline is not None:
         ax.axhline(hline, color='gray', linestyle='--', linewidth=1.5, alpha=0.8)
@@ -539,7 +541,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                 )
                 plots_made += 1
 
-            # Overlay of zoomed ratio plots: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14
+            # Overlay of zoomed ratio plots: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14 (+ 10 < |z| < 60 cm)
             if "hCentrality_Trig14" in cent_ratios and "hCentralityZ150_Trig14" in cent_ratios and "hCentralityZOuter_Trig14" in cent_ratios:
                 r_t14, e_t14, t_t14 = cent_ratios["hCentrality_Trig14"]
                 r_z150_t14, e_z150_t14, t_z150_t14 = cent_ratios["hCentralityZ150_Trig14"]
@@ -552,6 +554,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                 label_zout_t14 = t_zout_t14 if t_zout_t14 else "10 cm < |z| < 150 cm and Trig 14"
                 label_zout_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_zout_t14).strip()
 
+                # 1) Original 3-way overlay: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14
                 output_path_z_trig14_overlay = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_zoom_ratio.png"
                 make_ratio_overlay_plot(
                     [
@@ -567,6 +570,36 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     hline=1.0,
                 )
                 plots_made += 1
+
+                # 2) Separate 4-way overlay including 10 cm < |z| < 60 cm extracted from 2D hist h2ZVertexCentrality_Trig14
+                if "h2ZVertexCentrality_Trig14" in file:
+                    hist2d_t14 = file["h2ZVertexCentrality_Trig14"]
+                    v_2d, ex_zvtx, ey_cent = hist2d_t14.to_numpy()
+                    z_centers = 0.5 * (ex_zvtx[:-1] + ex_zvtx[1:])
+                    mask_z60 = (np.abs(z_centers) > 10.0) & (np.abs(z_centers) < 60.0)
+                    v_z60 = np.sum(v_2d[mask_z60, :], axis=0)
+                    avg_z60 = compute_centrality_average(
+                        v_z60, ey_cent, cent_min=cent_flat_min, cent_max=cent_flat_max
+                    )
+                    if avg_z60 > 0:
+                        r_z60 = np.where(v_z60 > 0, v_z60 / avg_z60, 0.0)
+                        label_z60 = "10 cm < |z| < 60 cm and Trig 14"
+                        output_path_4way = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_Z60_zoom_ratio.png"
+                        make_ratio_overlay_plot(
+                            [
+                                (r_t14, e_t14, label_t14, "blue"),
+                                (r_z150_t14, e_z150_t14, label_z150_t14, "crimson"),
+                                (r_zout_t14, e_zout_t14, label_zout_t14, "forestgreen"),
+                                (r_z60, ey_cent, label_z60, "darkorange", "--"),
+                            ],
+                            run_number,
+                            output_path_4way,
+                            xlabel="Centrality [%]",
+                            ylabel="Ratio to Average",
+                            xlim=(-0.5, 10.5),
+                            hline=1.0,
+                        )
+                        plots_made += 1
 
             # 3. 1D Z vertex plot (full X projection of h2ZVertexCentrality)
             if "h2ZVertexCentrality" in file:
