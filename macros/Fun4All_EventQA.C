@@ -2,6 +2,8 @@
 #include <string>
 #include <iostream>
 #include <format>
+#include <vector>
+#include <fstream>
 
 // root includes --
 #include <TSystem.h>
@@ -28,6 +30,7 @@
 
 #include <calostatusskimmer/CaloStatusSkimmer.h>
 
+#include <sepdvalidation/EventSkip.h>
 #include <sepdvalidation/EventQA.h>
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
@@ -38,7 +41,10 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
                      const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                      const std::string& output = "test.root",
                      int nEvents = 100,
-                     const std::string& dbtag = "newcdbtag")
+                     int nSkip = 0,
+                     int event_id = 0,
+                     const std::string& dbtag = "newcdbtag",
+                     const std::string& event_list = "")
 {
   // Extract runnumber and segment from first file within list
   int runnumber = 0;
@@ -74,6 +80,9 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   std::cout << "input zdc: " << flist_dst_zdc << std::endl;
   std::cout << "output: " << output << std::endl;
   std::cout << "nEvents: " << nEvents << std::endl;
+  std::cout << "nSkip: " << nSkip << std::endl;
+  std::cout << "event_id: " << event_id << std::endl;
+  std::cout << "event_list: " << event_list << std::endl;
   std::cout << "dbtag: " << dbtag << std::endl;
   std::cout << "########################" << std::endl;
 
@@ -90,6 +99,20 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
 
   FlagHandler* flag = new FlagHandler();
   se->registerSubsystem(flag);
+
+  // Event Skip
+  EventSkip* evtSkip = new EventSkip();
+  evtSkip->set_skip(nSkip);
+  if (!event_list.empty())
+  {
+    evtSkip->set_event_ids(event_list);
+  }
+  else if (event_id != 0)
+  {
+    evtSkip->set_event_id(event_id);
+  }
+  evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  se->registerSubsystem(evtSkip);
 
   CaloStatusSkimmer* css = new CaloStatusSkimmer("CaloStatusSkimmer");
   se->registerSubsystem(css);
@@ -165,4 +188,16 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   std::cout << "All done!" << std::endl;
   gSystem->Exit(0);
   std::quick_exit(0);
+}
+
+// ----------------------------------------------------------------------------
+// Overloaded Wrapper for backwards-compatibility (without nSkip / event_id / event_list)
+// ----------------------------------------------------------------------------
+void Fun4All_EventQA(const std::string &flist_dst_calofit,
+                     const std::string &flist_dst_zdc,
+                     const std::string& output,
+                     int nEvents,
+                     const std::string& dbtag)
+{
+  Fun4All_EventQA(flist_dst_calofit, flist_dst_zdc, output, nEvents, /*nSkip=*/0, /*event_id=*/0, dbtag, /*event_list=*/"");
 }
