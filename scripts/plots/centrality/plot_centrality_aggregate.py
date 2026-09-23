@@ -1241,11 +1241,9 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
 
     output_path = Path(output_path)
     if output_path.is_dir() or output_path.suffix == "":
-        output_path = output_path / "centrality_metric_distribution.png"
+        output_path = output_path / "centrality_metric_distributions.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    zoomed_path = output_path.parent / "centrality_metric_distribution_zoomed.png"
-    alt_path = output_path.parent / "centrality_metric_distributions.png"
-    alt_zoomed_path = output_path.parent / "centrality_metric_distributions_zoomed.png"
+    zoomed_path = output_path.parent / "centrality_metric_distributions_zoomed.png"
 
     fig_z = None  # Zoomed figure if needed
 
@@ -1524,17 +1522,12 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
-    # Also save as centrality_metric_distributions.png for consistency
-    if alt_path != output_path:
-        fig.savefig(alt_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
     # Save zoomed figure if generated
     if fig_z is not None:
         fig_z.tight_layout()
         fig_z.savefig(zoomed_path, dpi=300, bbox_inches="tight")
-        if alt_zoomed_path != zoomed_path:
-            fig_z.savefig(alt_zoomed_path, dpi=300, bbox_inches="tight")
         plt.close(fig_z)
 
 
@@ -1643,7 +1636,7 @@ def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mo
             )
 
         # Generate the relevant metric distribution with vertical lines for the example runs
-        dist_plot_path = mode_dir / "centrality_metric_distribution.png"
+        dist_plot_path = mode_dir / "centrality_metric_distributions.png"
         plot_failure_mode_metric_distribution(
             metrics_list=metrics_list,
             failure_mode=mode,
