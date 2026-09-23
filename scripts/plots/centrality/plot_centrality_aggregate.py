@@ -980,25 +980,54 @@ def plot_centrality_1d_diagnostic(
     output_path,
     cent_flat_min=10.0,
     cent_flat_max=70.0,
-    is_good=False,
+    is_good=None,
     rank=None,
 ):
     """
     Generate a 2-panel 1D Centrality diagnostic plot (Events + Ratio to Plateau)
-    for a representative run (either a failure mode example or a top flat example).
+    for a representative run (failure mode example, top flat example, or user-specified run).
     """
     hep.style.use("ATLAS")
+
+    run_number = metric.get("run_number", metric.get("run"))
+    values = metric.get("values")
+    edges = metric.get("edges")
+
+    if (values is None or edges is None) and metric.get("file_path"):
+        try:
+            with uproot.open(metric["file_path"]) as f:
+                hist_name = metric.get("hist_name", "hCentrality")
+                if hist_name in f:
+                    values, edges = f[hist_name].to_numpy()
+                else:
+                    for k in f.keys():
+                        if "Centrality" in k:
+                            values, edges = f[k].to_numpy()
+                            break
+        except Exception as e:
+            print(f"Warning: Could not read ROOT file {metric.get('file_path')}: {e}")
+
+    if values is None or edges is None:
+        print(f"Warning: Cannot plot 1D diagnostic for run {run_number}: histogram data not found.")
+        return
+
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(9.5, 8.5), sharex=True, gridspec_kw={"height_ratios": [2.5, 1.8]}
     )
 
-    run_number = metric["run_number"]
-    values = metric["values"]
-    edges = metric["edges"]
-    bin_centers = metric.get("bin_centers", 0.5 * (edges[:-1] + edges[1:]))
-    ratios = metric["ratios"]
-    plateau_avg = metric["plateau_avg"]
-    total_events = metric["total_events"]
+    bin_centers = metric.get("bin_centers")
+    if bin_centers is None:
+        bin_centers = 0.5 * (edges[:-1] + edges[1:])
+
+    plateau_avg = metric.get("plateau_avg")
+    if plateau_avg is None:
+        plateau_avg = compute_centrality_average(values, edges, cent_min=cent_flat_min, cent_max=cent_flat_max)
+
+    ratios = metric.get("ratios")
+    if ratios is None:
+        ratios = np.where(values > 0, values / plateau_avg, 0.0) if plateau_avg > 0 else np.zeros(len(values))
+
+    total_events = metric.get("total_events", float(np.sum(values)))
 
     # 1. Top Panel: Events vs Centrality [%]
     hep.histplot((values, edges), ax=ax1, histtype="step", color="black", linewidth=2.0, label="Centrality Distribution")
@@ -1025,8 +1054,16 @@ def plot_centrality_1d_diagnostic(
     ax1.grid(True, linestyle="--", alpha=0.3)
 
     # Info banner in top panel - increased font size from 10 to 12.0
+    if is_good is None:
+        is_good = (metric.get("status") == "GOOD")
+
     if is_good:
-        rank_tag = f"Top Flat Example #{rank}" if rank is not None else "Top Flat Example"
+        if rank is not None:
+            rank_tag = f"Top Flat Example #{rank}"
+        elif title_suffix:
+            rank_tag = title_suffix
+        else:
+            rank_tag = "GOOD Run"
         info_text = (
             f"Run {run_number} | {rank_tag}\n"
             f"Total Events: {total_events:.2e}\n"
@@ -1034,16 +1071,19 @@ def plot_centrality_1d_diagnostic(
         )
         box_edge = "forestgreen"
     else:
-        flags_list = metric["status"].split(";")
+        flags_list = [f for f in str(metric.get("status", "")).split(";") if f]
         if len(flags_list) > 2:
             flags_text = "Flags: " + "; ".join(flags_list[:2]) + ";\n       " + "; ".join(flags_list[2:])
-        elif len(metric["status"]) > 32 and len(flags_list) > 1:
+        elif len(str(metric.get("status", ""))) > 32 and len(flags_list) > 1:
             flags_text = "Flags: " + flags_list[0] + ";\n       " + "; ".join(flags_list[1:])
+        elif flags_list:
+            flags_text = f"Flags: {metric.get('status')}"
         else:
-            flags_text = f"Flags: {metric['status']}"
+            flags_text = "Flags: Flagged Outlier"
 
+        tag = f"Example: {title_suffix}" if title_suffix else "Outlier Run"
         info_text = (
-            f"Run {run_number} | Example: {title_suffix}\n"
+            f"Run {run_number} | {tag}\n"
             f"Total Events: {total_events:.2e}\n"
             f"{flags_text}"
         )
@@ -1090,10 +1130,10 @@ def plot_centrality_1d_diagnostic(
         ax2.axhline(0.80, color="darkorange", linestyle=":", linewidth=1.3, label=r"Drop Cut ($R_{1-5\%} < 0.80$)")
 
     # Ratio metrics annotation - increased font size from 9.5 to 11.5
-    rms_str = f"{metric['rms_plat_pct']:.2f}%" if not np.isnan(metric['rms_plat_pct']) else "N/A"
-    slope_str = f"{metric['slope_per_10pct']:+.2f}%" if not np.isnan(metric['slope_per_10pct']) else "N/A"
-    r1_str = f"{metric['ratio_1']:.3f}" if not np.isnan(metric['ratio_1']) else "N/A"
-    r15_str = f"{metric['ratio_1_5']:.3f}" if not np.isnan(metric['ratio_1_5']) else "N/A"
+    rms_str = f"{metric.get('rms_plat_pct', np.nan):.2f}%" if not np.isnan(metric.get('rms_plat_pct', np.nan)) else "N/A"
+    slope_str = f"{metric.get('slope_per_10pct', np.nan):+.2f}%" if not np.isnan(metric.get('slope_per_10pct', np.nan)) else "N/A"
+    r1_str = f"{metric.get('ratio_1', np.nan):.3f}" if not np.isnan(metric.get('ratio_1', np.nan)) else "N/A"
+    r15_str = f"{metric.get('ratio_1_5', np.nan):.3f}" if not np.isnan(metric.get('ratio_1_5', np.nan)) else "N/A"
 
     ratio_metrics_text = (
         rf"Plateau RMS: {rms_str} (Cut: 4.5%)" + "\n" +
@@ -1149,6 +1189,22 @@ def plot_top_flat_example(metric, rank, output_path, cent_flat_min=10.0, cent_fl
         cent_flat_max=cent_flat_max,
         is_good=True,
         rank=rank,
+    )
+
+
+def plot_user_example(metric, output_path, cent_flat_min=10.0, cent_flat_max=70.0, title_suffix="User Specified"):
+    """
+    Generate a 2-panel 1D Centrality diagnostic plot (Events + Ratio to Plateau)
+    for a user-specified run.
+    """
+    is_good = (metric.get("status") == "GOOD")
+    return plot_centrality_1d_diagnostic(
+        metric=metric,
+        title_suffix=title_suffix,
+        output_path=output_path,
+        cent_flat_min=cent_flat_min,
+        cent_flat_max=cent_flat_max,
+        is_good=is_good,
     )
 
 
@@ -1650,7 +1706,49 @@ def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
     return selected_runs
 
 
-def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None, top_flat_runs=None):
+def generate_user_examples(metrics_list, output_dir, example_runs,
+                           cent_flat_min=10.0, cent_flat_max=70.0):
+    """
+    Generate 2-panel 1D centrality diagnostic example plots (Events + Ratio to Plateau)
+    for specific run numbers requested by the user.
+    Saves plots into output_dir / "user_examples" / run_<run>_centrality.png
+    Returns a list of run numbers that were successfully plotted.
+    """
+    if hasattr(metrics_list, "to_dict"):
+        metrics_list = metrics_list.to_dict("records")
+
+    if not example_runs:
+        return []
+
+    output_dir = Path(output_dir)
+    user_examples_dir = output_dir / "user_examples"
+    user_examples_dir.mkdir(parents=True, exist_ok=True)
+
+    run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
+    plotted_runs = []
+
+    for r in example_runs:
+        if r not in run_dict:
+            print(f"Warning: User-specified example run {r} not found in processed metrics.")
+            continue
+        d = run_dict[r]
+        plot_path = user_examples_dir / f"run_{r}_centrality.png"
+        plot_user_example(
+            metric=d,
+            output_path=plot_path,
+            cent_flat_min=cent_flat_min,
+            cent_flat_max=cent_flat_max,
+            title_suffix="User Specified",
+        )
+        plotted_runs.append(r)
+
+    if plotted_runs:
+        print(f"User-specified example plots generated for {len(plotted_runs)} run(s) in {user_examples_dir.resolve()}")
+
+    return plotted_runs
+
+
+def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None, top_flat_runs=None, user_example_runs=None):
     """
     Print an ASCII summary table of runs per failure mode to stdout
     and save it to centrality_qa_summary_table.txt in output_dir.
@@ -1714,13 +1812,25 @@ def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None
     if top_flat_runs:
         lines.append("-" * table_width)
         lines.append("TOP FLAT RUN EXAMPLES GENERATED (in top_flat_examples/):")
-        run_dict = {d["run_number"]: d for d in metrics_list}
+        run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
         for rank, r in enumerate(top_flat_runs, start=1):
             d = run_dict.get(r, {})
-            rms_val = f"{d.get('rms_plat_pct', np.nan):.2f}%"
-            slope_val = f"{d.get('slope_per_10pct', np.nan):+.2f}%"
-            evts_val = f"{float(d.get('total_events', 0)):.2e}"
+            rms_val = f"{d.get('rms_plat_pct', np.nan):.2f}%" if not np.isnan(d.get('rms_plat_pct', np.nan)) else "N/A"
+            slope_val = f"{d.get('slope_per_10pct', np.nan):+.2f}%" if not np.isnan(d.get('slope_per_10pct', np.nan)) else "N/A"
+            evts_val = f"{float(d.get('total_events', 0)):.2e}" if d.get('total_events') is not None else "N/A"
             lines.append(f"  Rank #{rank}: Run {r:<8} (Plateau RMS: {rms_val}, Slope: {slope_val}, Evts: {evts_val})  -> top_flat_examples/run_{r}_centrality.png")
+
+    if user_example_runs:
+        lines.append("-" * table_width)
+        lines.append("USER-SPECIFIED EXAMPLE RUNS GENERATED (in user_examples/):")
+        run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
+        for r in user_example_runs:
+            d = run_dict.get(r, {})
+            status_val = d.get("status", "UNKNOWN")
+            rms_val = f"{d.get('rms_plat_pct', np.nan):.2f}%" if not np.isnan(d.get('rms_plat_pct', np.nan)) else "N/A"
+            slope_val = f"{d.get('slope_per_10pct', np.nan):+.2f}%" if not np.isnan(d.get('slope_per_10pct', np.nan)) else "N/A"
+            evts_val = f"{float(d.get('total_events', 0)):.2e}" if d.get('total_events') is not None else "N/A"
+            lines.append(f"  Run {r:<8} (Status: {status_val}, Plateau RMS: {rms_val}, Slope: {slope_val}, Evts: {evts_val})  -> user_examples/run_{r}_centrality.png")
 
     lines.append("=" * table_width)
 
@@ -1779,6 +1889,9 @@ def main():
                         help="Number of representative example run plots to generate for top flattest runs (default: 3).")
     parser.add_argument("--no-top-flat-examples", action="store_true",
                         help="Disable generating top flat example plots.")
+    parser.add_argument("--example-runs", "--user-example-runs", "--user-runs",
+                        nargs="*", default=None,
+                        help="Specific run number(s) specified by user to generate 2-panel 1D centrality diagnostic example plots for.")
     parser.add_argument("files", nargs="*", type=Path, help="Positional list of ROOT file paths.")
     args = parser.parse_args()
 
@@ -1926,6 +2039,26 @@ def main():
             cent_flat_max=args.cent_flat_max,
         )
 
+    # 4c. Generate Example 1D Centrality Plots for User-Specified Runs
+    user_example_runs = []
+    if args.example_runs:
+        user_runs_to_plot = []
+        for item in args.example_runs:
+            for part in str(item).replace(",", " ").split():
+                try:
+                    user_runs_to_plot.append(int(part))
+                except ValueError:
+                    print(f"Warning: Could not parse '{part}' as a run number.")
+        if user_runs_to_plot:
+            print(f"Generating example 1D centrality plots for {len(user_runs_to_plot)} user-specified run(s)...")
+            user_example_runs = generate_user_examples(
+                metrics_list,
+                args.output_dir,
+                example_runs=user_runs_to_plot,
+                cent_flat_min=args.cent_flat_min,
+                cent_flat_max=args.cent_flat_max,
+            )
+
     # 5. Selective Detailed Plotting
     runs_to_detail = set()
     if not args.no_test_plots and args.test_runs:
@@ -1968,6 +2101,7 @@ def main():
         output_dir=args.output_dir,
         examples_map=examples_map,
         top_flat_runs=top_flat_runs,
+        user_example_runs=user_example_runs,
     )
 
     print(f"All Run Aggregate QA completed successfully. Results saved to {args.output_dir.resolve()}")
