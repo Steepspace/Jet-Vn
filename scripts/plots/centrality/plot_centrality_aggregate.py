@@ -864,17 +864,25 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
 
 
 
-def plot_ensemble_profile(data_list, output_path, test_runs=None):
+def plot_ensemble_profile(data_list, output_path, test_runs=None, subtitle=None):
     """
-    Plot 4: Ensemble Median & Percentile Envelope Profile with Overlaid Test Runs.
+    Plot 4: Ensemble Median & Percentile Envelope Profile.
     Excludes empty 0% centrality Bin 0 [-0.5, 0.5] (empty across all runs) and displays bins 1-99 (1% to 99% centrality).
     """
+    if hasattr(data_list, "to_dict"):
+        data_list = data_list.to_dict("records")
+
+    valid_data = [d for d in data_list if d.get("ratios") is not None and d.get("edges") is not None]
+    if not valid_data:
+        print(f"Warning: Cannot plot ensemble profile to {output_path}: no valid data found.")
+        return
+
     hep.style.use("ATLAS")
-    fig, ax = plt.subplots(figsize=(9, 7))
+    fig, ax = plt.subplots(figsize=(9.5, 7))
 
     # Exclude empty 0% centrality Bin 0 [-0.5, 0.5] (empty across all runs)
-    ratio_matrix = np.array([d["ratios"][1:] for d in data_list])
-    cent_edges = data_list[0]["edges"][1:]
+    ratio_matrix = np.array([d["ratios"][1:] for d in valid_data])
+    cent_edges = valid_data[0]["edges"][1:]
     bin_centers = 0.5 * (cent_edges[:-1] + cent_edges[1:])
 
     # Compute percentiles across runs for each centrality bin
@@ -884,37 +892,56 @@ def plot_ensemble_profile(data_list, output_path, test_runs=None):
     p02 = np.percentile(ratio_matrix, 2.5, axis=0)
     p97 = np.percentile(ratio_matrix, 97.5, axis=0)
 
-    # Shaded bands
-    ax.fill_between(bin_centers, p02, p97, color="silver", alpha=0.45, label=r"95% ($2\sigma$) Population Envelope")
-    ax.fill_between(bin_centers, p16, p84, color="gray", alpha=0.45, label=r"68% ($1\sigma$) Population Envelope")
+    # Distinct high-contrast colors for population envelopes (HEP Brazilian convention)
+    # 2-sigma (95% CL): Warm Gold
+    ax.fill_between(
+        bin_centers, p02, p97,
+        color="#f9c74f", alpha=0.55,
+        edgecolor="#d4ac0d", linewidth=0.8,
+        label=r"95% ($2\sigma$) Population Envelope",
+    )
+    # 1-sigma (68% CL): Vibrant Green
+    ax.fill_between(
+        bin_centers, p16, p84,
+        color="#2ca02c", alpha=0.65,
+        edgecolor="#1e8449", linewidth=0.8,
+        label=r"68% ($1\sigma$) Population Envelope",
+    )
+    # Ensemble Median: Solid Black
     ax.plot(bin_centers, p50, color="black", linewidth=2.5, label="Ensemble Median")
 
-    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1.5, alpha=0.8)
-
-    # Overlaid test runs
-    test_colors = ["blue", "crimson", "forestgreen", "darkorange", "purple"]
-    runs = [d["run_number"] for d in data_list]
-
-    if test_runs:
-        for idx, tr in enumerate(test_runs):
-            if tr in runs:
-                r_idx = runs.index(tr)
-                tr_ratios = ratio_matrix[r_idx]
-                color = test_colors[idx % len(test_colors)]
-                hep.histplot(
-                    (tr_ratios, cent_edges),
-                    ax=ax,
-                    histtype="step",
-                    color=color,
-                    linewidth=2.2,
-                    label=f"Test Run {tr}",
-                )
+    # Ideal flat plateau baseline (1.0)
+    ax.axhline(1.0, color="dimgray", linestyle="--", linewidth=1.5, alpha=0.85, label="Flat Baseline (1.0)")
 
     ax.set_xlim(0, 100)
     ax.set_ylim(0.0, 1.6)
     ax.set_xlabel("Centrality [%]", fontsize=15)
     ax.set_ylabel("Ratio to Plateau Average", fontsize=15)
-    ax.legend(loc="upper right", fontsize=12, frameon=True, framealpha=0.9)
+    ax.grid(True, linestyle="--", alpha=0.35, which="both")
+
+    # Reorder legend handles: Median, 1-sigma, 2-sigma, Baseline
+    handles, labels = ax.get_legend_handles_labels()
+    desired_order = [
+        "Ensemble Median",
+        r"68% ($1\sigma$) Population Envelope",
+        r"95% ($2\sigma$) Population Envelope",
+        "Flat Baseline (1.0)",
+    ]
+    handle_dict = dict(zip(labels, handles))
+    ordered_handles = [handle_dict[lbl] for lbl in desired_order if lbl in handle_dict]
+    ordered_labels = [lbl for lbl in desired_order if lbl in handle_dict]
+    ax.legend(ordered_handles, ordered_labels, loc="upper right", fontsize=12, frameon=True, framealpha=0.92)
+
+    if subtitle:
+        ax.text(
+            0.04, 0.94, subtitle,
+            transform=ax.transAxes,
+            fontsize=13,
+            fontweight="bold",
+            va="top",
+            ha="left",
+            bbox=dict(boxstyle="round,pad=0.45", facecolor="white", edgecolor="#aaaaaa", alpha=0.92),
+        )
 
     fig.tight_layout()
     output_path = Path(output_path)
@@ -1997,8 +2024,17 @@ def main():
     plot_ensemble_profile(
         metrics_list,
         args.output_dir / "centrality_ensemble_profile.png",
-        test_runs=args.test_runs,
+        subtitle=f"All Processed Runs (N = {n_total})",
     )
+    good_metrics = [d for d in metrics_list if d.get("status") == "GOOD"]
+    if good_metrics:
+        plot_ensemble_profile(
+            good_metrics,
+            args.output_dir / "centrality_ensemble_profile_good_runs.png",
+            subtitle=f"Good Runs (Passed All QA, N = {len(good_metrics)})",
+        )
+    else:
+        print("Warning: No runs passed all QA checks. Skipping centrality_ensemble_profile_good_runs.png.")
 
     # 3. Write Reports
     write_summary_reports(metrics_list, args.output_dir)
