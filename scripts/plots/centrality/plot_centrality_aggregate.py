@@ -458,6 +458,8 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
     Also generates individual single-plot figures for each metric if save_individual=True.
     """
     hep.style.use("ATLAS")
+    if hasattr(data_list, "to_dict"):
+        data_list = data_list.to_dict("records")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -467,89 +469,26 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
     r15s = [d["ratio_1_5"] for d in data_list if not np.isnan(d["ratio_1_5"])]
     nevts = [d["total_events"] for d in data_list if d["total_events"] > 0]
 
-    # 4-panel combined figure (2x2)
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    # Pre-calculate counts and percentages
+    n_fail_rms = int(np.sum(np.array(rms_vals) > max_rms_pct)) if len(rms_vals) > 0 else 0
+    pct_fail_rms = 100.0 * n_fail_rms / len(rms_vals) if len(rms_vals) > 0 else 0.0
+    n_pass_rms = len(rms_vals) - n_fail_rms
+    pct_pass_rms = 100.0 * n_pass_rms / len(rms_vals) if len(rms_vals) > 0 else 0.0
 
-    # RMS Flatness distribution
-    ax1 = axes[0, 0]
-    if len(rms_vals) > 0:
-        r_clipped = np.clip(rms_vals, 0, 10)
-        ax1.hist(r_clipped, bins=40, histtype="step", color="steelblue", linewidth=2.0)
-        ax1.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2, label=rf"Cut ({max_rms_pct}%)")
-        n_fail_rms = int(np.sum(np.array(rms_vals) > max_rms_pct))
-        pct_fail_rms = 100.0 * n_fail_rms / len(rms_vals)
-        n_pass_rms = len(rms_vals) - n_fail_rms
-        pct_pass_rms = 100.0 * n_pass_rms / len(rms_vals)
-        rms_box_text = (
-            rf"Pass ($\leq {max_rms_pct}\%$): {n_pass_rms:,} ({pct_pass_rms:.1f}%)" + "\n" +
-            rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)"
-        )
-        ax1.text(0.96, 0.78, rms_box_text, transform=ax1.transAxes, ha="right", va="top", fontsize=10.5,
-                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
-    ax1.set_xlabel("Plateau RMS Non-Flatness [%]")
-    ax1.set_ylabel("Runs")
-    ax1.set_yscale("log")
-    ax1.set_ylim(0.5, 3500)
-    ax1.legend(loc="upper right", fontsize=10.5)
-    ax1.grid(True, linestyle="--", alpha=0.3, which="both")
+    n_fail_slope = int(np.sum(np.abs(np.array(slopes)) > max_slope_per_10pct)) if len(slopes) > 0 else 0
+    pct_fail_slope = 100.0 * n_fail_slope / len(slopes) if len(slopes) > 0 else 0.0
+    n_pass_slope = len(slopes) - n_fail_slope
+    pct_pass_slope = 100.0 * n_pass_slope / len(slopes) if len(slopes) > 0 else 0.0
 
-    # Slope distribution
-    ax2 = axes[0, 1]
-    if len(slopes) > 0:
-        s_clipped = np.clip(slopes, -8, 8)
-        ax2.hist(s_clipped, bins=40, histtype="step", color="mediumseagreen", linewidth=2.0)
-        ax2.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2)
-        ax2.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2, label=rf"Tol ($\pm${max_slope_per_10pct}%)")
-        n_fail_slope = int(np.sum(np.abs(np.array(slopes)) > max_slope_per_10pct))
-        pct_fail_slope = 100.0 * n_fail_slope / len(slopes)
-        n_pass_slope = len(slopes) - n_fail_slope
-        pct_pass_slope = 100.0 * n_pass_slope / len(slopes)
-        slope_box_text = (
-            rf"In Tol: {n_pass_slope:,} ({pct_pass_slope:.1f}%)" + "\n" +
-            rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)"
-        )
-        ax2.text(0.04, 0.94, slope_box_text, transform=ax2.transAxes, ha="left", va="top", fontsize=10.5,
-                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
-    ax2.set_xlabel("Plateau Slope [% per 10% Cent]")
-    ax2.set_ylabel("Runs")
-    ax2.set_yscale("log")
-    ax2.set_ylim(0.5, 3500)
-    ax2.legend(loc="upper right", fontsize=10.5)
-    ax2.grid(True, linestyle="--", alpha=0.3, which="both")
-
-    # R1 and R1-5 distributions
-    ax3 = axes[1, 0]
-    if len(r1s) > 0:
-        r1_clipped = np.clip(r1s, 0.4, 2.0)
-        ax3.hist(r1_clipped, bins=35, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
-    if len(r15s) > 0:
-        r15_clipped = np.clip(r15s, 0.4, 2.0)
-        ax3.hist(r15_clipped, bins=35, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
-    ax3.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
-    ax3.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
-    ax3.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
-    n_spike = int(np.sum(np.array(r1s) > max_central_spike))
+    n_spike = int(np.sum(np.array(r1s) > max_central_spike)) if len(r1s) > 0 else 0
     pct_spike = 100.0 * n_spike / len(r1s) if len(r1s) > 0 else 0.0
-    n_drop = int(np.sum(np.array(r15s) < min_central_ratio))
+    n_drop = int(np.sum(np.array(r15s) < min_central_ratio)) if len(r15s) > 0 else 0
     pct_drop = 100.0 * n_drop / len(r15s) if len(r15s) > 0 else 0.0
-    ratio_box_text = (
-        rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
-        rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)"
-    )
-    ax3.text(0.96, 0.94, ratio_box_text, transform=ax3.transAxes, ha="right", va="top", fontsize=10.0,
-             bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
-    ax3.set_xlabel("Central Ratio to Plateau")
-    ax3.set_ylabel("Runs")
-    ax3.set_yscale("log")
-    ax3.set_ylim(0.5, 4500)
-    ax3.legend(loc="upper left", fontsize=9.2, frameon=True, framealpha=0.9)
-    ax3.grid(True, linestyle="--", alpha=0.3, which="both")
 
-    # Event count distribution (informational population statistics)
-    ax4 = axes[1, 1]
+    log_bins = None
+    evts_box_text = ""
     if len(nevts) > 0:
         log_bins = np.logspace(np.log10(max(1, min(nevts))), np.log10(max(nevts)), 40)
-        ax4.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0)
         median_evts = float(np.median(nevts))
         total_evts = float(np.sum(nevts))
         evts_box_text = (
@@ -557,6 +496,87 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
             rf"Median: {median_evts:.2e} evts/run" + "\n" +
             rf"Total: {total_evts:.2e} events"
         )
+
+    # -------------------------------------------------------------
+    # 1. Unzoomed 4-panel combined figure (Full Outlier Range)
+    # -------------------------------------------------------------
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+    # RMS Flatness distribution (Unzoomed)
+    ax1 = axes[0, 0]
+    if len(rms_vals) > 0:
+        x1_max = max(12.0, max(rms_vals) * 1.08)
+        bins1 = np.linspace(0, x1_max, 50)
+        ax1.hist(rms_vals, bins=bins1, histtype="step", color="steelblue", linewidth=2.0)
+        ax1.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2, label=rf"Cut ({max_rms_pct}%)")
+        rms_box_text = (
+            rf"Pass ($\leq {max_rms_pct}\%$): {n_pass_rms:,} ({pct_pass_rms:.1f}%)" + "\n" +
+            rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)" + "\n" +
+            rf"Max RMS: {max(rms_vals):.1f}%"
+        )
+        ax1.text(0.96, 0.78, rms_box_text, transform=ax1.transAxes, ha="right", va="top", fontsize=10.0,
+                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax1.set_xlim(0, x1_max)
+    ax1.set_xlabel("Plateau RMS Non-Flatness [%]")
+    ax1.set_ylabel("Runs")
+    ax1.set_yscale("log")
+    ax1.set_ylim(0.5, 3500)
+    ax1.legend(loc="upper right", fontsize=10.5)
+    ax1.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # Slope distribution (Unzoomed)
+    ax2 = axes[0, 1]
+    if len(slopes) > 0:
+        x2_min = min(-5.0, min(slopes) * 1.2)
+        x2_max = max(6.0, max(slopes) * 1.15)
+        bins2 = np.linspace(x2_min, x2_max, 55)
+        ax2.hist(slopes, bins=bins2, histtype="step", color="mediumseagreen", linewidth=2.0)
+        ax2.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2)
+        ax2.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2, label=rf"Tol ($\pm${max_slope_per_10pct}%)")
+        slope_box_text = (
+            rf"In Tol: {n_pass_slope:,} ({pct_pass_slope:.1f}%)" + "\n" +
+            rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)" + "\n" +
+            rf"Max Slope: {max(slopes):+.1f}%"
+        )
+        ax2.text(0.04, 0.94, slope_box_text, transform=ax2.transAxes, ha="left", va="top", fontsize=10.0,
+                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax2.set_xlim(x2_min, x2_max)
+    ax2.set_xlabel("Plateau Slope [% per 10% Cent]")
+    ax2.set_ylabel("Runs")
+    ax2.set_yscale("log")
+    ax2.set_ylim(0.5, 3500)
+    ax2.legend(loc="upper right", fontsize=10.5)
+    ax2.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # R1 and R1-5 distributions (Unzoomed)
+    ax3 = axes[1, 0]
+    if len(r1s) > 0 and len(r15s) > 0:
+        x3_max = max(2.5, max(r1s) * 1.08)
+        bins3 = np.linspace(0, x3_max, 55)
+        ax3.hist(r1s, bins=bins3, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
+        ax3.hist(r15s, bins=bins3, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
+        ax3.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
+        ax3.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
+        ax3.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
+        ratio_box_text = (
+            rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
+            rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)" + "\n" +
+            rf"Max $R_{{1\%}}$: {max(r1s):.2f}"
+        )
+        ax3.text(0.96, 0.94, ratio_box_text, transform=ax3.transAxes, ha="right", va="top", fontsize=9.8,
+                 bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax3.set_xlim(0, x3_max)
+    ax3.set_xlabel("Central Ratio to Plateau")
+    ax3.set_ylabel("Runs")
+    ax3.set_yscale("log")
+    ax3.set_ylim(0.5, 4500)
+    ax3.legend(loc="upper left", fontsize=9.2, frameon=True, framealpha=0.9)
+    ax3.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # Event count distribution
+    ax4 = axes[1, 1]
+    if len(nevts) > 0 and log_bins is not None:
+        ax4.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0)
         ax4.text(0.04, 0.94, evts_box_text, transform=ax4.transAxes, ha="left", va="top", fontsize=10.5,
                  bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
         ax4.set_xscale("log")
@@ -570,25 +590,119 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    # Individual single-plot images
+    # -------------------------------------------------------------
+    # 2. Zoomed 4-panel combined figure (Threshold Focus)
+    # -------------------------------------------------------------
+    zoomed_combined_path = output_path.parent / f"{output_path.stem}_zoomed.png"
+    fig_z, axes_z = plt.subplots(2, 2, figsize=(12, 10))
+
+    # Panel 1: RMS Zoomed [0, 10]
+    ax1_z = axes_z[0, 0]
+    if len(rms_vals) > 0:
+        r_c = np.clip(rms_vals, 0, 10)
+        ax1_z.hist(r_c, bins=40, histtype="step", color="steelblue", linewidth=2.0)
+        ax1_z.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2, label=rf"Cut ({max_rms_pct}%)")
+        rms_box_text_z = (
+            rf"Pass ($\leq {max_rms_pct}\%$): {n_pass_rms:,} ({pct_pass_rms:.1f}%)" + "\n" +
+            rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)" + "\n" +
+            rf"(Clipped at 10%)"
+        )
+        ax1_z.text(0.96, 0.78, rms_box_text_z, transform=ax1_z.transAxes, ha="right", va="top", fontsize=10.0,
+                   bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax1_z.set_xlim(0, 10)
+    ax1_z.set_xlabel("Plateau RMS Non-Flatness [%]")
+    ax1_z.set_ylabel("Runs")
+    ax1_z.set_yscale("log")
+    ax1_z.set_ylim(0.5, 3500)
+    ax1_z.legend(loc="upper right", fontsize=10.5)
+    ax1_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # Panel 2: Slope Zoomed [-6, 6]
+    ax2_z = axes_z[0, 1]
+    if len(slopes) > 0:
+        s_c = np.clip(slopes, -6, 6)
+        ax2_z.hist(s_c, bins=40, histtype="step", color="mediumseagreen", linewidth=2.0)
+        ax2_z.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2)
+        ax2_z.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2, label=rf"Tol ($\pm${max_slope_per_10pct}%)")
+        slope_box_text_z = (
+            rf"In Tol: {n_pass_slope:,} ({pct_pass_slope:.1f}%)" + "\n" +
+            rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)" + "\n" +
+            rf"(Clipped at $\pm$6%)"
+        )
+        ax2_z.text(0.04, 0.94, slope_box_text_z, transform=ax2_z.transAxes, ha="left", va="top", fontsize=10.0,
+                   bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax2_z.set_xlim(-6, 6)
+    ax2_z.set_xlabel("Plateau Slope [% per 10% Cent]")
+    ax2_z.set_ylabel("Runs")
+    ax2_z.set_yscale("log")
+    ax2_z.set_ylim(0.5, 3500)
+    ax2_z.legend(loc="upper right", fontsize=10.5)
+    ax2_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # Panel 3: Central Ratios Zoomed [0.4, 2.0]
+    ax3_z = axes_z[1, 0]
+    if len(r1s) > 0 and len(r15s) > 0:
+        r1_c = np.clip(r1s, 0.4, 2.0)
+        r15_c = np.clip(r15s, 0.4, 2.0)
+        bins3_z = np.linspace(0.4, 2.0, 35)
+        ax3_z.hist(r1_c, bins=bins3_z, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
+        ax3_z.hist(r15_c, bins=bins3_z, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
+        ax3_z.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
+        ax3_z.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
+        ax3_z.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
+        ratio_box_text_z = (
+            rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
+            rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)" + "\n" +
+            rf"(Clipped at [0.4, 2.0])"
+        )
+        ax3_z.text(0.96, 0.94, ratio_box_text_z, transform=ax3_z.transAxes, ha="right", va="top", fontsize=9.8,
+                   bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax3_z.set_xlim(0.4, 2.0)
+    ax3_z.set_xlabel("Central Ratio to Plateau")
+    ax3_z.set_ylabel("Runs")
+    ax3_z.set_yscale("log")
+    ax3_z.set_ylim(0.5, 4500)
+    ax3_z.legend(loc="upper left", fontsize=9.2, frameon=True, framealpha=0.9)
+    ax3_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    # Panel 4: Events
+    ax4_z = axes_z[1, 1]
+    if len(nevts) > 0 and log_bins is not None:
+        ax4_z.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0)
+        ax4_z.text(0.04, 0.94, evts_box_text, transform=ax4_z.transAxes, ha="left", va="top", fontsize=10.5,
+                   bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        ax4_z.set_xscale("log")
+    ax4_z.set_xlabel("Total Events per Run")
+    ax4_z.set_ylabel("Runs")
+    ax4_z.set_yscale("log")
+    ax4_z.set_ylim(0.5, 3500)
+    ax4_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    fig_z.tight_layout()
+    fig_z.savefig(zoomed_combined_path, dpi=300, bbox_inches="tight")
+    plt.close(fig_z)
+
+    # -------------------------------------------------------------
+    # 3. Individual single-plot images (both unzoomed & zoomed)
+    # -------------------------------------------------------------
     if save_individual:
         stem = output_path.stem
-        # 1. Single RMS
+
+        # 1a. Single RMS (Unzoomed)
         fig1, ax1_s = plt.subplots(figsize=(9, 6.5))
         if len(rms_vals) > 0:
-            r_clipped = np.clip(rms_vals, 0, 10)
-            ax1_s.hist(r_clipped, bins=40, histtype="step", color="steelblue", linewidth=2.0)
+            x1_max = max(12.0, max(rms_vals) * 1.08)
+            bins1 = np.linspace(0, x1_max, 50)
+            ax1_s.hist(rms_vals, bins=bins1, histtype="step", color="steelblue", linewidth=2.0)
             ax1_s.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2, label=rf"Cut ({max_rms_pct}%)")
-            n_fail_rms = int(np.sum(np.array(rms_vals) > max_rms_pct))
-            pct_fail_rms = 100.0 * n_fail_rms / len(rms_vals)
-            n_pass_rms = len(rms_vals) - n_fail_rms
-            pct_pass_rms = 100.0 * n_pass_rms / len(rms_vals)
             rms_box_text = (
                 rf"Pass ($\leq {max_rms_pct}\%$): {n_pass_rms:,} ({pct_pass_rms:.1f}%)" + "\n" +
-                rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)"
+                rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)" + "\n" +
+                rf"Max RMS: {max(rms_vals):.1f}%"
             )
             ax1_s.text(0.96, 0.78, rms_box_text, transform=ax1_s.transAxes, ha="right", va="top", fontsize=11.5,
                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax1_s.set_xlim(0, x1_max)
         ax1_s.set_xlabel("Plateau RMS Non-Flatness [%]", fontsize=15)
         ax1_s.set_ylabel("Runs", fontsize=15)
         ax1_s.set_yscale("log")
@@ -599,23 +713,47 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
         fig1.savefig(output_path.parent / f"{stem}_rms.png", dpi=300, bbox_inches="tight")
         plt.close(fig1)
 
-        # 2. Single Slope
+        # 1b. Single RMS (Zoomed)
+        fig1_z, ax1_sz = plt.subplots(figsize=(9, 6.5))
+        if len(rms_vals) > 0:
+            r_c = np.clip(rms_vals, 0, 10)
+            ax1_sz.hist(r_c, bins=40, histtype="step", color="steelblue", linewidth=2.0)
+            ax1_sz.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2, label=rf"Cut ({max_rms_pct}%)")
+            rms_box_text_z = (
+                rf"Pass ($\leq {max_rms_pct}\%$): {n_pass_rms:,} ({pct_pass_rms:.1f}%)" + "\n" +
+                rf"Fail (> {max_rms_pct}%): {n_fail_rms:,} ({pct_fail_rms:.1f}%)" + "\n" +
+                rf"(Clipped at 10%)"
+            )
+            ax1_sz.text(0.96, 0.78, rms_box_text_z, transform=ax1_sz.transAxes, ha="right", va="top", fontsize=11.5,
+                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax1_sz.set_xlim(0, 10)
+        ax1_sz.set_xlabel("Plateau RMS Non-Flatness [%]", fontsize=15)
+        ax1_sz.set_ylabel("Runs", fontsize=15)
+        ax1_sz.set_yscale("log")
+        ax1_sz.set_ylim(0.5, 3500)
+        ax1_sz.legend(loc="upper right", fontsize=12)
+        ax1_sz.grid(True, linestyle="--", alpha=0.3, which="both")
+        fig1_z.tight_layout()
+        fig1_z.savefig(output_path.parent / f"{stem}_rms_zoomed.png", dpi=300, bbox_inches="tight")
+        plt.close(fig1_z)
+
+        # 2a. Single Slope (Unzoomed)
         fig2, ax2_s = plt.subplots(figsize=(9, 6.5))
         if len(slopes) > 0:
-            s_clipped = np.clip(slopes, -8, 8)
-            ax2_s.hist(s_clipped, bins=40, histtype="step", color="mediumseagreen", linewidth=2.0)
+            x2_min = min(-5.0, min(slopes) * 1.2)
+            x2_max = max(6.0, max(slopes) * 1.15)
+            bins2 = np.linspace(x2_min, x2_max, 55)
+            ax2_s.hist(slopes, bins=bins2, histtype="step", color="mediumseagreen", linewidth=2.0)
             ax2_s.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2)
             ax2_s.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2, label=rf"Tol ($\pm${max_slope_per_10pct}%)")
-            n_fail_slope = int(np.sum(np.abs(np.array(slopes)) > max_slope_per_10pct))
-            pct_fail_slope = 100.0 * n_fail_slope / len(slopes)
-            n_pass_slope = len(slopes) - n_fail_slope
-            pct_pass_slope = 100.0 * n_pass_slope / len(slopes)
             slope_box_text = (
                 rf"In Tol: {n_pass_slope:,} ({pct_pass_slope:.1f}%)" + "\n" +
-                rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)"
+                rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)" + "\n" +
+                rf"Max Slope: {max(slopes):+.1f}%"
             )
             ax2_s.text(0.04, 0.94, slope_box_text, transform=ax2_s.transAxes, ha="left", va="top", fontsize=11.5,
                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax2_s.set_xlim(x2_min, x2_max)
         ax2_s.set_xlabel("Plateau Slope [% per 10% Centrality]", fontsize=15)
         ax2_s.set_ylabel("Runs", fontsize=15)
         ax2_s.set_yscale("log")
@@ -626,27 +764,49 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
         fig2.savefig(output_path.parent / f"{stem}_slope.png", dpi=300, bbox_inches="tight")
         plt.close(fig2)
 
-        # 3. Single Ratios
+        # 2b. Single Slope (Zoomed)
+        fig2_z, ax2_sz = plt.subplots(figsize=(9, 6.5))
+        if len(slopes) > 0:
+            s_c = np.clip(slopes, -6, 6)
+            ax2_sz.hist(s_c, bins=40, histtype="step", color="mediumseagreen", linewidth=2.0)
+            ax2_sz.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2)
+            ax2_sz.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2, label=rf"Tol ($\pm${max_slope_per_10pct}%)")
+            slope_box_text_z = (
+                rf"In Tol: {n_pass_slope:,} ({pct_pass_slope:.1f}%)" + "\n" +
+                rf"Fail (> $\pm${max_slope_per_10pct}%): {n_fail_slope:,} ({pct_fail_slope:.1f}%)" + "\n" +
+                rf"(Clipped at $\pm$6%)"
+            )
+            ax2_sz.text(0.04, 0.94, slope_box_text_z, transform=ax2_sz.transAxes, ha="left", va="top", fontsize=11.5,
+                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax2_sz.set_xlim(-6, 6)
+        ax2_sz.set_xlabel("Plateau Slope [% per 10% Centrality]", fontsize=15)
+        ax2_sz.set_ylabel("Runs", fontsize=15)
+        ax2_sz.set_yscale("log")
+        ax2_sz.set_ylim(0.5, 3500)
+        ax2_sz.legend(loc="upper right", fontsize=12)
+        ax2_sz.grid(True, linestyle="--", alpha=0.3, which="both")
+        fig2_z.tight_layout()
+        fig2_z.savefig(output_path.parent / f"{stem}_slope_zoomed.png", dpi=300, bbox_inches="tight")
+        plt.close(fig2_z)
+
+        # 3a. Single Ratios (Unzoomed)
         fig3, ax3_s = plt.subplots(figsize=(9, 6.5))
-        if len(r1s) > 0:
-            r1_clipped = np.clip(r1s, 0.4, 2.0)
-            ax3_s.hist(r1_clipped, bins=35, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
-        if len(r15s) > 0:
-            r15_clipped = np.clip(r15s, 0.4, 2.0)
-            ax3_s.hist(r15_clipped, bins=35, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
-        ax3_s.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
-        ax3_s.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
-        ax3_s.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
-        n_spike = int(np.sum(np.array(r1s) > max_central_spike))
-        pct_spike = 100.0 * n_spike / len(r1s) if len(r1s) > 0 else 0.0
-        n_drop = int(np.sum(np.array(r15s) < min_central_ratio))
-        pct_drop = 100.0 * n_drop / len(r15s) if len(r15s) > 0 else 0.0
-        ratio_box_text = (
-            rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
-            rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)"
-        )
-        ax3_s.text(0.96, 0.94, ratio_box_text, transform=ax3_s.transAxes, ha="right", va="top", fontsize=11.0,
-                   bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+        if len(r1s) > 0 and len(r15s) > 0:
+            x3_max = max(2.5, max(r1s) * 1.08)
+            bins3 = np.linspace(0, x3_max, 55)
+            ax3_s.hist(r1s, bins=bins3, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
+            ax3_s.hist(r15s, bins=bins3, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
+            ax3_s.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
+            ax3_s.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
+            ax3_s.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
+            ratio_box_text = (
+                rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
+                rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)" + "\n" +
+                rf"Max $R_{{1\%}}$: {max(r1s):.2f}"
+            )
+            ax3_s.text(0.96, 0.94, ratio_box_text, transform=ax3_s.transAxes, ha="right", va="top", fontsize=11.0,
+                       bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax3_s.set_xlim(0, x3_max)
         ax3_s.set_xlabel("Central Ratio to Plateau", fontsize=15)
         ax3_s.set_ylabel("Runs", fontsize=15)
         ax3_s.set_yscale("log")
@@ -657,18 +817,39 @@ def plot_metric_distributions(data_list, output_path, max_rms_pct=4.5, max_slope
         fig3.savefig(output_path.parent / f"{stem}_ratios.png", dpi=300, bbox_inches="tight")
         plt.close(fig3)
 
+        # 3b. Single Ratios (Zoomed)
+        fig3_z, ax3_sz = plt.subplots(figsize=(9, 6.5))
+        if len(r1s) > 0 and len(r15s) > 0:
+            r1_c = np.clip(r1s, 0.4, 2.0)
+            r15_c = np.clip(r15s, 0.4, 2.0)
+            bins3_z = np.linspace(0.4, 2.0, 35)
+            ax3_sz.hist(r1_c, bins=bins3_z, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ (1% Centrality)")
+            ax3_sz.hist(r15_c, bins=bins3_z, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ (1–5% Centrality)")
+            ax3_sz.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
+            ax3_sz.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_central_spike})")
+            ax3_sz.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_central_ratio})")
+            ratio_box_text_z = (
+                rf"Spike Fail (> {max_central_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
+                rf"Drop Fail (< {min_central_ratio}): {n_drop:,} ({pct_drop:.1f}%)" + "\n" +
+                rf"(Clipped at [0.4, 2.0])"
+            )
+            ax3_sz.text(0.96, 0.94, ratio_box_text_z, transform=ax3_sz.transAxes, ha="right", va="top", fontsize=11.0,
+                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+            ax3_sz.set_xlim(0.4, 2.0)
+        ax3_sz.set_xlabel("Central Ratio to Plateau", fontsize=15)
+        ax3_sz.set_ylabel("Runs", fontsize=15)
+        ax3_sz.set_yscale("log")
+        ax3_sz.set_ylim(0.5, 4500)
+        ax3_sz.legend(loc="upper left", fontsize=10.5, frameon=True, framealpha=0.9)
+        ax3_sz.grid(True, linestyle="--", alpha=0.3, which="both")
+        fig3_z.tight_layout()
+        fig3_z.savefig(output_path.parent / f"{stem}_ratios_zoomed.png", dpi=300, bbox_inches="tight")
+        plt.close(fig3_z)
+
         # 4. Single Events (informational population statistics)
         fig4, ax4_s = plt.subplots(figsize=(9, 6.5))
-        if len(nevts) > 0:
-            log_bins = np.logspace(np.log10(max(1, min(nevts))), np.log10(max(nevts)), 40)
+        if len(nevts) > 0 and log_bins is not None:
             ax4_s.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0)
-            median_evts = float(np.median(nevts))
-            total_evts = float(np.sum(nevts))
-            evts_box_text = (
-                rf"Total Runs: {len(nevts):,}" + "\n" +
-                rf"Median: {median_evts:.2e} evts/run" + "\n" +
-                rf"Total: {total_evts:.2e} events"
-            )
             ax4_s.text(0.04, 0.94, evts_box_text, transform=ax4_s.transAxes, ha="left", va="top", fontsize=11.5,
                        bbox=dict(boxstyle="round,pad=0.38", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
             ax4_s.set_xscale("log")
@@ -973,11 +1154,344 @@ def plot_top_flat_example(metric, rank, output_path, cent_flat_min=10.0, cent_fl
 
 
 
+def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_runs, output_path,
+                                          max_rms_pct=4.5, max_dev_pct=8.0,
+                                          max_slope_per_10pct=2.5, max_central_spike=1.30,
+                                          min_central_ratio=0.80):
+    """
+    Generate a version of the relevant centrality_metric_distributions plot for a specific
+    failure mode, showing the overall run population distribution and vertical lines marking
+    where the representative example runs fall to demonstrate how and by how much they failed.
+    """
+    if hasattr(metrics_list, "to_dict"):
+        metrics_list = metrics_list.to_dict("records")
+    if not example_runs:
+        return
+
+    run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
+    example_dicts = [run_dict[r] for r in example_runs if r in run_dict]
+    if not example_dicts:
+        return
+
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+
+    # Distinct styles for the example run lines
+    line_styles = [
+        {"color": "#800080", "linestyle": "-.", "linewidth": 2.0},  # Purple
+        {"color": "#d95f02", "linestyle": ":",  "linewidth": 2.4},  # Dark Orange
+        {"color": "#1b9e77", "linestyle": "--", "linewidth": 2.0},  # Teal
+        {"color": "#e7298a", "linestyle": "-",  "linewidth": 2.0},  # Pink fallback
+    ]
+
+    output_path = Path(output_path)
+    if output_path.is_dir() or output_path.suffix == "":
+        output_path = output_path / "centrality_metric_distribution.png"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    zoomed_path = output_path.parent / "centrality_metric_distribution_zoomed.png"
+    alt_path = output_path.parent / "centrality_metric_distributions.png"
+    alt_zoomed_path = output_path.parent / "centrality_metric_distributions_zoomed.png"
+
+    fig_z = None  # Zoomed figure if needed
+
+    if failure_mode == "FLAG_NON_FLAT":
+        rms_vals = [float(d["rms_plat_pct"]) for d in metrics_list if not np.isnan(d.get("rms_plat_pct", np.nan))]
+        run_vals = [float(d.get("rms_plat_pct", 0.0)) for d in example_dicts]
+
+        # 1. Unzoomed (Full population outlier range)
+        x_min = 0.0
+        x_max = max(12.0, max(rms_vals) * 1.08 if rms_vals else 12.0)
+        bins = np.linspace(x_min, x_max, 55)
+
+        ax.hist(rms_vals, bins=bins, histtype="step", color="steelblue", linewidth=2.0, label="All Runs Distribution")
+        ax.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2.2, label=f"Flatness Cut ({max_rms_pct}%)")
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                       label=f"Example Run {d.get('run_number', d.get('run'))} (RMS = {val:.2f}%)")
+
+        ax.set_xlabel("Plateau RMS Non-Flatness [%]", fontsize=15)
+        ax.set_ylabel("Runs", fontsize=15)
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, 3500)
+        ax.set_xlim(x_min, x_max)
+        ax.legend(loc="upper right", fontsize=11, frameon=True, framealpha=0.92)
+        ax.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text = (
+            r"$\bf{FLAG\_NON\_FLAT\ (Unzoomed)}$" + "\n" +
+            f"Cut: RMS > {max_rms_pct}% (or MaxDev > {max_dev_pct}%)\n" +
+            f"Population Max: {max(rms_vals):.1f}%\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax.text(0.04, 0.94, info_text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+        # 2. Zoomed (Detailed view around threshold [0, 10%])
+        fig_z, ax_z = plt.subplots(figsize=(9, 6.5))
+        z_min, z_max = 0.0, 10.0
+        r_clipped = np.clip(rms_vals, z_min, z_max)
+        ax_z.hist(r_clipped, bins=45, histtype="step", color="steelblue", linewidth=2.0, label="All Runs (Clipped at 10%)")
+        ax_z.axvline(max_rms_pct, color="crimson", linestyle="--", linewidth=2.2, label=f"Flatness Cut ({max_rms_pct}%)")
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax_z.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                         label=f"Example Run {d.get('run_number', d.get('run'))} (RMS = {val:.2f}%)")
+
+        ax_z.set_xlabel("Plateau RMS Non-Flatness [%]", fontsize=15)
+        ax_z.set_ylabel("Runs", fontsize=15)
+        ax_z.set_yscale("log")
+        ax_z.set_ylim(0.5, 3500)
+        ax_z.set_xlim(z_min, z_max)
+        ax_z.legend(loc="upper right", fontsize=11, frameon=True, framealpha=0.92)
+        ax_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text_z = (
+            r"$\bf{FLAG\_NON\_FLAT\ (Zoomed)}$" + "\n" +
+            f"Cut: RMS > {max_rms_pct}%\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax_z.text(0.04, 0.94, info_text_z, transform=ax_z.transAxes, ha="left", va="top", fontsize=11.0,
+                  bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+    elif failure_mode == "FLAG_SLOPE_DRIFT":
+        slopes = [float(d["slope_per_10pct"]) for d in metrics_list if not np.isnan(d.get("slope_per_10pct", np.nan))]
+        run_vals = [float(d.get("slope_per_10pct", 0.0)) for d in example_dicts]
+
+        # 1. Unzoomed (Full population outlier range)
+        x_min = min(-5.0, min(slopes) * 1.2 if slopes else -5.0)
+        x_max = max(6.0, max(slopes) * 1.15 if slopes else 6.0)
+        bins = np.linspace(x_min, x_max, 60)
+
+        ax.hist(slopes, bins=bins, histtype="step", color="mediumseagreen", linewidth=2.0, label="All Runs Distribution")
+        ax.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2.2, label=rf"Tolerance Cut ($\pm${max_slope_per_10pct}%)")
+        ax.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2.2)
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                       label=f"Example Run {d.get('run_number', d.get('run'))} (Slope = {val:+.2f}%)")
+
+        ax.set_xlabel("Plateau Slope [% per 10% Centrality]", fontsize=15)
+        ax.set_ylabel("Runs", fontsize=15)
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, 3500)
+        ax.set_xlim(x_min, x_max)
+        ax.legend(loc="upper right", fontsize=11, frameon=True, framealpha=0.92)
+        ax.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text = (
+            r"$\bf{FLAG\_SLOPE\_DRIFT\ (Unzoomed)}$" + "\n" +
+            f"Tolerance: |Slope| > {max_slope_per_10pct}%\n" +
+            f"Population Max: {max(slopes):+.1f}%\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax.text(0.04, 0.94, info_text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+        # 2. Zoomed (Detailed view around tolerance cut [-6%, +6%])
+        fig_z, ax_z = plt.subplots(figsize=(9, 6.5))
+        z_min, z_max = -6.0, 6.0
+        s_clipped = np.clip(slopes, z_min, z_max)
+        ax_z.hist(s_clipped, bins=40, histtype="step", color="mediumseagreen", linewidth=2.0, label=r"All Runs (Bulk in $\pm$6%)")
+        ax_z.axvline(max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2.2, label=rf"Tolerance Cut ($\pm${max_slope_per_10pct}%)")
+        ax_z.axvline(-max_slope_per_10pct, color="crimson", linestyle="--", linewidth=2.2)
+
+        ax_z.set_xlabel("Plateau Slope [% per 10% Centrality]", fontsize=15)
+        ax_z.set_ylabel("Runs", fontsize=15)
+        ax_z.set_yscale("log")
+        ax_z.set_ylim(0.5, 3500)
+        ax_z.set_xlim(z_min, z_max)
+        ax_z.legend(loc="upper right", fontsize=11, frameon=True, framealpha=0.92)
+        ax_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text_z = (
+            r"$\bf{FLAG\_SLOPE\_DRIFT\ (Zoomed\ Core)}$" + "\n" +
+            f"Tolerance: |Slope| > {max_slope_per_10pct}%\n" +
+            f"Example runs lie at +24% to +30%\n(visible on unzoomed plot)"
+        )
+        ax_z.text(0.04, 0.94, info_text_z, transform=ax_z.transAxes, ha="left", va="top", fontsize=11.0,
+                  bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+    elif failure_mode == "FLAG_CENTRAL_DROP":
+        r15s = [float(d["ratio_1_5"]) for d in metrics_list if not np.isnan(d.get("ratio_1_5", np.nan))]
+        r1s = [float(d["ratio_1"]) for d in metrics_list if not np.isnan(d.get("ratio_1", np.nan))]
+        run_vals = [float(d.get("ratio_1_5", 1.0)) for d in example_dicts]
+
+        # 1. Unzoomed (Full population outlier range)
+        x_min = 0.0
+        x_max = max(2.5, max(r1s) * 1.08 if r1s else 2.5)
+        bins = np.linspace(x_min, x_max, 55)
+
+        ax.hist(r15s, bins=bins, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ Distribution")
+        ax.hist(r1s, bins=bins, histtype="step", color="crimson", linewidth=1.4, alpha=0.5, label=r"$R_{1\%}$ Distribution")
+        ax.axvline(1.0, color="gray", linestyle="-", linewidth=1.2)
+        ax.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2.2, label=rf"Drop Cut ($R_{{1-5\%}} < {min_central_ratio}$)")
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                       label=rf"Example Run {d.get('run_number', d.get('run'))} ($R_{{1-5\%}} = {val:.3f}$)")
+
+        ax.set_xlabel("Central Ratio to Plateau", fontsize=15)
+        ax.set_ylabel("Runs", fontsize=15)
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, 4500)
+        ax.set_xlim(x_min, x_max)
+        ax.legend(loc="upper right", fontsize=10.5, frameon=True, framealpha=0.92)
+        ax.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text = (
+            r"$\bf{FLAG\_CENTRAL\_DROP\ (Unzoomed)}$" + "\n" +
+            rf"Drop Cut: $R_{{1-5\%}} < {min_central_ratio}$" + "\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax.text(0.04, 0.94, info_text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+        # 2. Zoomed (Detailed view around threshold [0, 2.2])
+        fig_z, ax_z = plt.subplots(figsize=(9, 6.5))
+        z_min, z_max = 0.0, 2.2
+        r15_c = np.clip(r15s, z_min, z_max)
+        r1_c = np.clip(r1s, z_min, z_max)
+        bins_z = np.linspace(z_min, z_max, 45)
+
+        ax_z.hist(r15_c, bins=bins_z, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{1-5\%}$ Distribution")
+        ax_z.hist(r1_c, bins=bins_z, histtype="step", color="crimson", linewidth=1.4, alpha=0.5, label=r"$R_{1\%}$ Distribution")
+        ax_z.axvline(1.0, color="gray", linestyle="-", linewidth=1.2)
+        ax_z.axvline(min_central_ratio, color="darkorange", linestyle="--", linewidth=2.2, label=rf"Drop Cut ($R_{{1-5\%}} < {min_central_ratio}$)")
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax_z.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                         label=rf"Example Run {d.get('run_number', d.get('run'))} ($R_{{1-5\%}} = {val:.3f}$)")
+
+        ax_z.set_xlabel("Central Ratio to Plateau", fontsize=15)
+        ax_z.set_ylabel("Runs", fontsize=15)
+        ax_z.set_yscale("log")
+        ax_z.set_ylim(0.5, 4500)
+        ax_z.set_xlim(z_min, z_max)
+        ax_z.legend(loc="upper right", fontsize=10.5, frameon=True, framealpha=0.92)
+        ax_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text_z = (
+            r"$\bf{FLAG\_CENTRAL\_DROP\ (Zoomed)}$" + "\n" +
+            rf"Drop Cut: $R_{{1-5\%}} < {min_central_ratio}$" + "\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax_z.text(0.04, 0.94, info_text_z, transform=ax_z.transAxes, ha="left", va="top", fontsize=11.0,
+                  bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+    elif failure_mode == "FLAG_CENTRAL_SPIKE":
+        r1s = [float(d["ratio_1"]) for d in metrics_list if not np.isnan(d.get("ratio_1", np.nan))]
+        r15s = [float(d["ratio_1_5"]) for d in metrics_list if not np.isnan(d.get("ratio_1_5", np.nan))]
+        run_vals = [float(d.get("ratio_1", 1.0)) for d in example_dicts]
+
+        # 1. Unzoomed (Full population outlier range)
+        x_min = 0.0
+        x_max = max(2.5, max(r1s) * 1.08 if r1s else 2.5)
+        bins = np.linspace(x_min, x_max, 55)
+
+        ax.hist(r1s, bins=bins, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ Distribution")
+        ax.hist(r15s, bins=bins, histtype="step", color="royalblue", linewidth=1.4, alpha=0.5, label=r"$R_{1-5\%}$ Distribution")
+        ax.axvline(1.0, color="gray", linestyle="-", linewidth=1.2)
+        ax.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2.2, label=rf"Spike Cut ($R_{{1\%}} > {max_central_spike}$)")
+
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax.axvline(val, color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                       label=rf"Example Run {d.get('run_number', d.get('run'))} ($R_{{1\%}} = {val:.3f}$)")
+
+        ax.set_xlabel("Central Ratio to Plateau", fontsize=15)
+        ax.set_ylabel("Runs", fontsize=15)
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, 4500)
+        ax.set_xlim(x_min, x_max)
+        ax.legend(loc="upper right", fontsize=10.5, frameon=True, framealpha=0.92)
+        ax.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text = (
+            r"$\bf{FLAG\_CENTRAL\_SPIKE\ (Unzoomed)}$" + "\n" +
+            rf"Spike Cut: $R_{{1\%}} > {max_central_spike}$" + "\n" +
+            f"Selected Runs: {', '.join(str(r) for r in example_runs)}"
+        )
+        ax.text(0.04, 0.94, info_text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+        # 2. Zoomed (Detailed view around threshold [0, 2.5])
+        fig_z, ax_z = plt.subplots(figsize=(9, 6.5))
+        z_min, z_max = 0.0, 2.5
+        r1_c = np.clip(r1s, z_min, z_max)
+        r15_c = np.clip(r15s, z_min, z_max)
+        bins_z = np.linspace(z_min, z_max, 45)
+
+        ax_z.hist(r1_c, bins=bins_z, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{1\%}$ Distribution")
+        ax_z.hist(r15_c, bins=bins_z, histtype="step", color="royalblue", linewidth=1.4, alpha=0.5, label=r"$R_{1-5\%}$ Distribution")
+        ax_z.axvline(1.0, color="gray", linestyle="-", linewidth=1.2)
+        ax_z.axvline(max_central_spike, color="crimson", linestyle="--", linewidth=2.2, label=rf"Spike Cut ($R_{{1\%}} > {max_central_spike}$)")
+
+        ax_z.set_xlabel("Central Ratio to Plateau", fontsize=15)
+        ax_z.set_ylabel("Runs", fontsize=15)
+        ax_z.set_yscale("log")
+        ax_z.set_ylim(0.5, 4500)
+        ax_z.set_xlim(z_min, z_max)
+        ax_z.legend(loc="upper right", fontsize=10.5, frameon=True, framealpha=0.92)
+        ax_z.grid(True, linestyle="--", alpha=0.3, which="both")
+
+        info_text_z = (
+            r"$\bf{FLAG\_CENTRAL\_SPIKE\ (Zoomed\ Core)}$" + "\n" +
+            rf"Spike Cut: $R_{{1\%}} > {max_central_spike}$" + "\n" +
+            f"Example runs lie at R_1% = 6.65 to 6.85\n(visible on unzoomed plot)"
+        )
+        ax_z.text(0.04, 0.94, info_text_z, transform=ax_z.transAxes, ha="left", va="top", fontsize=11.0,
+                  bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
+
+    elif failure_mode == "FLAG_EMPTY_OR_ZERO":
+        nevts = [float(d["total_events"]) for d in metrics_list if not np.isnan(d.get("total_events", np.nan))]
+        run_vals = [float(d.get("total_events", 0.0)) for d in example_dicts]
+
+        log_bins = np.logspace(0, np.log10(max(nevts) if nevts else 1e7), 40)
+        ax.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0, label="All Runs Distribution")
+        for idx, (d, val) in enumerate(zip(example_dicts, run_vals)):
+            st = line_styles[idx % len(line_styles)]
+            ax.axvline(max(1.0, val), color=st["color"], linestyle=st["linestyle"], linewidth=st["linewidth"],
+                       label=rf"Example Run {d.get('run_number', d.get('run'))} (Events = {val:.2e})")
+
+        ax.set_xlabel("Total Events per Run", fontsize=15)
+        ax.set_ylabel("Runs", fontsize=15)
+        ax.set_xscale("log")
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, 3500)
+        ax.legend(loc="upper left", fontsize=11, frameon=True, framealpha=0.92)
+        ax.grid(True, linestyle="--", alpha=0.3, which="both")
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    # Also save as centrality_metric_distributions.png for consistency
+    if alt_path != output_path:
+        fig.savefig(alt_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+    # Save zoomed figure if generated
+    if fig_z is not None:
+        fig_z.tight_layout()
+        fig_z.savefig(zoomed_path, dpi=300, bbox_inches="tight")
+        if alt_zoomed_path != zoomed_path:
+            fig_z.savefig(alt_zoomed_path, dpi=300, bbox_inches="tight")
+        plt.close(fig_z)
+
+
 def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mode=3,
-                                   cent_flat_min=10.0, cent_flat_max=70.0):
+                                   cent_flat_min=10.0, cent_flat_max=70.0,
+                                   max_rms_pct=4.5, max_dev_pct=8.0,
+                                   max_slope_per_10pct=2.5, max_central_spike=1.30,
+                                   min_central_ratio=0.80):
     """
     For each failure mode, select up to `example_runs_per_mode` representative runs
     and generate their 1D centrality distribution + ratio diagnostic plots.
+    Also generates a version of the relevant centrality metric distribution plot
+    with vertical lines showing where the example runs fall.
     Saves plots into output_dir / "failure_examples" / <FAILURE_MODE> /
     Returns a dict mapping failure_mode -> list of example run numbers.
     """
@@ -1071,6 +1585,20 @@ def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mo
                 cent_flat_min=cent_flat_min,
                 cent_flat_max=cent_flat_max,
             )
+
+        # Generate the relevant metric distribution with vertical lines for the example runs
+        dist_plot_path = mode_dir / "centrality_metric_distribution.png"
+        plot_failure_mode_metric_distribution(
+            metrics_list=metrics_list,
+            failure_mode=mode,
+            example_runs=[d["run_number"] for d in selected],
+            output_path=dist_plot_path,
+            max_rms_pct=max_rms_pct,
+            max_dev_pct=max_dev_pct,
+            max_slope_per_10pct=max_slope_per_10pct,
+            max_central_spike=max_central_spike,
+            min_central_ratio=min_central_ratio,
+        )
 
     return examples_map
 
@@ -1379,6 +1907,11 @@ def main():
             example_runs_per_mode=args.example_runs_per_mode,
             cent_flat_min=args.cent_flat_min,
             cent_flat_max=args.cent_flat_max,
+            max_rms_pct=args.max_rms,
+            max_dev_pct=args.max_dev,
+            max_slope_per_10pct=args.max_slope,
+            max_central_spike=args.max_central_spike,
+            min_central_ratio=args.min_central_ratio,
         )
 
     # 4b. Generate Example 1D Centrality Plots for Top Flat Runs
