@@ -52,16 +52,10 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     se->registerHisto(hEventMinBias);
 
     // Event Trigger Counter Histogram
-    std::vector<std::string> eventTypeTrigger{"|z| < 10 cm"};
-    for (const auto &trig : m_triggernames)
+    hEventTrigger = new TH1F("hEventTrigger", "Event Selection; Type; Events", static_cast<unsigned int>(m_eventTriggerType.size()), 0, static_cast<double>(m_eventTriggerType.size()));
+    for (unsigned int i = 0; i < m_eventTriggerType.size(); ++i)
     {
-      eventTypeTrigger.push_back(trig);
-    }
-
-    hEventTrigger = new TH1F("hEventTrigger", "Event Selection; Type; Events", static_cast<unsigned int>(eventTypeTrigger.size()), 0, static_cast<double>(eventTypeTrigger.size()));
-    for (unsigned int i = 0; i < eventTypeTrigger.size(); ++i)
-    {
-      hEventTrigger->GetXaxis()->SetBinLabel(i + 1, eventTypeTrigger[i].c_str());
+      hEventTrigger->GetXaxis()->SetBinLabel(i + 1, m_eventTriggerType[i].c_str());
     }
     se->registerHisto(hEventTrigger);
 
@@ -73,6 +67,22 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
 
     hZVertex = new TH1F("hZVertex", "Min Bias; Z [cm]; Events", m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
     se->registerHisto(hZVertex);
+
+    // Combined Trigger 12 or 14 Vertex
+    hZVertex_Trig12_or_Trig14 = new TH1F("hZVertex_Trig12_or_Trig14", "Trig 12 | Trig 14; Z [cm]; Events", m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
+    se->registerHisto(hZVertex_Trig12_or_Trig14);
+
+    hZVertex_Trig12_or_Trig14_MB = new TH1F("hZVertex_Trig12_or_Trig14_MB", "Trig 12 | Trig 14 and MB; Z [cm]; Events", m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high);
+    se->registerHisto(hZVertex_Trig12_or_Trig14_MB);
+
+    // Luminosity Histogram
+    std::vector<std::string> lumiType{"|z| < 10 cm & MBD Trig", "|z| < 10 cm", "|z| < 10 cm & Trig 12", "|z| < 10 cm & Trig 14"};
+    hLuminosity = new TH1F("hLuminosity", "; Type; Luminosity [nb^{-1}]", lumiType.size(), 0, lumiType.size());
+    for (unsigned int i = 0; i < lumiType.size(); ++i)
+    {
+      hLuminosity->GetXaxis()->SetBinLabel(i + 1, lumiType[i].c_str());
+    }
+    se->registerHisto(hLuminosity);
 
     // Centrality Histograms
     hCentrality = new TH1F("hCentrality", "|z| < 10 cm and MB; Centrality [%]; Events", m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
@@ -239,10 +249,6 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       if (pass_zvtx10)
       {
         hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX10));
-        if (hEventTrigger)
-        {
-          hEventTrigger->Fill(0);
-        }
       }
     }
   }
@@ -257,20 +263,44 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
 
   if (m_do_hist)
   {
-    if (pass_zvtx10 && hEventTrigger)
+    if (hEventTrigger)
     {
       if (m_didTrig12Fire)
       {
-        hEventTrigger->Fill(1);
+        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::TRIG12));
       }
       if (m_didTrig14Fire)
       {
-        hEventTrigger->Fill(2);
+        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::TRIG14));
+      }
+      if (mbd_trigger_fire)
+      {
+        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::TRIG12_OR_TRIG14));
+      }
+      if (pass_zvtx10)
+      {
+        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10));
+        if (m_didTrig12Fire)
+        {
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG12));
+        }
+        if (m_didTrig14Fire)
+        {
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG14));
+        }
+        if (mbd_trigger_fire)
+        {
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG12_OR_TRIG14));
+        }
       }
     }
 
     if (!vertexmap->empty())
     {
+      if (mbd_trigger_fire && hZVertex_Trig12_or_Trig14)
+      {
+        hZVertex_Trig12_or_Trig14->Fill(zvtx);
+      }
       if (m_didTrig12Fire && hZVertexTrig[TrigIdx::TRIG12])
       {
         hZVertexTrig[TrigIdx::TRIG12]->Fill(zvtx);
@@ -279,6 +309,24 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       {
         hZVertexTrig[TrigIdx::TRIG14]->Fill(zvtx);
       }
+    }
+  }
+
+  // Update luminosity event counters
+  if (pass_zvtx10)
+  {
+    ++m_n_zvtx10;
+    if (mbd_trigger_fire)
+    {
+      ++m_n_zvtx10_trig_or;
+    }
+    if (m_didTrig12Fire)
+    {
+      ++m_n_zvtx10_trig12;
+    }
+    if (m_didTrig14Fire)
+    {
+      ++m_n_zvtx10_trig14;
     }
   }
 
@@ -291,63 +339,107 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   }
 
   // Minimum Bias Classifier
-  MinimumBiasInfo *m_mb_info = findNode::getClass<MinimumBiasInfo>(topNode, "MinimumBiasInfo");
-  if (!m_mb_info)
+  if (m_check_mb)
   {
-    std::cout << "Aborting Run: MinimumBiasInfo null" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
+    MinimumBiasInfo *m_mb_info = findNode::getClass<MinimumBiasInfo>(topNode, "MinimumBiasInfo");
+    PdbParameterMap *pdb = findNode::getClass<PdbParameterMap>(topNode, "MinBiasParams");
 
-  // Minimum Bias Check
-  PdbParameterMap *pdb = findNode::getClass<PdbParameterMap>(topNode, "MinBiasParams");
-  if (!pdb)
-  {
-    std::cout << "Aborting Run: PdbParameterMap null" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
-
-  PHParameters pdb_params("MinBiasParams");
-  pdb_params.FillFrom(pdb);
-
-  bool minbias_bkg_high = pdb_params.get_int_param("minbias_background_cut_fail");
-  bool minbias_side_hit_low = pdb_params.get_int_param("minbias_two_hit_min_fail");
-  bool minbias_zdc_low = pdb_params.get_int_param("minbias_zdc_energy_min_fail");
-  bool minbias_mbd_high = pdb_params.get_int_param("minbias_mbd_total_energy_max_fail");
-
-  if (Verbosity() > 0)
-  {
-    std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] Run: " << m_data.run
-              << " | zvtx: " << zvtx << " cm"
-              << " | MBD Trig: " << mbd_trigger_fire << " (trig12=" << m_didTrig12Fire << ", trig14=" << m_didTrig14Fire << ")"
-              << " | isAuAuMB: " << m_mb_info->isAuAuMinimumBias()
-              << std::endl;
-  }
-  if (Verbosity() > 1)
-  {
-    std::cout << "    MinBias fails -> bkg_high: " << minbias_bkg_high
-              << " | side_hit_low: " << minbias_side_hit_low
-              << " | zdc_low: " << minbias_zdc_low
-              << " | mbd_high: " << minbias_mbd_high
-              << std::endl;
-  }
-
-  if (m_do_hist && pass_zvtx10 && mbd_trigger_fire)
-  {
-    if (minbias_bkg_high)
+    if (!m_mb_info || !pdb)
     {
-      hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::BKG_HIGH));
+      if (m_strict_node_check)
+      {
+        std::cout << "Aborting Run: MinimumBiasInfo or MinBiasParams null" << std::endl;
+        return Fun4AllReturnCodes::ABORTRUN;
+      }
+      static bool warned_mb = false;
+      if (!warned_mb)
+      {
+        std::cout << "EventQA: MinimumBiasInfo or MinBiasParams not found on node tree. Skipping offline MB checks." << std::endl;
+        warned_mb = true;
+      }
+      m_check_mb = false;
     }
-    if (minbias_side_hit_low)
+    else
     {
-      hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::SIDE_HIT_LOW));
-    }
-    if (minbias_zdc_low)
-    {
-      hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::ZDC_LOW));
-    }
-    if (minbias_mbd_high)
-    {
-      hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::MBD_HIGH));
+      PHParameters pdb_params("MinBiasParams");
+      pdb_params.FillFrom(pdb);
+
+      bool minbias_bkg_high = pdb_params.get_int_param("minbias_background_cut_fail");
+      bool minbias_side_hit_low = pdb_params.get_int_param("minbias_two_hit_min_fail");
+      bool minbias_zdc_low = pdb_params.get_int_param("minbias_zdc_energy_min_fail");
+      bool minbias_mbd_high = pdb_params.get_int_param("minbias_mbd_total_energy_max_fail");
+
+      if (Verbosity() > 0)
+      {
+        std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] Run: " << m_data.run
+                  << " | zvtx: " << zvtx << " cm"
+                  << " | MBD Trig: " << mbd_trigger_fire << " (trig12=" << m_didTrig12Fire << ", trig14=" << m_didTrig14Fire << ")"
+                  << " | isAuAuMB: " << m_mb_info->isAuAuMinimumBias()
+                  << std::endl;
+      }
+      if (Verbosity() > 1)
+      {
+        std::cout << "    MinBias fails -> bkg_high: " << minbias_bkg_high
+                  << " | side_hit_low: " << minbias_side_hit_low
+                  << " | zdc_low: " << minbias_zdc_low
+                  << " | mbd_high: " << minbias_mbd_high
+                  << std::endl;
+      }
+
+      if (m_do_hist && pass_zvtx10 && mbd_trigger_fire)
+      {
+        if (minbias_bkg_high)
+        {
+          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::BKG_HIGH));
+        }
+        if (minbias_side_hit_low)
+        {
+          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::SIDE_HIT_LOW));
+        }
+        if (minbias_zdc_low)
+        {
+          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::ZDC_LOW));
+        }
+        if (minbias_mbd_high)
+        {
+          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::MBD_HIGH));
+        }
+      }
+
+      // Check minimum bias
+      if (!m_mb_info->isAuAuMinimumBias())
+      {
+        if (Verbosity() > 0)
+        {
+          std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] isAuAuMinimumBias failed" << std::endl;
+        }
+        ++m_ctr["process_eventCheck_isAuAuMinBias_fail"];
+      }
+      else
+      {
+        m_pass_MB = true;
+
+        if (m_do_hist)
+        {
+          hVtxZ_MB->Fill(zvtx);
+          if (hZVertex)
+          {
+            hZVertex->Fill(zvtx);
+          }
+          if (mbd_trigger_fire && hZVertex_Trig12_or_Trig14_MB)
+          {
+            hZVertex_Trig12_or_Trig14_MB->Fill(zvtx);
+          }
+          if (m_didTrig12Fire && hZVertexTrig[TrigIdx::TRIG12_MB])
+          {
+            hZVertexTrig[TrigIdx::TRIG12_MB]->Fill(zvtx);
+          }
+          if (m_didTrig14Fire && hZVertexTrig[TrigIdx::TRIG14_MB])
+          {
+            hZVertexTrig[TrigIdx::TRIG14_MB]->Fill(zvtx);
+          }
+        }
+      }
     }
   }
 
@@ -362,37 +454,6 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
     return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
 
-  // Check minimum bias
-  if (!m_mb_info->isAuAuMinimumBias())
-  {
-    if (Verbosity() > 0)
-    {
-      std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] isAuAuMinimumBias failed" << std::endl;
-    }
-    ++m_ctr["process_eventCheck_isAuAuMinBias_fail"];
-  }
-  else
-  {
-    m_pass_MB = true;
-
-    if (m_do_hist)
-    {
-      hVtxZ_MB->Fill(zvtx);
-      if (hZVertex)
-      {
-        hZVertex->Fill(zvtx);
-      }
-      if (m_didTrig12Fire && hZVertexTrig[TrigIdx::TRIG12_MB])
-      {
-        hZVertexTrig[TrigIdx::TRIG12_MB]->Fill(zvtx);
-      }
-      if (m_didTrig14Fire && hZVertexTrig[TrigIdx::TRIG14_MB])
-      {
-        hZVertexTrig[TrigIdx::TRIG14_MB]->Fill(zvtx);
-      }
-    }
-  }
-
   if (Verbosity() > 0)
   {
     std::cout << "EventQA::process_event_check - [Event " << m_data.event << "] PASSED event selection" << std::endl;
@@ -403,11 +464,27 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
 
 int EventQA::process_centrality(PHCompositeNode *topNode)
 {
+  if (!m_check_centrality)
+  {
+    return Fun4AllReturnCodes::EVENT_OK;
+  }
+
   CentralityInfo *centInfo = findNode::getClass<CentralityInfo>(topNode, "CentralityInfo");
   if (!centInfo)
   {
-    std::cout << "Aborting Run: CentralityInfo null" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
+    if (m_strict_node_check)
+    {
+      std::cout << "Aborting Run: CentralityInfo null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+    static bool warned_cent = false;
+    if (!warned_cent)
+    {
+      std::cout << "EventQA: CentralityInfo not found on node tree. Skipping centrality checks." << std::endl;
+      warned_cent = true;
+    }
+    m_check_centrality = false;
+    return Fun4AllReturnCodes::EVENT_OK;
   }
 
   m_data.centrality = centInfo->get_centile(CentralityInfo::PROP::mbd_NS) * 100;
@@ -586,7 +663,7 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
   }
 
   // skip event if not minimum bias
-  if (!m_pass_MB)
+  if (m_check_mb && !m_pass_MB)
   {
     return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
   }
@@ -622,6 +699,8 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
 
 int EventQA::process_event(PHCompositeNode *topNode)
 {
+  ++m_total_events;
+
   int ret = process_event_check(topNode);
   if (ret && m_doAbort)
   {
@@ -659,11 +738,49 @@ int EventQA::End([[maybe_unused]] PHCompositeNode *topNode)
 {
   std::cout << "EventQA::End" << std::endl;
 
+  int prescale_12 = (m_triggerAnalyzer) ? m_triggerAnalyzer->getTriggerPrescale(m_trig_12) : -1;
+  int prescale_14 = (m_triggerAnalyzer) ? m_triggerAnalyzer->getTriggerPrescale(m_trig_14) : -1;
+
+  std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_12, prescale_12);
+  std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_14, prescale_14);
+
+  if (m_do_hist && hLuminosity)
+  {
+    double lumi_trig = 0.0;
+    double lumi_vtx = 0.0;
+    double lumi_trig12 = 0.0;
+    double lumi_trig14 = 0.0;
+
+    if (prescale_12 > 0 || prescale_14 > 0)
+    {
+      lumi_trig = static_cast<double>(m_n_zvtx10_trig_or) / m_sigma_mbd * 1e-9;
+    }
+
+    if (prescale_12 > 0)
+    {
+      lumi_trig12 = static_cast<double>(m_n_zvtx10_trig12) / m_sigma_mbd * 1e-9;
+    }
+
+    if (prescale_14 > 0)
+    {
+      lumi_trig14 = static_cast<double>(m_n_zvtx10_trig14) / m_sigma_mbd * 1e-9;
+    }
+
+    // VTX-only calculation (ignores trigger prescale statuses)
+    lumi_vtx = static_cast<double>(m_n_zvtx10) / m_sigma_mbd * 1e-9;
+
+    hLuminosity->SetBinContent(1, lumi_trig);
+    hLuminosity->SetBinContent(2, lumi_vtx);
+    hLuminosity->SetBinContent(3, lumi_trig12);
+    hLuminosity->SetBinContent(4, lumi_trig14);
+  }
+
   std::cout << std::format("{:#<20}\n", "");
   std::cout << "stats" << std::endl;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << "Abort Events Types" << std::endl;
+  std::cout << std::format("process event, Total Event Calls: {}", m_total_events) << std::endl;
   std::cout << std::format("process event, Reset Event Calls : {}", m_ctr["event_reset"]) << std::endl;
   std::cout << std::format("process event, MBD Trigger Fail: {}", m_ctr["process_eventCheck_mbd_trigger_fail"]) << std::endl;
   std::cout << std::format("process event, isAuAuMinBias Fail: {}", m_ctr["process_eventCheck_isAuAuMinBias_fail"]) << std::endl;

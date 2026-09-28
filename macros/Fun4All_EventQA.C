@@ -156,6 +156,7 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   EventQA* event_qa = new EventQA();
   event_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   event_qa->set_do_tree(false);
+  event_qa->set_strict_node_check(true);
   event_qa->set_cent_max(100);
   se->registerSubsystem(event_qa);
 
