@@ -32,10 +32,13 @@ def create_event_qa_jobs(args):
     manager.add_dir_to_check(args.src_dir)
     manager.validate_paths()
 
+    do_sepd = getattr(args, 'do_sepd', False)
+
     manager.log_initialization({
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve(),
-        'DST Per Job': args.dst_per_job
+        'DST Per Job': args.dst_per_job,
+        'Process sEPD': do_sepd
     })
 
     files_dir = manager.prepare_directories()
@@ -43,7 +46,8 @@ def create_event_qa_jobs(args):
 
     manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
+    sepd_arg = " 1" if do_sepd else " 0"
+    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output{sepd_arg}"
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
@@ -130,6 +134,7 @@ def setup_qa_subparsers(subparsers):
     # event_qa
     event_qa = subparsers.add_parser('event_qa', parents=[get_common_parser()], help='Create condor submission directory for Event QA.')
     event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_EventQA.C', help='Fun4All Macro.')
+    event_qa.add_argument('--do-sepd', '--sepd', dest='do_sepd', action='store_true', default=False, help='Enable optional sEPD processing in Event QA.')
     event_qa.set_defaults(
         dst_per_job=8,
         memory=1.0,

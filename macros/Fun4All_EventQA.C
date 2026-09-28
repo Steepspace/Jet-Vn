@@ -10,6 +10,9 @@
 #include <TROOT.h>
 #include <TF1.h>
 
+#include <caloreco/CaloTowerBuilder.h>
+#include <epd/EpdReco.h>
+
 #include <ffamodules/CDBInterface.h>
 #include <ffamodules/FlagHandler.h>
 
@@ -32,6 +35,7 @@
 
 #include <sepdvalidation/EventSkip.h>
 #include <sepdvalidation/EventQA.h>
+#include <sepdvalidation/GlobalQA.h>
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
 R__LOAD_LIBRARY(libCaloStatusSkimmer.so)
@@ -44,8 +48,20 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
                      int nSkip = 0,
                      int event_id = 0,
                      const std::string& dbtag = "newcdbtag",
-                     const std::string& event_list = "")
+                     const std::string& event_list = "",
+                     const std::string& flist_dst_sepd = "",
+                     bool do_sepd = false)
 {
+  if (!flist_dst_sepd.empty())
+  {
+    do_sepd = true;
+  }
+  std::string dst_sepd = flist_dst_sepd;
+  if (do_sepd && dst_sepd.empty())
+  {
+    dst_sepd = "DST_SEPD_RAW_run3auau_pro001_pcdb001_v001-00068144-00000.root";
+  }
+
   // Extract runnumber and segment from first file within list
   int runnumber = 0;
   int segment = 0;
@@ -78,6 +94,11 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   std::cout << "Run Parameters" << std::endl;
   std::cout << "input calofit: " << flist_dst_calofit << std::endl;
   std::cout << "input zdc: " << flist_dst_zdc << std::endl;
+  if (do_sepd)
+  {
+    std::cout << "input sepd: " << dst_sepd << std::endl;
+  }
+  std::cout << "do_sepd: " << (do_sepd ? "true" : "false") << std::endl;
   std::cout << "output: " << output << std::endl;
   std::cout << "nEvents: " << nEvents << std::endl;
   std::cout << "nSkip: " << nSkip << std::endl;
@@ -121,6 +142,24 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   MbdReco* mbdreco = new MbdReco();
   se->registerSubsystem(mbdreco);
 
+  if (do_sepd)
+  {
+    CaloTowerDefs::BuilderType buildertype = CaloTowerDefs::kPRDFTowerv4;
+
+    // sEPD Reconstruction--Calib Info: Packets -> TOWERS_SEPD
+    CaloTowerBuilder* caEPD = new CaloTowerBuilder("SEPDBUILDER");
+    caEPD->set_detector_type(CaloTowerDefs::SEPD);
+    caEPD->set_builder_type(buildertype);
+    caEPD->set_processing_type(CaloWaveformProcessing::TEMPLATE);
+    caEPD->set_nsamples(12);
+    caEPD->set_offlineflag();
+    se->registerSubsystem(caEPD);
+
+    // sEPD Reconstruction--Calib Info
+    EpdReco* epdreco = new EpdReco();
+    se->registerSubsystem(epdreco);
+  }
+
   // Official vertex storage
   GlobalVertexReco* gvertex = new GlobalVertexReco();
   gvertex->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
@@ -160,14 +199,28 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   event_qa->set_cent_max(100);
   se->registerSubsystem(event_qa);
 
-  const std::vector<std::pair<std::string, std::string>> input_files = {
+  // Global QA
+  GlobalQA* global_qa = new GlobalQA();
+  global_qa->set_do_tree(false);
+  global_qa->set_do_ep(false);
+  global_qa->set_do_sepd(do_sepd);
+  global_qa->set_do_mbd(true);
+  global_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  se->registerSubsystem(global_qa);
+
+  std::vector<std::pair<std::string, std::string>> input_files = {
       {"calofitting", flist_dst_calofit},
       {"zdc", flist_dst_zdc}};
+
+  if (do_sepd && !dst_sepd.empty())
+  {
+    input_files.emplace_back("sepd", dst_sepd);
+  }
 
   for (const auto& [name, filepath] : input_files)
   {
     Fun4AllInputManager* in = new Fun4AllDstInputManager(name);
-    if (isFileList)
+    if (isFileList && !filepath.ends_with(".root"))
     {
       in->AddListFile(filepath);
     }
@@ -192,7 +245,7 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
 }
 
 // ----------------------------------------------------------------------------
-// Overloaded Wrapper for backwards-compatibility (without nSkip / event_id / event_list)
+// Overloaded Wrapper for backwards-compatibility (without sEPD, without nSkip / event_id / event_list)
 // ----------------------------------------------------------------------------
 void Fun4All_EventQA(const std::string &flist_dst_calofit,
                      const std::string &flist_dst_zdc,
@@ -200,5 +253,18 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit,
                      int nEvents,
                      const std::string& dbtag)
 {
-  Fun4All_EventQA(flist_dst_calofit, flist_dst_zdc, output, nEvents, /*nSkip=*/0, /*event_id=*/0, dbtag, /*event_list=*/"");
+  Fun4All_EventQA(flist_dst_calofit, flist_dst_zdc, output, nEvents, /*nSkip=*/0, /*event_id=*/0, dbtag, /*event_list=*/"", /*flist_dst_sepd=*/"", /*do_sepd=*/false);
+}
+
+// ----------------------------------------------------------------------------
+// Overloaded Wrapper with sEPD (matches Fun4All_sEPDQA parameter order)
+// ----------------------------------------------------------------------------
+void Fun4All_EventQA(const std::string &flist_dst_calofit,
+                     const std::string &flist_dst_zdc,
+                     const std::string &flist_dst_sepd,
+                     const std::string& output,
+                     int nEvents,
+                     const std::string& dbtag)
+{
+  Fun4All_EventQA(flist_dst_calofit, flist_dst_zdc, output, nEvents, /*nSkip=*/0, /*event_id=*/0, dbtag, /*event_list=*/"", flist_dst_sepd, /*do_sepd=*/true);
 }
