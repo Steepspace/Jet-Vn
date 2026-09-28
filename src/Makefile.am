@@ -18,7 +18,6 @@ pkginclude_HEADERS = \
   CaloCheck.h \
   CaloQA.h \
   CentralityQA.h \
-  TriggerQA.h \
   CalibrateQVec.h \
   JetValidation.h \
   JetValidationv2.h \
@@ -42,7 +41,6 @@ libsEPDValidation_la_SOURCES = \
   CaloCheck.cc \
   CaloQA.cc \
   CentralityQA.cc \
-  TriggerQA.cc \
   CalibrateQVec.cc \
   JetValidation.cc \
   JetValidationv2.cc \

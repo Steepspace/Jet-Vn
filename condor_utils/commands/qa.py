@@ -4,26 +4,6 @@ from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list
 from condor_utils.cli import get_common_parser
 
-def create_trigger_qa_jobs(args):
-    manager = CondorJobManager(args, job_name="Trigger QA")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_dir_to_check(args.src_dir)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
 def create_calo_qa_jobs(args):
     manager = CondorJobManager(args, job_name="Calo QA")
     manager.add_file_to_check(args.f4a_macro)
@@ -136,16 +116,6 @@ def create_sepd_qa_jobs(args):
     manager.finalize_submission(queue_arg=queue_arg, sub_file_name=sub_file_name)
 
 def setup_qa_subparsers(subparsers):
-    # trigger_qa
-    trigger_qa = subparsers.add_parser('trigger_qa', parents=[get_common_parser()], help='Create condor submission directory.')
-    trigger_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_TriggerQA.C', help='Fun4All Macro.')
-    trigger_qa.set_defaults(
-        dst_per_job=4,
-        memory=1.0,
-        condor_script='scripts/genTriggerQA.sh',
-        func=create_trigger_qa_jobs
-    )
-
     # calo_qa
     calo_qa = subparsers.add_parser('calo_qa', parents=[get_common_parser()], help='Create condor submission directory.')
     calo_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_CaloQA.C', help='Fun4All Macro.')

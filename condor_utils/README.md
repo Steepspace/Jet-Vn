@@ -29,7 +29,7 @@ python3 utils.py data --tag <dst_tag> --output-dir <output_dir>
 These commands generate Condor submissions for Fun4All QA tasks.
 
 **Commands:**
-- `trigger_qa`: Runs Trigger QA (`macros/Fun4All_TriggerQA.C`).
+- `event_qa`: Runs Event QA (`macros/Fun4All_EventQA.C`).
 - `calo_qa`: Runs Calorimeter QA (`bin/Fun4All_CaloQA`).
 - `centrality_qa`: Runs Centrality QA (`bin/Fun4All_CentralityQA`).
 
