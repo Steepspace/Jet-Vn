@@ -31,14 +31,17 @@
 #include <calotrigger/MinimumBiasClassifier.h>
 #include <calotrigger/TriggerRunInfoReco.h>
 
-#include <calostatusskimmer/CaloStatusSkimmer.h>
+#include <jetbackground/RetowerCEMC.h>
 
 #include <sepdvalidation/EventSkip.h>
 #include <sepdvalidation/EventQA.h>
 #include <sepdvalidation/GlobalQA.h>
+#include <sepdvalidation/CaloQA.h>
+
+#include "Calo_Calib.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
-R__LOAD_LIBRARY(libCaloStatusSkimmer.so)
+R__LOAD_LIBRARY(libjetbackground.so)
 R__LOAD_LIBRARY(libsEPDValidation.so)
 
 void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3auau_pro001_pcdb001_v001-00068144-00000.root",
@@ -135,8 +138,16 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(evtSkip);
 
-  CaloStatusSkimmer* css = new CaloStatusSkimmer("CaloStatusSkimmer");
-  se->registerSubsystem(css);
+  // Calibrate Towers
+  Process_Calo_Calib();
+
+  RetowerCEMC *rcemc = new RetowerCEMC();
+  rcemc->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  rcemc->set_towerinfo(true);
+  rcemc->set_frac_cut(1);  // fraction of retower that must be masked to mask the full retower. 1=do not apply extra masking
+  rcemc->set_do_rescale(false); // scale the retowered towers up to account for dead area?
+  rcemc->set_towerNodePrefix("TOWERINFO_CALIB");
+  se->registerSubsystem(rcemc);
 
   // MBD Reconstruction
   MbdReco* mbdreco = new MbdReco();
@@ -207,6 +218,12 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   global_qa->set_do_mbd(true);
   global_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(global_qa);
+
+  // Calo QA
+  CaloQA* calo_qa = new CaloQA();
+  calo_qa->set_do_tree(false);
+  calo_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  se->registerSubsystem(calo_qa);
 
   std::vector<std::pair<std::string, std::string>> input_files = {
       {"calofitting", flist_dst_calofit},

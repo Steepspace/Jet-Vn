@@ -29,6 +29,7 @@ def create_calo_qa_jobs(args):
 def create_event_qa_jobs(args):
     manager = CondorJobManager(args, job_name="Event QA")
     manager.add_file_to_check(args.f4a_macro)
+    manager.add_file_to_check(args.calo_calib_macro)
     manager.add_dir_to_check(args.src_dir)
     manager.validate_paths()
 
@@ -36,13 +37,14 @@ def create_event_qa_jobs(args):
 
     manager.log_initialization({
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
+        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve(),
         'DST Per Job': args.dst_per_job,
         'Process sEPD': do_sepd
     })
 
     files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
+    manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro], extra_dirs=[args.src_dir])
 
     manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
@@ -134,6 +136,7 @@ def setup_qa_subparsers(subparsers):
     # event_qa
     event_qa = subparsers.add_parser('event_qa', parents=[get_common_parser()], help='Create condor submission directory for Event QA.')
     event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_EventQA.C', help='Fun4All Macro.')
+    event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     event_qa.add_argument('--do-sepd', '--sepd', dest='do_sepd', action='store_true', default=False, help='Enable optional sEPD processing in Event QA.')
     event_qa.set_defaults(
         dst_per_job=8,
