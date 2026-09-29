@@ -49,10 +49,10 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     int bins_hcal_phi = CaloGeometry::HCAL_PHI_BINS;
     int bins_hcal_eta = CaloGeometry::HCAL_ETA_BINS;
 
-    int bins_cent_full = 80;
-    int bins_cent = 8;
+    int bins_cent_full = 100;
+    int bins_cent = 10;
     double cent_low = -0.5;
-    double cent_high = 79.5;
+    double cent_high = 99.5;
 
     int bins_energy = 80;
     int energy_low = -10;
