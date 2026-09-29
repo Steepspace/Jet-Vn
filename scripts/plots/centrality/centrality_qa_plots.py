@@ -6,7 +6,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplhep as hep
-from centrality_qa_metrics import compute_centrality_average
+from centrality_qa_metrics import compute_centrality_average, get_centrality_hist_data
 
 def plot_heatmap(data_list, output_path, test_runs=None):
     hep.style.use("ATLAS")
@@ -444,13 +444,7 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, cent_flat_m
         try:
             with uproot.open(metric["file_path"]) as f:
                 hist_name = metric.get("hist_name", "hCentrality")
-                if hist_name in f:
-                    values, edges = f[hist_name].to_numpy()
-                else:
-                    for k in f.keys():
-                        if "Centrality" in k:
-                            values, edges = f[k].to_numpy()
-                            break
+                values, edges, _ = get_centrality_hist_data(f, hist_name=hist_name)
         except Exception:
             pass
 

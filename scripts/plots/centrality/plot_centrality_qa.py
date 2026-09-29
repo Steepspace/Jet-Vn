@@ -18,6 +18,13 @@ import traceback
 
 from matplotlib.ticker import LogLocator, ScalarFormatter
 
+# Ensure local imports from the same directory work reliably
+script_dir = Path(__file__).resolve().parent
+if str(script_dir) not in sys.path:
+    sys.path.insert(0, str(script_dir))
+
+from centrality_qa_metrics import compute_centrality_average, get_centrality_hist_data
+
 def clean_root_latex(text):
     if not text:
         return ""
@@ -367,14 +374,13 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                 "hCentralityZOuter_Trig14",
             ]
             for hist_name in cent_hist_names:
-                if hist_name in file:
-                    hist1d = file[hist_name]
-                    values, edges = hist1d.to_numpy()
+                hist_data = get_centrality_hist_data(file, hist_name=hist_name)
+                if hist_data[0] is not None:
+                    values, edges, title = hist_data
                     total_events = np.sum(values)
 
                     base_labels = []
                     cleaned_title = ""
-                    title = hist1d.title
                     if title:
                         if ";" in title:
                             title = title.split(";")[0].strip()
@@ -392,7 +398,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     extra_labels = base_labels + [f"Total: {total_events:.2e}"] + avg_label
                     output_path = dir_cent / f"run_{run_number}_{hist_name}.png"
                     make_1d_plot(
-                        hist1d,
+                        (values, edges),
                         run_number,
                         output_path,
                         xlabel="Centrality [%]",
@@ -431,7 +437,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
 
                     output_path_zoom = dir_cent_zoom / f"run_{run_number}_{hist_name}_zoom.png"
                     make_1d_plot(
-                        hist1d,
+                        (values, edges),
                         run_number,
                         output_path_zoom,
                         xlabel="Centrality [%]",
@@ -461,7 +467,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                         )
                         plots_made += 1
                 else:
-                    print(f"Warning: '{hist_name}' not found in {path}")
+                    print(f"Warning: '{hist_name}' (or base 2D histogram) not found in {path}")
 
             # Overlay of zoomed ratio plots: hCentrality_zoom and hCentralityZ150_Trig14_zoom
             if "hCentrality" in cent_ratios and "hCentralityZ150_Trig14" in cent_ratios:

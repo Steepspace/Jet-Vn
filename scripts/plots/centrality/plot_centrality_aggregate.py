@@ -403,7 +403,7 @@ def main():
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("centrality_aggregate_qa"),
                         help="Directory to save aggregate plots, reports, and detailed test QA (default: centrality_aggregate_qa).")
     parser.add_argument("--hist-name", type=str, default="hCentrality",
-                        help="Name of centrality histogram to analyze (default: hCentrality).")
+                        help="Name of centrality histogram to analyze (e.g. hCentrality, hCentralityZ150, hCentrality_Trig14, or 2D projection; default: hCentrality).")
     parser.add_argument("--test-runs", nargs="*", type=int, default=[68144, 72020, 76020],
                         help="Run numbers to generate detailed per-run QA plots for (default: 68144 72020 76020).")
     parser.add_argument("--no-test-plots", action="store_true",

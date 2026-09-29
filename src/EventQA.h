@@ -174,16 +174,10 @@ class EventQA : public SubsysReco
   TH1* hZVertex_Trig12_or_Trig14{nullptr};
   TH1* hZVertex_Trig12_or_Trig14_MB{nullptr};
   TH1* hLuminosity{nullptr};
-  TH1* hCentrality{nullptr};
-  TH1* hCentralityZ150{nullptr};
-  TH1* hCentralityZOuter{nullptr};
   TH2* h2ZVertexCentrality{nullptr};
 
   // Trigger (paired by trigger bit: [relaxed (trigger-only), tight (trigger + MB)])
   // e.g. [Trig12, Trig12_MB, Trig14, Trig14_MB]
   std::vector<TH1*> hZVertexTrig;
-  std::vector<TH1*> hCentralityTrig;
-  std::vector<TH1*> hCentralityZ150Trig;
-  std::vector<TH1*> hCentralityZOuterTrig;
   std::vector<TH2*> h2ZVertexCentralityTrig;
 };

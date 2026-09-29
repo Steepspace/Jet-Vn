@@ -25,6 +25,92 @@ def compute_centrality_average(values, edges, cent_min=10.0, cent_max=70.0):
     return 0.0
 
 
+def get_centrality_hist_data(f, hist_name="hCentrality"):
+    """
+    Retrieve 1D centrality histogram data (values, edges, title) from an open uproot file.
+    If the requested 1D histogram does not exist directly, seamlessly project it from the
+    corresponding 2D vertex vs. centrality histogram (e.g. h2ZVertexCentrality*) to maintain
+    full backwards compatibility.
+
+    Returns:
+        tuple: (values, edges, title) or (None, None, "") if not found.
+    """
+    # 1. Direct match in file
+    if hist_name in f:
+        item = f[hist_name]
+        arr = item.to_numpy()
+        if len(arr) == 2:
+            values, edges = arr
+            title = getattr(item, "title", "")
+            return values, edges, title
+        elif len(arr) == 3:
+            # 2D histogram passed directly: project over |z| < 10 cm by default
+            values_2d, edges_x, edges_y = arr
+            z_centers = 0.5 * (edges_x[:-1] + edges_x[1:])
+            mask = np.abs(z_centers) < 10.0
+            values = np.sum(values_2d[mask, :], axis=0)
+            edges = edges_y
+            title = getattr(item, "title", "")
+            return values, edges, title
+
+    # 2. Derive base 2D name, z-range, and label from 1D hist_name conventions
+    if hist_name.startswith("hCentralityZ150"):
+        suffix = hist_name[len("hCentralityZ150"):]
+        base_2d = f"h2ZVertexCentrality{suffix}"
+        z_min, z_max = None, 150.0
+        slice_desc = "|z| < 150 cm"
+    elif hist_name.startswith("hCentralityZOuter"):
+        suffix = hist_name[len("hCentralityZOuter"):]
+        base_2d = f"h2ZVertexCentrality{suffix}"
+        z_min, z_max = 10.0, 150.0
+        slice_desc = "10 cm < |z| < 150 cm"
+    elif hist_name.startswith("hCentrality"):
+        suffix = hist_name[len("hCentrality"):]
+        base_2d = f"h2ZVertexCentrality{suffix}"
+        z_min, z_max = None, 10.0
+        slice_desc = "|z| < 10 cm"
+    elif hist_name.startswith("h2ZVertexCentrality"):
+        base_2d = hist_name
+        z_min, z_max = None, 10.0
+        slice_desc = "|z| < 10 cm"
+        suffix = hist_name[len("h2ZVertexCentrality"):]
+    else:
+        return None, None, ""
+
+    if base_2d in f:
+        item = f[base_2d]
+        arr = item.to_numpy()
+        if len(arr) == 3:
+            values_2d, edges_x, edges_y = arr
+            z_centers = 0.5 * (edges_x[:-1] + edges_x[1:])
+
+            if z_min is not None and z_max is not None:
+                mask = (np.abs(z_centers) >= z_min) & (np.abs(z_centers) < z_max)
+            elif z_max is not None:
+                mask = np.abs(z_centers) < z_max
+            elif z_min is not None:
+                mask = np.abs(z_centers) >= z_min
+            else:
+                mask = np.ones(len(z_centers), dtype=bool)
+
+            values = np.sum(values_2d[mask, :], axis=0)
+            edges = edges_y
+
+            clean_suf = suffix.lstrip("_")
+            if not clean_suf:
+                title = f"{slice_desc} and MB; Centrality [%]; Events"
+            elif clean_suf.endswith("_MB"):
+                trig_str = clean_suf[:-3].replace("Trig", "Trig ")
+                title = f"{slice_desc} and {trig_str} and MB; Centrality [%]; Events"
+            else:
+                trig_str = clean_suf.replace("Trig", "Trig ")
+                title = f"{slice_desc} and {trig_str}; Centrality [%]; Events"
+
+            return values, edges, title
+
+    return None, None, ""
+
+
 def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, cent_flat_max=70.0,
                         max_rms_pct=4.5, max_dev_pct_cut=8.0,
                         max_slope_per_10pct=2.5, min_central_ratio=0.80,
@@ -49,11 +135,9 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
                 return None, f"Could not parse run number from {path.name}"
 
         with uproot.open(path) as f:
-            if hist_name not in f:
-                return None, f"Histogram '{hist_name}' not found in {path.name}"
-
-            hist = f[hist_name]
-            values, edges = hist.to_numpy()
+            values, edges, _ = get_centrality_hist_data(f, hist_name=hist_name)
+            if values is None:
+                return None, f"Histogram '{hist_name}' (or base 2D projection) not found in {path.name}"
 
         total_events = float(np.sum(values))
         bin_centers = 0.5 * (edges[:-1] + edges[1:])
@@ -67,6 +151,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
             return {
                 "run_number": run_number,
                 "file_path": str(path),
+                "hist_name": hist_name,
                 "total_events": total_events,
                 "plateau_avg": 0.0,
                 "rms_plat_pct": np.nan,
@@ -161,6 +246,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
         metric_dict = {
             "run_number": run_number,
             "file_path": str(path),
+            "hist_name": hist_name,
             "total_events": total_events,
             "plateau_avg": plateau_avg,
             "rms_plat_pct": rms_plat_pct,
