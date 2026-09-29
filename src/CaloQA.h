@@ -16,6 +16,7 @@
 #include <vector>
 
 class PHCompositeNode;
+class GlobalQA;
 
 class CaloQA : public SubsysReco
 {
@@ -43,6 +44,8 @@ class CaloQA : public SubsysReco
   void set_do_tree(bool b = true) { m_do_tree = b; }
   void set_do_raw_tower(bool b = true) { m_do_raw = b; }
   void set_do_emcal_base(bool b = true) { m_do_emcal_base = b; }
+  void set_do_mbd(bool b = true) { m_do_mbd = b; }
+  void set_do_sepd(bool b = true) { m_do_sepd = b; }
 
   bool get_do_detailed() const { return m_do_detailed; }
   bool get_do_iter() const { return m_do_iter; }
@@ -52,10 +55,15 @@ class CaloQA : public SubsysReco
   bool get_do_tree() const { return m_do_tree; }
   bool get_do_raw_tower() const { return m_do_raw; }
   bool get_do_emcal_base() const { return m_do_emcal_base; }
+  bool get_do_mbd() const { return m_do_mbd; }
+  bool get_do_sepd() const { return m_do_sepd; }
+  void set_global_qa_name(const std::string &name) { m_global_qa_name = name; }
+  const std::string &get_global_qa_name() const { return m_global_qa_name; }
 
  private:
 
   int process_centrality(PHCompositeNode *topNode);
+  int process_globals(PHCompositeNode *topNode);
   int process_calo(PHCompositeNode *topNode);
 
   // Hists
@@ -81,6 +89,22 @@ class CaloQA : public SubsysReco
 
     TH2* h2CentralityTotalCaloE{nullptr};
 
+    // Correlations - Calo vs Calo
+    TH2* h2EMCalRetowered_OHCal{nullptr};
+    TH2* h2IHCal_OHCal{nullptr};
+
+    // Correlations - Calo vs MBD
+    TH2* h2TotalCaloE_MBD{nullptr};
+    TH2* h2EMCalRetowered_MBD{nullptr};
+    TH2* h2IHCal_MBD{nullptr};
+    TH2* h2OHCal_MBD{nullptr};
+
+    // Correlations - Calo vs sEPD
+    TH2* h2TotalCaloE_sEPD{nullptr};
+    TH2* h2EMCalRetowered_sEPD{nullptr};
+    TH2* h2IHCal_sEPD{nullptr};
+    TH2* h2OHCal_sEPD{nullptr};
+
     TH2* h2EMCalChi2Energy{nullptr};
     TH2* h2EMCalEnergyTowerIndex{nullptr};
     TH2* h2EMCalEnergyTowerIndexZoom{nullptr};
@@ -95,6 +119,9 @@ class CaloQA : public SubsysReco
     double emcal_energy{0};  // NOLINT(misc-non-private-member-variables-in-classes)
     double ihcal_energy{0};  // NOLINT(misc-non-private-member-variables-in-classes)
     double ohcal_energy{0};  // NOLINT(misc-non-private-member-variables-in-classes)
+
+    double mbd_charge{0};    // NOLINT(misc-non-private-member-variables-in-classes)
+    double sepd_charge{0};   // NOLINT(misc-non-private-member-variables-in-classes)
 
     double centrality{0};    // NOLINT(misc-non-private-member-variables-in-classes)
 
@@ -136,6 +163,8 @@ class CaloQA : public SubsysReco
       emcal_energy = 0;
       ihcal_energy = 0;
       ohcal_energy = 0;
+      mbd_charge = 0;
+      sepd_charge = 0;
       centrality = 0;
 
       emcal_base_tower_index.clear();
@@ -173,6 +202,11 @@ class CaloQA : public SubsysReco
   bool m_do_tree{true};
   bool m_do_raw{false};
   bool m_do_emcal_base{false};
+  bool m_do_mbd{true};
+  bool m_do_sepd{false};
+
+  GlobalQA* m_global_qa{nullptr};
+  std::string m_global_qa_name{"GlobalQA"};
 };
 
 #endif  // CALOCHECK_H

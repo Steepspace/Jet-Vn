@@ -48,6 +48,14 @@ class GlobalQA : public SubsysReco
   void set_sepd_threshold(double threshold) { m_sepd_channel_threshold = threshold; }
   void set_skipRing0(bool b = true) { m_skipRing0 = b; }
 
+  double get_sepd_charge_south() const { return m_data.sepd_charge_south; }
+  double get_sepd_charge_north() const { return m_data.sepd_charge_north; }
+  double get_sepd_total_charge() const { return m_data.sepd_charge_south + m_data.sepd_charge_north; }
+
+  double get_mbd_charge_south() const { return m_data.mbd_charge_south; }
+  double get_mbd_charge_north() const { return m_data.mbd_charge_north; }
+  double get_mbd_total_charge() const { return m_data.mbd_charge_south + m_data.mbd_charge_north; }
+
  private:
   int process_event_plane(PHCompositeNode *topNode);
   int process_sepd(PHCompositeNode *topNode);

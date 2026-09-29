@@ -1,4 +1,5 @@
 #include "CaloQA.h"
+#include "GlobalQA.h"
 #include "geometry_constants.h"
 
 // -- Fun4All
@@ -144,6 +145,87 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                               bins_totalCaloE, totalCaloE_low, totalCaloE_high,
                                               bins_cent_full, cent_low, cent_high);
 
+    int bins_ohcal_totE = 100;
+    double ohcal_totE_low = 0;
+    double ohcal_totE_high = 500;
+
+    int bins_emcal_retower_totE = 400;
+    double emcal_retower_totE_low = 0;
+    double emcal_retower_totE_high = 2000;
+
+    int bins_ihcal_totE = 40;
+    double ihcal_totE_low = 0;
+    double ihcal_totE_high = 200;
+
+    // Calo vs Calo
+    if (m_do_retower)
+    {
+      m_hists.h2EMCalRetowered_OHCal = new TH2D("h2EMCalRetowered_OHCal", "Retowered EMCal vs OHCal Total Energy; OHCal Total Energy [GeV]; Retowered EMCal Total Energy [GeV]",
+                                                bins_ohcal_totE, ohcal_totE_low, ohcal_totE_high,
+                                                bins_emcal_retower_totE, emcal_retower_totE_low, emcal_retower_totE_high);
+    }
+    m_hists.h2IHCal_OHCal = new TH2D("h2IHCal_OHCal", "IHCal vs OHCal Total Energy; OHCal Total Energy [GeV]; IHCal Total Energy [GeV]",
+                                     bins_ohcal_totE, ohcal_totE_low, ohcal_totE_high,
+                                     bins_ihcal_totE, ihcal_totE_low, ihcal_totE_high);
+
+    // Calo vs MBD
+    if (m_do_mbd)
+    {
+      int bins_mbd_charge = 210;
+      double mbd_charge_low = 0;
+      double mbd_charge_high = 2100.0;
+
+      int bins_totalCaloE_corr = 250;
+      double totalCaloE_corr_low = 0;
+      double totalCaloE_corr_high = 2500;
+
+      m_hists.h2TotalCaloE_MBD = new TH2D("h2TotalCaloE_MBD", "Total Calorimeter Energy vs MBD Total Charge; MBD Total Charge; Total Calorimeter Energy [GeV]",
+                                          bins_mbd_charge, mbd_charge_low, mbd_charge_high,
+                                          bins_totalCaloE_corr, totalCaloE_corr_low, totalCaloE_corr_high);
+
+      if (m_do_retower)
+      {
+        m_hists.h2EMCalRetowered_MBD = new TH2D("h2EMCalRetowered_MBD", "Retowered EMCal vs MBD Total Charge; MBD Total Charge; Retowered EMCal Total Energy [GeV]",
+                                                bins_mbd_charge, mbd_charge_low, mbd_charge_high,
+                                                bins_emcal_retower_totE, emcal_retower_totE_low, emcal_retower_totE_high);
+      }
+      m_hists.h2IHCal_MBD = new TH2D("h2IHCal_MBD", "IHCal vs MBD Total Charge; MBD Total Charge; IHCal Total Energy [GeV]",
+                                     bins_mbd_charge, mbd_charge_low, mbd_charge_high,
+                                     bins_ihcal_totE, ihcal_totE_low, ihcal_totE_high);
+      m_hists.h2OHCal_MBD = new TH2D("h2OHCal_MBD", "OHCal vs MBD Total Charge; MBD Total Charge; OHCal Total Energy [GeV]",
+                                     bins_mbd_charge, mbd_charge_low, mbd_charge_high,
+                                     bins_ohcal_totE, ohcal_totE_low, ohcal_totE_high);
+    }
+
+    // Calo vs sEPD
+    if (m_do_sepd)
+    {
+      int bins_sepd_charge = 250;
+      double sepd_charge_low = 0;
+      double sepd_charge_high = 25000.0;
+
+      int bins_totalCaloE_corr = 250;
+      double totalCaloE_corr_low = 0;
+      double totalCaloE_corr_high = 2500;
+
+      m_hists.h2TotalCaloE_sEPD = new TH2D("h2TotalCaloE_sEPD", "Total Calorimeter Energy vs sEPD Total Charge; sEPD Total Charge [MIP]; Total Calorimeter Energy [GeV]",
+                                           bins_sepd_charge, sepd_charge_low, sepd_charge_high,
+                                           bins_totalCaloE_corr, totalCaloE_corr_low, totalCaloE_corr_high);
+
+      if (m_do_retower)
+      {
+        m_hists.h2EMCalRetowered_sEPD = new TH2D("h2EMCalRetowered_sEPD", "Retowered EMCal vs sEPD Total Charge; sEPD Total Charge [MIP]; Retowered EMCal Total Energy [GeV]",
+                                                 bins_sepd_charge, sepd_charge_low, sepd_charge_high,
+                                                 bins_emcal_retower_totE, emcal_retower_totE_low, emcal_retower_totE_high);
+      }
+      m_hists.h2IHCal_sEPD = new TH2D("h2IHCal_sEPD", "IHCal vs sEPD Total Charge; sEPD Total Charge [MIP]; IHCal Total Energy [GeV]",
+                                      bins_sepd_charge, sepd_charge_low, sepd_charge_high,
+                                      bins_ihcal_totE, ihcal_totE_low, ihcal_totE_high);
+      m_hists.h2OHCal_sEPD = new TH2D("h2OHCal_sEPD", "OHCal vs sEPD Total Charge; sEPD Total Charge [MIP]; OHCal Total Energy [GeV]",
+                                      bins_sepd_charge, sepd_charge_low, sepd_charge_high,
+                                      bins_ohcal_totE, ohcal_totE_low, ohcal_totE_high);
+    }
+
     int bins_emcal_towers = bins_emcal_phi * bins_emcal_eta;
     int bins_energy_wide = 350;
     double energy_wide_low = -150;
@@ -235,6 +317,34 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
 
     se->registerHisto(m_hists.h2CentralityTotalCaloE);
 
+    if (m_do_retower)
+    {
+      se->registerHisto(m_hists.h2EMCalRetowered_OHCal);
+    }
+    se->registerHisto(m_hists.h2IHCal_OHCal);
+
+    if (m_do_mbd)
+    {
+      se->registerHisto(m_hists.h2TotalCaloE_MBD);
+      if (m_do_retower)
+      {
+        se->registerHisto(m_hists.h2EMCalRetowered_MBD);
+      }
+      se->registerHisto(m_hists.h2IHCal_MBD);
+      se->registerHisto(m_hists.h2OHCal_MBD);
+    }
+
+    if (m_do_sepd)
+    {
+      se->registerHisto(m_hists.h2TotalCaloE_sEPD);
+      if (m_do_retower)
+      {
+        se->registerHisto(m_hists.h2EMCalRetowered_sEPD);
+      }
+      se->registerHisto(m_hists.h2IHCal_sEPD);
+      se->registerHisto(m_hists.h2OHCal_sEPD);
+    }
+
     if (m_do_emcal_base)
     {
       se->registerHisto(m_hists.h2EMCalEnergyTowerIndex);
@@ -320,9 +430,37 @@ int CaloQA::process_centrality(PHCompositeNode *topNode)
 }
 
 //____________________________________________________________________________..
-int CaloQA::process_calo(PHCompositeNode *topNode)
+int CaloQA::process_globals([[maybe_unused]] PHCompositeNode* topNode)
 {
-  auto* towersCEMC  = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_CEMC");
+  if (!m_global_qa)
+  {
+    Fun4AllServer* se = Fun4AllServer::instance();
+    m_global_qa = dynamic_cast<GlobalQA*>(se->getSubsysReco(m_global_qa_name));
+    if (!m_global_qa && Verbosity() > 0)
+    {
+      std::cout << PHWHERE << "GlobalQA subsystem '" << m_global_qa_name << "' not found in Fun4AllServer." << std::endl;
+    }
+  }
+
+  if (m_global_qa)
+  {
+    if (m_do_mbd)
+    {
+      m_data.mbd_charge = m_global_qa->get_mbd_total_charge();
+    }
+    if (m_do_sepd)
+    {
+      m_data.sepd_charge = m_global_qa->get_sepd_total_charge();
+    }
+  }
+
+  return Fun4AllReturnCodes::EVENT_OK;
+}
+
+//____________________________________________________________________________..
+int CaloQA::process_calo(PHCompositeNode* topNode)
+{
+  auto* towersCEMC = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_CEMC");
   auto* towersCEMCRaw = m_do_raw ? findNode::getClass<TowerInfoContainer>(topNode, "TOWERS_CEMC") : nullptr;
   auto* towersCEMCRetowered = m_do_retower ? findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_CEMC_RETOWER") : nullptr;
   auto* towersIHCal = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_HCALIN");
@@ -568,6 +706,46 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
     m_hists.h2CentralityTotalCaloE->Fill(totalCaloE, cent);
   }
 
+  if (m_do_hists)
+  {
+    // Calo vs Calo
+    if (m_do_retower)
+    {
+      m_hists.h2EMCalRetowered_OHCal->Fill(m_data.ohcal_energy, m_data.emcal_energy);
+    }
+    m_hists.h2IHCal_OHCal->Fill(m_data.ohcal_energy, m_data.ihcal_energy);
+
+    // Calo vs MBD
+    if (m_do_mbd && std::isfinite(m_data.mbd_charge))
+    {
+      if (std::isfinite(totalCaloE))
+      {
+        m_hists.h2TotalCaloE_MBD->Fill(m_data.mbd_charge, totalCaloE);
+      }
+      if (m_do_retower)
+      {
+        m_hists.h2EMCalRetowered_MBD->Fill(m_data.mbd_charge, m_data.emcal_energy);
+      }
+      m_hists.h2IHCal_MBD->Fill(m_data.mbd_charge, m_data.ihcal_energy);
+      m_hists.h2OHCal_MBD->Fill(m_data.mbd_charge, m_data.ohcal_energy);
+    }
+
+    // Calo vs sEPD
+    if (m_do_sepd && std::isfinite(m_data.sepd_charge))
+    {
+      if (std::isfinite(totalCaloE))
+      {
+        m_hists.h2TotalCaloE_sEPD->Fill(m_data.sepd_charge, totalCaloE);
+      }
+      if (m_do_retower)
+      {
+        m_hists.h2EMCalRetowered_sEPD->Fill(m_data.sepd_charge, m_data.emcal_energy);
+      }
+      m_hists.h2IHCal_sEPD->Fill(m_data.sepd_charge, m_data.ihcal_energy);
+      m_hists.h2OHCal_sEPD->Fill(m_data.sepd_charge, m_data.ohcal_energy);
+    }
+  }
+
   if (m_do_detailed)
   {
     if (m_do_iter)
@@ -648,6 +826,12 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
 int CaloQA::process_event([[maybe_unused]] PHCompositeNode* topNode)
 {
   int ret = process_centrality(topNode);
+  if (ret)
+  {
+    return ret;
+  }
+
+  ret = process_globals(topNode);
   if (ret)
   {
     return ret;

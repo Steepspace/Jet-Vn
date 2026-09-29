@@ -222,6 +222,8 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   // Calo QA
   CaloQA* calo_qa = new CaloQA();
   calo_qa->set_do_tree(false);
+  calo_qa->set_do_sepd(do_sepd);
+  calo_qa->set_do_mbd(true);
   calo_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(calo_qa);
 
