@@ -42,6 +42,7 @@ class CaloQA : public SubsysReco
   void set_do_cemc_retower(bool b = true) { m_do_retower = b; }
   void set_do_tree(bool b = true) { m_do_tree = b; }
   void set_do_raw_tower(bool b = true) { m_do_raw = b; }
+  void set_do_emcal_base(bool b = true) { m_do_emcal_base = b; }
 
   bool get_do_detailed() const { return m_do_detailed; }
   bool get_do_iter() const { return m_do_iter; }
@@ -50,6 +51,7 @@ class CaloQA : public SubsysReco
   bool get_do_cemc_retower() const { return m_do_retower; }
   bool get_do_tree() const { return m_do_tree; }
   bool get_do_raw_tower() const { return m_do_raw; }
+  bool get_do_emcal_base() const { return m_do_emcal_base; }
 
  private:
 
@@ -170,6 +172,7 @@ class CaloQA : public SubsysReco
   bool m_do_retower{true};
   bool m_do_tree{true};
   bool m_do_raw{false};
+  bool m_do_emcal_base{false};
 };
 
 #endif  // CALOCHECK_H

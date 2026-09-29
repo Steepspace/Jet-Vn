@@ -62,9 +62,12 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     int energy_zs_low = -10;
     int energy_zs_high = 1;
 
-    m_hists.h2EMCal = new TProfile2D("h2EMCal", "EMCal; Tower Index #phi; Tower Index #eta",
-                                     bins_emcal_phi, 0, bins_emcal_phi,
-                                     bins_emcal_eta, 0, bins_emcal_eta);
+    if (m_do_emcal_base)
+    {
+      m_hists.h2EMCal = new TProfile2D("h2EMCal", "EMCal; Tower Index #phi; Tower Index #eta",
+                                       bins_emcal_phi, 0, bins_emcal_phi,
+                                       bins_emcal_eta, 0, bins_emcal_eta);
+    }
 
     if (m_do_retower)
     {
@@ -81,9 +84,12 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                      bins_hcal_phi, 0, bins_hcal_phi,
                                      bins_hcal_eta, 0, bins_hcal_eta);
 
-    m_hists.h2EMCalCent = new TH2D("h2EMCalCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
-                                   bins_energy, energy_low, energy_high,
-                                   bins_cent, cent_low, cent_high);
+    if (m_do_emcal_base)
+    {
+      m_hists.h2EMCalCent = new TH2D("h2EMCalCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+                                     bins_energy, energy_low, energy_high,
+                                     bins_cent, cent_low, cent_high);
+    }
 
     if (m_do_retower)
     {
@@ -100,9 +106,12 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                    bins_energy, energy_low, energy_high,
                                    bins_cent, cent_low, cent_high);
 
-    m_hists.h2EMCalZSCent = new TH2D("h2EMCalZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
-                                     bins_energy_zs, energy_zs_low, energy_zs_high,
-                                     bins_cent, cent_low, cent_high);
+    if (m_do_emcal_base)
+    {
+      m_hists.h2EMCalZSCent = new TH2D("h2EMCalZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+                                       bins_energy_zs, energy_zs_low, energy_zs_high,
+                                       bins_cent, cent_low, cent_high);
+    }
 
     m_hists.h2IHCalZSCent = new TH2D("h2IHCalZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
                                      bins_energy_zs, energy_zs_low, energy_zs_high,
@@ -112,9 +121,12 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
                                      bins_energy_zs, energy_zs_low, energy_zs_high,
                                      bins_cent, cent_low, cent_high);
 
-    m_hists.h2EMCalNoZSCent = new TH2D("h2EMCalNoZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
-                                       bins_energy, energy_low, energy_high,
-                                       bins_cent, cent_low, cent_high);
+    if (m_do_emcal_base)
+    {
+      m_hists.h2EMCalNoZSCent = new TH2D("h2EMCalNoZSCent", "EMCal; Tower Energy [GeV]; Centrality [%]",
+                                         bins_energy, energy_low, energy_high,
+                                         bins_cent, cent_low, cent_high);
+    }
 
     m_hists.h2IHCalNoZSCent = new TH2D("h2IHCalNoZSCent", "IHCal; Tower Energy [GeV]; Centrality [%]",
                                        bins_energy, energy_low, energy_high,
@@ -137,25 +149,28 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     double energy_wide_low = -150;
     double energy_wide_high = 200;
 
-    m_hists.h2EMCalEnergyTowerIndex = new TH2D("h2EMCalEnergyTowerIndex", "EMCal; Tower Index; Tower Energy [GeV]",
-                                               bins_emcal_towers, 0, bins_emcal_towers,
-                                               bins_energy_wide, energy_wide_low, energy_wide_high);
-
-    int bins_energy_neg = 100;
-    double energy_neg_low = -50;
-    double energy_neg_high = 50;
-
-    m_hists.h2EMCalEnergyTowerIndexZS = new TH2D("h2EMCalEnergyTowerIndexZS", "EMCal; Tower Index; Tower Energy [GeV]",
+    if (m_do_emcal_base)
+    {
+      m_hists.h2EMCalEnergyTowerIndex = new TH2D("h2EMCalEnergyTowerIndex", "EMCal; Tower Index; Tower Energy [GeV]",
                                                  bins_emcal_towers, 0, bins_emcal_towers,
-                                                 bins_energy_neg, energy_neg_low, energy_neg_high);
+                                                 bins_energy_wide, energy_wide_low, energy_wide_high);
 
-    int bins_energy_zoom = 60;
-    double energy_zoom_low = -0.5;
-    double energy_zoom_high = 2.5;
+      int bins_energy_neg = 100;
+      double energy_neg_low = -50;
+      double energy_neg_high = 50;
 
-    m_hists.h2EMCalEnergyTowerIndexZoom = new TH2D("h2EMCalEnergyTowerIndexZoom", "EMCal; Tower Index; Tower Energy [GeV]",
+      m_hists.h2EMCalEnergyTowerIndexZS = new TH2D("h2EMCalEnergyTowerIndexZS", "EMCal; Tower Index; Tower Energy [GeV]",
                                                    bins_emcal_towers, 0, bins_emcal_towers,
-                                                   bins_energy_zoom, energy_zoom_low, energy_zoom_high);
+                                                   bins_energy_neg, energy_neg_low, energy_neg_high);
+
+      int bins_energy_zoom = 60;
+      double energy_zoom_low = -0.5;
+      double energy_zoom_high = 2.5;
+
+      m_hists.h2EMCalEnergyTowerIndexZoom = new TH2D("h2EMCalEnergyTowerIndexZoom", "EMCal; Tower Index; Tower Energy [GeV]",
+                                                     bins_emcal_towers, 0, bins_emcal_towers,
+                                                     bins_energy_zoom, energy_zoom_low, energy_zoom_high);
+    }
 
     if (m_do_raw)
     {
@@ -182,7 +197,10 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
 
     Fun4AllServer* se = Fun4AllServer::instance();
 
-    se->registerHisto(m_hists.h2EMCal);
+    if (m_do_emcal_base)
+    {
+      se->registerHisto(m_hists.h2EMCal);
+    }
     if (m_do_retower)
     {
       se->registerHisto(m_hists.h2EMCalRetowered);
@@ -190,7 +208,10 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     se->registerHisto(m_hists.h2IHCal);
     se->registerHisto(m_hists.h2OHCal);
 
-    se->registerHisto(m_hists.h2EMCalCent);
+    if (m_do_emcal_base)
+    {
+      se->registerHisto(m_hists.h2EMCalCent);
+    }
     if (m_do_retower)
     {
       se->registerHisto(m_hists.h2EMCalRetoweredCent);
@@ -198,18 +219,28 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     se->registerHisto(m_hists.h2IHCalCent);
     se->registerHisto(m_hists.h2OHCalCent);
 
-    se->registerHisto(m_hists.h2EMCalZSCent);
+    if (m_do_emcal_base)
+    {
+      se->registerHisto(m_hists.h2EMCalZSCent);
+    }
     se->registerHisto(m_hists.h2IHCalZSCent);
     se->registerHisto(m_hists.h2OHCalZSCent);
 
-    se->registerHisto(m_hists.h2EMCalNoZSCent);
+    if (m_do_emcal_base)
+    {
+      se->registerHisto(m_hists.h2EMCalNoZSCent);
+    }
     se->registerHisto(m_hists.h2IHCalNoZSCent);
     se->registerHisto(m_hists.h2OHCalNoZSCent);
 
     se->registerHisto(m_hists.h2CentralityTotalCaloE);
-    se->registerHisto(m_hists.h2EMCalEnergyTowerIndex);
-    se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZoom);
-    se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZS);
+
+    if (m_do_emcal_base)
+    {
+      se->registerHisto(m_hists.h2EMCalEnergyTowerIndex);
+      se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZoom);
+      se->registerHisto(m_hists.h2EMCalEnergyTowerIndexZS);
+    }
     if (m_do_raw)
     {
       se->registerHisto(m_hists.h2EMCalChi2Energy);
@@ -317,7 +348,7 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  if (m_do_hists || m_do_detailed || m_do_raw || Verbosity() > 0)
+  if ((m_do_hists && m_do_emcal_base) || m_do_detailed || m_do_raw || (m_do_emcal_base && Verbosity() > 0))
   {
     // Base EMCal
     size_t emcal_size = towersCEMC->size();
@@ -336,11 +367,17 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
           float rawChi2 = towerRaw->get_chi2();
           if (std::isfinite(rawEnergy) && std::isfinite(rawChi2))
           {
-            m_hists.h2EMCalChi2Energy->Fill(rawEnergy, rawChi2);
+            if (m_hists.h2EMCalChi2Energy)
+            {
+              m_hists.h2EMCalChi2Energy->Fill(rawEnergy, rawChi2);
+            }
           }
           if (towerRaw->get_isGood() && std::isfinite(rawEnergy))
           {
-            m_hists.h2EMCalRawEnergyTowerIndex->Fill(towerIndex, rawEnergy);
+            if (m_hists.h2EMCalRawEnergyTowerIndex)
+            {
+              m_hists.h2EMCalRawEnergyTowerIndex->Fill(towerIndex, rawEnergy);
+            }
           }
         }
       }
@@ -370,21 +407,42 @@ int CaloQA::process_calo(PHCompositeNode *topNode)
         m_data.emcal_base_tower_energy.push_back(energy);
       }
 
-      if (m_do_hists)
+      if (m_do_hists && m_do_emcal_base)
       {
-        m_hists.h2EMCal->Fill(iphi, ieta, energy);
-        m_hists.h2EMCalCent->Fill(energy, cent);
-        m_hists.h2EMCalEnergyTowerIndex->Fill(towerIndex, energy);
-        m_hists.h2EMCalEnergyTowerIndexZoom->Fill(towerIndex, energy);
+        if (m_hists.h2EMCal)
+        {
+          m_hists.h2EMCal->Fill(iphi, ieta, energy);
+        }
+        if (m_hists.h2EMCalCent)
+        {
+          m_hists.h2EMCalCent->Fill(energy, cent);
+        }
+        if (m_hists.h2EMCalEnergyTowerIndex)
+        {
+          m_hists.h2EMCalEnergyTowerIndex->Fill(towerIndex, energy);
+        }
+        if (m_hists.h2EMCalEnergyTowerIndexZoom)
+        {
+          m_hists.h2EMCalEnergyTowerIndexZoom->Fill(towerIndex, energy);
+        }
 
         if (tower->get_isZS())
         {
-          m_hists.h2EMCalZSCent->Fill(energy, cent);
-          m_hists.h2EMCalEnergyTowerIndexZS->Fill(towerIndex, energy);
+          if (m_hists.h2EMCalZSCent)
+          {
+            m_hists.h2EMCalZSCent->Fill(energy, cent);
+          }
+          if (m_hists.h2EMCalEnergyTowerIndexZS)
+          {
+            m_hists.h2EMCalEnergyTowerIndexZS->Fill(towerIndex, energy);
+          }
         }
         else
         {
-          m_hists.h2EMCalNoZSCent->Fill(energy, cent);
+          if (m_hists.h2EMCalNoZSCent)
+          {
+            m_hists.h2EMCalNoZSCent->Fill(energy, cent);
+          }
         }
       }
     }
