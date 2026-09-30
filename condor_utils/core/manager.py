@@ -99,15 +99,16 @@ class CondorJobManager:
             self.logger.info(f'Condor Log Directory: {self.condor_log_dir}')
         if self.common_errors:
             self.logger.info(f'Common Errors File: {self.common_errors}')
-        ranked_nodes, node_status = self.get_best_submit_node()
-        top_node = ranked_nodes[0]
-        if node_status:
-            status_summary = ", ".join(f"{n}: {node_status[n]['running']}" for n in sorted(node_status.keys()))
-            self.logger.info(f'Submit Nodes Running Jobs: {status_summary}')
-            self.logger.info(f'Top Submit Node: {top_node} ({node_status[top_node]["running"]} running jobs)')
-        else:
-            self.logger.info(f'Top Submit Node: {top_node}')
-        self.logger.info(f'Monitor Command (nohup): {self.get_monitor_command(background=True)}')
+        if self.job_name != "hadd":
+            ranked_nodes, node_status = self.get_best_submit_node()
+            top_node = ranked_nodes[0]
+            if node_status:
+                status_summary = ", ".join(f"{n}: {node_status[n]['running']}" for n in sorted(node_status.keys()))
+                self.logger.info(f'Submit Nodes Running Jobs: {status_summary}')
+                self.logger.info(f'Top Submit Node: {top_node} ({node_status[top_node]["running"]} running jobs)')
+            else:
+                self.logger.info(f'Top Submit Node: {top_node}')
+            self.logger.info(f'Monitor Command (nohup): {self.get_monitor_command(background=True)}')
 
         if extra_logs:
             for k, v in extra_logs.items():
@@ -242,7 +243,7 @@ class CondorJobManager:
         sub_file.write_text(submit_content)
         return sub_file
 
-    def finalize_submission(self, queue_arg="input_dst from jobs.list", sub_file_name="genFun4All.sub", limit=15000, execute=False):
+    def finalize_submission(self, queue_arg="input_dst from jobs.list", sub_file_name="genFun4All.sub", limit=15000, execute=False, use_ssh=None, clean_log_dir=None):
         match = re.search(r" from ([\w\.-]+)", queue_arg)
         list_file = match.group(1) if match else "jobs.list"
         list_path = self.output_dir / list_file
@@ -264,21 +265,34 @@ class CondorJobManager:
         else:
             split_files = [list_path]
 
-        ranked_nodes, _ = self.get_best_submit_node()
+        if use_ssh is None:
+            use_ssh = not execute
+        if clean_log_dir is None:
+            clean_log_dir = not execute
+
+        ranked_nodes = None
+        if use_ssh:
+            ranked_nodes, _ = self.get_best_submit_node()
+
         log_dir = self.condor_log_dir or (self.output_dir / 'logs')
-        prep_cmd = f"rm -rf {log_dir} && mkdir -p {log_dir}"
+        prep_cmd = f"rm -rf {log_dir} && mkdir -p {log_dir} && " if clean_log_dir else ""
 
         for i, sf in enumerate(split_files):
-            target_node = ranked_nodes[i % len(ranked_nodes)]
             current_queue_arg = queue_arg.replace(list_file, sf.name)
-            node_cmd = f'{prep_cmd} && cd {self.output_dir} && condor_submit {sub_file_name} -queue "{current_queue_arg}"'
-            command = f"ssh {target_node} '{node_cmd}'"
+            base_cmd = f'{prep_cmd}cd {self.output_dir} && condor_submit {sub_file_name} -queue "{current_queue_arg}"'
+            if use_ssh:
+                target_node = ranked_nodes[i % len(ranked_nodes)]
+                command = f"ssh {target_node} '{base_cmd}'"
+            else:
+                command = base_cmd
+
             if execute:
                 run_command_and_log(command, self.logger, self.output_dir)
             else:
                 self.logger.info(command)
 
-        monitor_bg_cmd = self.get_monitor_command(background=True)
-        log_file = self.output_dir / "monitor.log"
-        self.logger.info(f'To monitor job status in the background (recommended):\n  {monitor_bg_cmd}')
-        self.logger.info(f'To view monitor log live:\n  tail -f {log_file}')
+        if not execute:
+            monitor_bg_cmd = self.get_monitor_command(background=True)
+            log_file = self.output_dir / "monitor.log"
+            self.logger.info(f'To monitor job status in the background (recommended):\n  {monitor_bg_cmd}')
+            self.logger.info(f'To view monitor log live:\n  tail -f {log_file}')
