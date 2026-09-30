@@ -163,6 +163,7 @@ void Fun4All_sEPDQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   MinimumBiasClassifier* mb = new MinimumBiasClassifier();
   mb->setOverwriteScale(cent_scale);
   mb->setOverwriteVtx(cent_vtx);
+  mb->set_mbd_total_charge_cut(2500);
   se->registerSubsystem(mb);
 
   // Centrality Reco

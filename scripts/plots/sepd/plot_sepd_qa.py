@@ -225,7 +225,7 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
     if custom_xlim is not None:
         ax.set_xlim(custom_xlim)
     elif hist_name in ["h2CaloE_MBD", "h2CaloE_MBD_cut"]:
-        ax.set_xlim(left=0, right=2100)
+        ax.set_xlim(left=0, right=2500)
     elif hist_name in ["h2sEPD_CaloE", "h2sEPD_CaloE_cut"]:
         nonzero_x, _ = np.where(values > 0)
         if len(nonzero_x) > 0:
@@ -268,7 +268,7 @@ def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", yla
     if custom_ylim is not None:
         ax.set_ylim(custom_ylim)
     elif hist_name in ["h2CaloE_MBD", "h2CaloE_MBD_cut"]:
-        ax.set_ylim(bottom=yedges[0], top=2100)
+        ax.set_ylim(bottom=yedges[0], top=2500)
     elif hist_name in ["h2sEPD_North_South", "h2sEPD_North_South_cut"]:
         ax.set_ylim(bottom=0, top=max_coord)
     elif hist_name in ["h2sEPD_CaloE", "h2sEPD_CaloE_cut", "h2sEPD_Centrality", "h2sEPD_Centrality_cut", "h2sEPD_MBD", "h2sEPD_MBD_cut"]:
