@@ -8,7 +8,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 
 from condor_utils.core.logging import setup_logging
-from condor_utils.core.helpers import run_command_and_log, get_line_count
+from condor_utils.core.helpers import run_command_and_log, get_line_count, get_best_submit_node
 
 class CondorJobManager:
     def __init__(self, args, job_name="Job"):
@@ -56,6 +56,14 @@ class CondorJobManager:
                 self.logger.critical(f'Directory: {d} does not exist!')
                 sys.exit(1)
 
+    def get_best_submit_node(self):
+        if not hasattr(self, '_ranked_nodes') or self._ranked_nodes is None:
+            manual_node = getattr(self.args, 'node', None)
+            detected_nodes, node_status = get_best_submit_node(logger=self.logger)
+            self._ranked_nodes = [manual_node] if manual_node else detected_nodes
+            self._node_status = node_status
+        return self._ranked_nodes, self._node_status
+
     def get_monitor_command(self, interval="60s", background=True):
         project_root = Path(__file__).resolve().parents[2]
         monitor_script = (project_root / "scripts" / "condor" / "monitor_jobs.py").resolve()
@@ -91,6 +99,14 @@ class CondorJobManager:
             self.logger.info(f'Condor Log Directory: {self.condor_log_dir}')
         if self.common_errors:
             self.logger.info(f'Common Errors File: {self.common_errors}')
+        ranked_nodes, node_status = self.get_best_submit_node()
+        top_node = ranked_nodes[0]
+        if node_status:
+            status_summary = ", ".join(f"{n}: {node_status[n]['running']}" for n in sorted(node_status.keys()))
+            self.logger.info(f'Submit Nodes Running Jobs: {status_summary}')
+            self.logger.info(f'Top Submit Node: {top_node} ({node_status[top_node]["running"]} running jobs)')
+        else:
+            self.logger.info(f'Top Submit Node: {top_node}')
         self.logger.info(f'Monitor Command (nohup): {self.get_monitor_command(background=True)}')
 
         if extra_logs:
@@ -248,9 +264,15 @@ class CondorJobManager:
         else:
             split_files = [list_path]
 
-        for sf in split_files:
+        ranked_nodes, _ = self.get_best_submit_node()
+        log_dir = self.condor_log_dir or (self.output_dir / 'logs')
+        prep_cmd = f"rm -rf {log_dir} && mkdir -p {log_dir}"
+
+        for i, sf in enumerate(split_files):
+            target_node = ranked_nodes[i % len(ranked_nodes)]
             current_queue_arg = queue_arg.replace(list_file, sf.name)
-            command = f'cd {self.output_dir} && condor_submit {sub_file_name} -queue "{current_queue_arg}"'
+            node_cmd = f'{prep_cmd} && cd {self.output_dir} && condor_submit {sub_file_name} -queue "{current_queue_arg}"'
+            command = f"ssh {target_node} '{node_cmd}'"
             if execute:
                 run_command_and_log(command, self.logger, self.output_dir)
             else:

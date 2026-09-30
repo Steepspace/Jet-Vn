@@ -14,6 +14,7 @@ def get_common_parser():
     parser.add_argument('-m', '--max-retries', type=int, default=3, help='Max Condor job retries on failure. Default: 3.')
     parser.add_argument('-l', '--condor-log-dir', type=str, default='/tmp/anarde/dump', help='Condor Log Directory.')
     parser.add_argument('-e', '--email', type=str, default=None, help='Recipient email for job notifications.')
+    parser.add_argument('--node', '--submit-node', type=str, default=None, help='Target submission node (e.g. sphnxuser01). Default: auto-detect best node.')
 
     parser.add_argument('-f2', '--src-dir', type=str, default='src', help='Source Files Directory. Default: src')
     parser.add_argument('-f3', '--condor-script', type=str, help='Condor Script.')

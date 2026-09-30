@@ -1,3 +1,5 @@
+import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -100,3 +102,76 @@ def sort_files_by_lines(directory_path: Path, output_file: Path) -> None:
 
     # 4. Use write_text to save everything at once
     output_file.write_text(output_content)
+
+
+SUBMISSION_NODES = [f"sphnxuser{i:02d}" for i in range(1, 9)]
+
+
+def parse_submitters_output(output_text: str) -> dict[str, dict[str, int]]:
+    """
+    Parses output of 'condor_status -submitters'.
+    Aggregates user-specific and total RunningJobs and IdleJobs for sphnxuser01-08 nodes.
+    """
+    nodes = {node: {"running": 0, "idle": 0} for node in SUBMISSION_NODES}
+
+    for line in output_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 4:
+            # Check if parts[1] (Machine) matches sphnxuser01-08
+            m = re.search(r"(sphnxuser0[1-8])", parts[1], re.IGNORECASE)
+            if m:
+                node = m.group(1).lower()
+                try:
+                    nodes[node]["running"] += int(parts[2])
+                    nodes[node]["idle"] += int(parts[3])
+                except ValueError:
+                    pass
+
+    return nodes
+
+
+def get_best_submit_node(logger=None) -> tuple[list[str], dict[str, dict[str, int]]]:
+    """
+    Ranks submission nodes (sphnxuser01-08) by running
+    'condor_status -submitters'. Nodes are sorted primarily by lowest
+    committed load (total_running + user_idle), which maximizes actual uncommitted
+    headroom to the 15k limit by accounting for slots already claimed by user's idle jobs.
+    Ties are broken by fewest user-specific total jobs, fewest total idle jobs,
+    and nominal node order.
+
+    Returns:
+        (ranked_nodes_list, nodes_dict)
+    """
+    nodes = {node: {"running": 0, "idle": 0} for node in SUBMISSION_NODES}
+    try:
+        res = subprocess.run(
+            ["condor_status", "-submitters"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout:
+            nodes = parse_submitters_output(res.stdout)
+        elif logger:
+            logger.warning(
+                f"'condor_status -submitters' returned non-zero code {res.returncode}: {res.stderr.strip()}"
+            )
+    except Exception as e:
+        if logger:
+            logger.warning(f"Failed to execute 'condor_status -submitters': {e}")
+
+    # Rank nodes:
+    # 1. Lowest committed load (total_running + user_idle) to maximize unclaimed headroom
+    # 2. Fewest total (running + idle) jobs for the specified user (avoiding self-competition)
+    # 3. Fewest total idle jobs on the node across all users
+    # 4. Preferred order (sphnxuser01..08)
+    ranked_nodes = sorted(
+        SUBMISSION_NODES,
+        key=lambda n: (nodes[n]["running"], nodes[n]["idle"], SUBMISSION_NODES.index(n)),
+    )
+    return ranked_nodes, nodes
+
