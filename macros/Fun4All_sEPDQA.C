@@ -111,7 +111,6 @@ void Fun4All_sEPDQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   FlagHandler* flag = new FlagHandler();
   se->registerSubsystem(flag);
 
-  CaloCalib::cemc_globalBadTowerMap_override = "/direct/sphenix+u/anarde/Documents/sPHENIX/Jet-Vn/files/calib/CEMC_GlobalBadTowerMap.root";
   // Calibrate Towers
   Process_Calo_Calib();
 
