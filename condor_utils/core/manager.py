@@ -56,6 +56,15 @@ class CondorJobManager:
                 self.logger.critical(f'Directory: {d} does not exist!')
                 sys.exit(1)
 
+    def get_monitor_command(self, interval="60s", background=True):
+        project_root = Path(__file__).resolve().parents[2]
+        monitor_script = (project_root / "scripts" / "condor" / "monitor_jobs.py").resolve()
+        email = getattr(self.args, 'email', None) or "<email>"
+        if background:
+            log_file = self.output_dir / "monitor.log"
+            return f"nohup python3 -u {monitor_script} -d {self.output_dir} -i {interval} -e {email} > {log_file} 2>&1 &"
+        return f"python3 {monitor_script} -d {self.output_dir} -i {interval} -e {email}"
+
     def log_initialization(self, extra_logs=None):
         total_files = get_line_count(self.input_list) if self.input_list else 0
         self.logger.info('#'*40)
@@ -82,6 +91,7 @@ class CondorJobManager:
             self.logger.info(f'Condor Log Directory: {self.condor_log_dir}')
         if self.common_errors:
             self.logger.info(f'Common Errors File: {self.common_errors}')
+        self.logger.info(f'Monitor Command (nohup): {self.get_monitor_command(background=True)}')
 
         if extra_logs:
             for k, v in extra_logs.items():
@@ -245,3 +255,8 @@ class CondorJobManager:
                 run_command_and_log(command, self.logger, self.output_dir)
             else:
                 self.logger.info(command)
+
+        monitor_bg_cmd = self.get_monitor_command(background=True)
+        log_file = self.output_dir / "monitor.log"
+        self.logger.info(f'To monitor job status in the background (recommended):\n  {monitor_bg_cmd}')
+        self.logger.info(f'To view monitor log live:\n  tail -f {log_file}')
