@@ -28,9 +28,11 @@ Usage Examples:
 # pylint: disable=too-many-arguments,too-many-branches,too-many-return-statements,too-many-locals
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 import email.utils
 from email.mime.text import MIMEText
+import fnmatch
 import os
 from pathlib import Path
 import re
@@ -56,6 +58,16 @@ DEFAULT_ERROR_PATTERN = (
     r"|Fatal in <"
     r"|Bus error"
     r"|\bAborted\b)"
+)
+ERROR_BYTE_TOKENS = (
+    b"Error:",
+    b"ROOT macro crashed",
+    b"cp failed permanently",
+    b"condor scratch NOT set",
+    b"Segmentation fault",
+    b"Fatal in <",
+    b"Bus error",
+    b"Aborted",
 )
 
 
@@ -276,46 +288,73 @@ def resolve_target_dir(raw_path: str, pattern: str) -> tuple[Path, str]:
     p = Path(raw_path).expanduser().resolve()
     stdout_subdir = p / "stdout"
     if stdout_subdir.is_dir():
-        p_matches = list(p.glob(pattern)) if p.is_dir() else []
-        if not p_matches:
+        # Fast check if parent directory itself contains matching files
+        has_matches_in_parent = False
+        try:
+            with os.scandir(str(p)) as it:
+                for entry in it:
+                    if not entry.name.startswith(".") and fnmatch.fnmatch(entry.name, pattern) and entry.is_file():
+                        has_matches_in_parent = True
+                        break
+        except OSError:
+            pass
+
+        if not has_matches_in_parent:
             return stdout_subdir, f"Resolved to subdirectory '{stdout_subdir}'"
     return p, ""
 
 
 def inspect_log_file(
-    file_path: Path,
+    file_path: str | Path,
     finish_regex: re.Pattern,
     error_regex: re.Pattern | None = None,
     max_bytes: int = 8192,
+    size: int | None = None,
+    finish_token: bytes | None = b"Finished",
 ) -> tuple[bool, str, str | None]:
     """
     Inspects the tail of a log file for finish message or errors.
+    Optimized with fast byte-level pre-filtering and optional pre-computed file size.
 
     Returns:
         (is_finished: bool, status_desc: str, matched_line: str | None)
     """
     try:
-        st = file_path.stat()
-        size = st.st_size
+        if size is None:
+            size = os.path.getsize(file_path)
+
         if size == 0:
             return False, "File is empty (job starting)", None
 
         read_bytes = min(size, max_bytes)
-        with file_path.open("rb") as f:
-            f.seek(size - read_bytes)
-            chunk = f.read(read_bytes).decode("utf-8", errors="ignore")
+        with open(file_path, "rb") as f:
+            if size > read_bytes:
+                f.seek(size - read_bytes)
+            chunk = f.read(read_bytes)
 
-        lines = [line.strip() for line in chunk.splitlines() if line.strip()]
+        # Fast byte pre-filter:
+        # Check if the finish token or any known error token is present in raw bytes.
+        # This allows 99% of normal in-progress files to return instantly without line splitting or regex.
+        has_finish = (finish_token is None) or (finish_token in chunk)
+        has_error = (error_regex is not None) and any(token in chunk for token in ERROR_BYTE_TOKENS)
+
+        if not has_finish and not has_error:
+            return False, "In progress", None
+
+        # Decode tail chunk only when a candidate token was detected
+        text = chunk.decode("utf-8", errors="ignore")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
             return False, "No readable text", None
 
         # Check for finish message from the bottom up
-        for line in reversed(lines):
-            if finish_regex.search(line):
-                return True, "Finished", line
+        if has_finish:
+            for line in reversed(lines):
+                if finish_regex.search(line):
+                    return True, "Finished", line
 
         # Check for known errors if not finished
-        if error_regex:
+        if has_error and error_regex:
             for line in reversed(lines):
                 if error_regex.search(line):
                     return False, f"Failed: {line[:80]}", None
@@ -483,6 +522,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of bytes from the tail of each log file to inspect (default: 8192)",
     )
     parser.add_argument(
+        "-j",
+        "--jobs",
+        "--threads",
+        dest="threads",
+        type=int,
+        default=16,
+        help="Number of parallel worker threads for scanning log files (default: 16)",
+    )
+    parser.add_argument(
         "--notify-on-failure",
         action="store_true",
         help="Send email notification if all jobs finish running but some had errors",
@@ -600,6 +648,12 @@ def main() -> int:
 
     error_regex = re.compile(DEFAULT_ERROR_PATTERN, re.IGNORECASE)
 
+    # Pre-filter token for raw byte scanning
+    finish_token: bytes | None = b"Finished"
+    if args.finish_message:
+        # If user passed custom finish regex, disable token pre-filter to guarantee regex correctness
+        finish_token = None
+
     # Resolve target directory
     target_dir, resolve_note = resolve_target_dir(raw_dir, args.pattern)
     if resolve_note and not args.quiet:
@@ -617,95 +671,192 @@ def main() -> int:
 
     start_time = datetime.now()
     hostname = socket.gethostname()
+    threads = max(1, args.threads)
 
-    # Cache of completed and failed files across checks
-    completed_files: dict[str, str] = {}  # filename -> matched line
-    failed_files: dict[str, str] = {}     # filename -> error desc
+    # Cache across checks
+    completed_files: dict[str, str] = {}              # filename -> matched line
+    failed_files: dict[str, str] = {}                 # filename -> error desc
+    file_stat_cache: dict[str, tuple[int, int]] = {}  # filename -> (size, mtime_ns)
 
-    def scan_directory() -> tuple[list[Path], int, int, int]:
-        """Scans target_dir and updates completed_files and failed_files."""
-        if not target_dir.is_dir():
-            return [], 0, 0, 0
+    # Optimize pattern matching: check if pattern is simple suffix like '*.out'
+    is_suffix_pattern = args.pattern.startswith("*.") and "*" not in args.pattern[2:] and "?" not in args.pattern
+    pattern_suffix = args.pattern[1:] if is_suffix_pattern else None
 
-        # Find files matching pattern
-        files = sorted(target_dir.glob(args.pattern))
-        # If no files matched pattern and pattern was default '*.out', check if there are any regular files
-        if not files and args.pattern == "*.out":
-            all_entries = [f for f in target_dir.iterdir() if f.is_file() and not f.name.startswith(".")]
-            if all_entries:
-                files = sorted(all_entries)
+    def scan_directory(executor: ThreadPoolExecutor) -> tuple[int, int, int]:
+        """
+        Scans target_dir using os.scandir, mtime/size caching, and ThreadPoolExecutor.
+        Returns:
+            (total_count, done_count, in_prog_count)
+        """
+        target_dir_str = str(target_dir)
+        if not os.path.isdir(target_dir_str):
+            return 0, 0, 0
 
-        for f in files:
-            fname = f.name
-            if fname in completed_files:
-                continue
+        entries_to_inspect = []
+        matching_count = 0
+        all_regular_count = 0
 
-            is_finished, status_desc, match_line = inspect_log_file(
-                f,
-                finish_regex=finish_regex,
-                error_regex=error_regex,
-                max_bytes=args.tail_bytes,
-            )
+        try:
+            with os.scandir(target_dir_str) as it:
+                for entry in it:
+                    name = entry.name
+                    if name.startswith("."):
+                        continue
 
-            if is_finished:
-                completed_files[fname] = match_line or "Finished"
-                # If it was previously marked failed, clear it
-                failed_files.pop(fname, None)
-            elif status_desc.startswith("Failed:"):
-                failed_files[fname] = status_desc
+                    matched = name.endswith(pattern_suffix) if pattern_suffix else fnmatch.fnmatch(name, args.pattern)
 
-        total = len(files)
+                    try:
+                        if not entry.is_file():
+                            continue
+                    except OSError:
+                        continue
+
+                    all_regular_count += 1
+                    if not matched:
+                        continue
+
+                    matching_count += 1
+                    if name in completed_files:
+                        continue
+
+                    try:
+                        st = entry.stat()
+                        size = st.st_size
+                        mtime_ns = st.st_mtime_ns
+                    except OSError:
+                        continue
+
+                    current_stat = (size, mtime_ns)
+                    prev_stat = file_stat_cache.get(name)
+
+                    if prev_stat == current_stat:
+                        # File has not changed since last check; status is unchanged
+                        continue
+
+                    if size == 0:
+                        # 0-byte file: definitely empty/starting, record in cache and skip
+                        file_stat_cache[name] = current_stat
+                        continue
+
+                    entries_to_inspect.append((entry.path, name, size, current_stat))
+        except OSError as e:
+            if not args.quiet:
+                print(f"[WARNING] Could not scan directory {target_dir}: {e}", file=sys.stderr)
+            return 0, len(completed_files), 0
+
+        # Fallback: if no files matched pattern and pattern was default '*.out', check regular files
+        if matching_count == 0 and args.pattern == "*.out" and all_regular_count > 0:
+            try:
+                with os.scandir(target_dir_str) as it:
+                    for entry in it:
+                        name = entry.name
+                        if name.startswith("."):
+                            continue
+                        try:
+                            if not entry.is_file():
+                                continue
+                            matching_count += 1
+                            if name in completed_files:
+                                continue
+                            st = entry.stat()
+                            size = st.st_size
+                            mtime_ns = st.st_mtime_ns
+                            current_stat = (size, mtime_ns)
+                            if file_stat_cache.get(name) == current_stat:
+                                continue
+                            if size == 0:
+                                file_stat_cache[name] = current_stat
+                                continue
+                            entries_to_inspect.append((entry.path, name, size, current_stat))
+                        except OSError:
+                            continue
+            except OSError:
+                pass
+
+        # Inspect pending files in parallel
+        if entries_to_inspect:
+            def _worker(item):
+                fpath, fname, fsize, fstat = item
+                is_done, status, match_str = inspect_log_file(
+                    fpath,
+                    finish_regex=finish_regex,
+                    error_regex=error_regex,
+                    max_bytes=args.tail_bytes,
+                    size=fsize,
+                    finish_token=finish_token,
+                )
+                return fname, fstat, is_done, status, match_str
+
+            if len(entries_to_inspect) == 1:
+                results = [_worker(entries_to_inspect[0])]
+            else:
+                chunk_sz = min(128, max(1, len(entries_to_inspect) // (threads * 4)))
+                results = executor.map(_worker, entries_to_inspect, chunksize=chunk_sz)
+
+            for fname, fstat, is_done, status, match_str in results:
+                file_stat_cache[fname] = fstat
+                if is_done:
+                    completed_files[fname] = match_str or "Finished"
+                    failed_files.pop(fname, None)
+                elif status.startswith("Failed:"):
+                    failed_files[fname] = status
+                else:
+                    failed_files.pop(fname, None)
+
+        total = max(matching_count, len(completed_files) + len(failed_files))
         done = len(completed_files)
         errs = len(failed_files)
-        in_prog = total - done - errs
-        return files, total, done, in_prog
+        in_prog = max(0, total - done - errs)
+        return total, done, in_prog
 
-    # Run-once mode
-    if args.run_once:
-        print(f"Scanning target directory: {target_dir}")
-        print(f"Pattern: '{args.pattern}' | Finish Regex: '{finish_pattern_str}'")
-        files, total, done, in_prog = scan_directory()
-
-        print("=" * 70)
-        print(f"Total files found:  {total}")
-        if expected_jobs:
-            print(f"Expected jobs:      {expected_jobs}")
-        print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%)")
-        print(f"In-progress jobs:   {in_prog}")
-        print(f"Failed jobs:        {len(failed_files)}")
-        print("=" * 70)
-
-        if failed_files:
-            print("\nFailed jobs detected:")
-            for fn, err in list(failed_files.items())[:10]:
-                print(f"  - {fn}: {err}")
-            if len(failed_files) > 10:
-                print(f"  ... and {len(failed_files) - 10} more.")
-
-        all_done = (done == total) and (total >= (expected_jobs or args.min_files)) and (total > 0)
-        if all_done:
-            print("[STATUS] ALL JOBS COMPLETED SUCCESSFULLY!")
-            return 0
-        print("[STATUS] Incomplete / pending jobs remaining.")
-        return 1
-
-    # Standard monitoring loop
-    print("=" * 70)
-    print("CONDOR FUN4ALL JOB COMPLETION MONITOR")
-    print("=" * 70)
-    print(f"  Target Dir:     {target_dir}")
-    print(f"  File Pattern:   {args.pattern}")
-    print(f"  Finish Pattern: {finish_pattern_str}")
-    if expected_jobs:
-        print(f"  Expected Jobs:  {expected_jobs}" + (" (from jobs.list)" if jobs_list_file else ""))
-    print(f"  Interval:       {interval:.1f}s ({raw_interval})")
-    print(f"  Notification:   {email_addr}")
-    print(f"  Host:           {hostname}")
-    print(f"  Started:        {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 70)
-
-    check_count = 0
+    executor = ThreadPoolExecutor(max_workers=threads)
     try:
+        # Run-once mode
+        if args.run_once:
+            print(f"Scanning target directory: {target_dir}")
+            print(f"Pattern: '{args.pattern}' | Finish Regex: '{finish_pattern_str}' | Threads: {threads}")
+            total, done, in_prog = scan_directory(executor)
+
+            print("=" * 70)
+            print(f"Total files found:  {total}")
+            if expected_jobs:
+                print(f"Expected jobs:      {expected_jobs}")
+            print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%)")
+            print(f"In-progress jobs:   {in_prog}")
+            print(f"Failed jobs:        {len(failed_files)}")
+            print("=" * 70)
+
+            if failed_files:
+                print("\nFailed jobs detected:")
+                for fn, err in list(failed_files.items())[:10]:
+                    print(f"  - {fn}: {err}")
+                if len(failed_files) > 10:
+                    print(f"  ... and {len(failed_files) - 10} more.")
+
+            all_done = (done == total) and (total >= (expected_jobs or args.min_files)) and (total > 0)
+            if all_done:
+                print("[STATUS] ALL JOBS COMPLETED SUCCESSFULLY!")
+                return 0
+            print("[STATUS] Incomplete / pending jobs remaining.")
+            return 1
+
+        # Standard monitoring loop
+        print("=" * 70)
+        print("CONDOR FUN4ALL JOB COMPLETION MONITOR")
+        print("=" * 70)
+        print(f"  Target Dir:     {target_dir}")
+        print(f"  File Pattern:   {args.pattern}")
+        print(f"  Finish Pattern: {finish_pattern_str}")
+        if expected_jobs:
+            print(f"  Expected Jobs:  {expected_jobs}" + (" (from jobs.list)" if jobs_list_file else ""))
+        print(f"  Interval:       {interval:.1f}s ({raw_interval})")
+        print(f"  Threads:        {threads}")
+        print(f"  Notification:   {email_addr}")
+        print(f"  Host:           {hostname}")
+        print(f"  Started:        {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 70)
+
+        check_count = 0
         while True:
             check_count += 1
             now = datetime.now()
@@ -717,7 +868,7 @@ def main() -> int:
                 time.sleep(interval)
                 continue
 
-            files, total, done, in_prog = scan_directory()
+            total, done, in_prog = scan_directory(executor)
 
             # Check if expected files threshold is met
             threshold = expected_jobs if expected_jobs is not None else args.min_files
@@ -812,6 +963,8 @@ def main() -> int:
         total_time = format_duration((datetime.now() - start_time).total_seconds())
         print(f"\nMonitoring stopped by user after {check_count} checks ({total_time}). Exiting.")
         return 130
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":
