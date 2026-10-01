@@ -59,7 +59,8 @@ class CondorJobManager:
     def get_best_submit_node(self):
         if not hasattr(self, '_ranked_nodes') or self._ranked_nodes is None:
             manual_node = getattr(self.args, 'node', None)
-            detected_nodes, node_status = get_best_submit_node(logger=self.logger)
+            user = getattr(self.args, 'user', None) or "anarde"
+            detected_nodes, node_status = get_best_submit_node(logger=self.logger, user=user)
             self._ranked_nodes = [manual_node] if manual_node else detected_nodes
             self._node_status = node_status
         return self._ranked_nodes, self._node_status
@@ -103,9 +104,18 @@ class CondorJobManager:
             ranked_nodes, node_status = self.get_best_submit_node()
             top_node = ranked_nodes[0]
             if node_status:
-                status_summary = ", ".join(f"{n}: {node_status[n]['running']}" for n in sorted(node_status.keys()))
-                self.logger.info(f'Submit Nodes Running Jobs: {status_summary}')
-                self.logger.info(f'Top Submit Node: {top_node} ({node_status[top_node]["running"]} running jobs)')
+                user = getattr(self.args, 'user', None) or "anarde"
+                status_summary = ", ".join(
+                    f"{n}: {node_status[n]['user_total']} ({node_status[n]['user_running']}R/{node_status[n]['user_idle']}I)"
+                    for n in sorted(node_status.keys())
+                )
+                self.logger.info(f'Submit Nodes User Jobs ({user}): {status_summary}')
+                self.logger.info(
+                    f'Top Submit Node: {top_node} '
+                    f'({node_status[top_node]["user_total"]} jobs for {user} '
+                    f'[{node_status[top_node]["user_running"]} running, {node_status[top_node]["user_idle"]} idle] | '
+                    f'node total: {node_status[top_node]["total_running"]} running)'
+                )
             else:
                 self.logger.info(f'Top Submit Node: {top_node}')
             self.logger.info(f'Monitor Command (nohup): {self.get_monitor_command(background=True)}')

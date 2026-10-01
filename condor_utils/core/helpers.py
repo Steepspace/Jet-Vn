@@ -107,12 +107,23 @@ def sort_files_by_lines(directory_path: Path, output_file: Path) -> None:
 SUBMISSION_NODES = [f"sphnxuser{i:02d}" for i in range(1, 9)]
 
 
-def parse_submitters_output(output_text: str) -> dict[str, dict[str, int]]:
+def parse_submitters_output(output_text: str, user: str = "anarde") -> dict[str, dict[str, int]]:
     """
     Parses output of 'condor_status -submitters'.
     Aggregates user-specific and total RunningJobs and IdleJobs for sphnxuser01-08 nodes.
     """
-    nodes = {node: {"running": 0, "idle": 0} for node in SUBMISSION_NODES}
+    nodes = {
+        node: {
+            "user_running": 0,
+            "user_idle": 0,
+            "user_total": 0,
+            "total_running": 0,
+            "total_idle": 0,
+        }
+        for node in SUBMISSION_NODES
+    }
+
+    user_lower = (user or "anarde").lower()
 
     for line in output_text.splitlines():
         line = line.strip()
@@ -124,16 +135,24 @@ def parse_submitters_output(output_text: str) -> dict[str, dict[str, int]]:
             m = re.search(r"(sphnxuser0[1-8])", parts[1], re.IGNORECASE)
             if m:
                 node = m.group(1).lower()
+                submitter_user = parts[0].split("@")[0].lower()
                 try:
-                    nodes[node]["running"] += int(parts[2])
-                    nodes[node]["idle"] += int(parts[3])
+                    r_jobs = int(parts[2])
+                    i_jobs = int(parts[3])
                 except ValueError:
-                    pass
+                    continue
 
+                nodes[node]["total_running"] += r_jobs
+                nodes[node]["total_idle"] += i_jobs
+
+                if submitter_user == user_lower:
+                    nodes[node]["user_running"] += r_jobs
+                    nodes[node]["user_idle"] += i_jobs
+                    nodes[node]["user_total"] += (r_jobs + i_jobs)
     return nodes
 
 
-def get_best_submit_node(logger=None) -> tuple[list[str], dict[str, dict[str, int]]]:
+def get_best_submit_node(logger=None, user: str = "anarde") -> tuple[list[str], dict[str, dict[str, int]]]:
     """
     Ranks submission nodes (sphnxuser01-08) by running
     'condor_status -submitters'. Nodes are sorted primarily by lowest
@@ -145,7 +164,16 @@ def get_best_submit_node(logger=None) -> tuple[list[str], dict[str, dict[str, in
     Returns:
         (ranked_nodes_list, nodes_dict)
     """
-    nodes = {node: {"running": 0, "idle": 0} for node in SUBMISSION_NODES}
+    nodes = {
+        node: {
+            "user_running": 0,
+            "user_idle": 0,
+            "user_total": 0,
+            "total_running": 0,
+            "total_idle": 0,
+        }
+        for node in SUBMISSION_NODES
+    }
     try:
         res = subprocess.run(
             ["condor_status", "-submitters"],
@@ -155,7 +183,7 @@ def get_best_submit_node(logger=None) -> tuple[list[str], dict[str, dict[str, in
             check=False,
         )
         if res.returncode == 0 and res.stdout:
-            nodes = parse_submitters_output(res.stdout)
+            nodes = parse_submitters_output(res.stdout, user=user)
         elif logger:
             logger.warning(
                 f"'condor_status -submitters' returned non-zero code {res.returncode}: {res.stderr.strip()}"
@@ -171,7 +199,12 @@ def get_best_submit_node(logger=None) -> tuple[list[str], dict[str, dict[str, in
     # 4. Preferred order (sphnxuser01..08)
     ranked_nodes = sorted(
         SUBMISSION_NODES,
-        key=lambda n: (nodes[n]["running"], nodes[n]["idle"], SUBMISSION_NODES.index(n)),
+        key=lambda n: (
+            nodes[n]["total_running"] + nodes[n]["user_idle"],
+            nodes[n]["user_total"],
+            nodes[n]["total_idle"],
+            SUBMISSION_NODES.index(n),
+        ),
     )
     return ranked_nodes, nodes
 
