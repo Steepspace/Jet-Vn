@@ -69,6 +69,13 @@ ERROR_BYTE_TOKENS = (
     b"Bus error",
     b"Aborted",
 )
+SKIMMER_BYTE_TOKEN = b"CaloStatusSkimmer"
+SKIMMER_PROCESSED_RE = re.compile(
+    r"CaloStatusSkimmer(?:::End)?\s+Total events processed:\s*([0-9,]+)", re.IGNORECASE
+)
+SKIMMER_SKIMMED_RE = re.compile(
+    r"CaloStatusSkimmer(?:::End)?\s+Total events skimmed:\s*([0-9,]+)", re.IGNORECASE
+)
 
 
 def parse_interval(val: str) -> float:
@@ -333,12 +340,13 @@ def inspect_log_file(
             chunk = f.read(read_bytes)
 
         # Fast byte pre-filter:
-        # Check if the finish token or any known error token is present in raw bytes.
+        # Check if the finish token, skimmer token, or any known error token is present in raw bytes.
         # This allows 99% of normal in-progress files to return instantly without line splitting or regex.
         has_finish = (finish_token is None) or (finish_token in chunk)
         has_error = (error_regex is not None) and any(token in chunk for token in ERROR_BYTE_TOKENS)
+        has_skimmer = SKIMMER_BYTE_TOKEN in chunk
 
-        if not has_finish and not has_error:
+        if not has_finish and not has_error and not has_skimmer:
             return False, "In progress", None
 
         # Decode tail chunk only when a candidate token was detected
@@ -352,6 +360,16 @@ def inspect_log_file(
             for line in reversed(lines):
                 if finish_regex.search(line):
                     return True, "Finished", line
+
+        # Check for fully skimmed job (where all events were skimmed out)
+        if has_skimmer:
+            proc_matches = SKIMMER_PROCESSED_RE.findall(text)
+            skim_matches = SKIMMER_SKIMMED_RE.findall(text)
+            if proc_matches and skim_matches:
+                proc_val = int(proc_matches[-1].replace(",", ""))
+                skim_val = int(skim_matches[-1].replace(",", ""))
+                if proc_val == skim_val:
+                    return True, "Skimmed", f"CaloStatusSkimmer: {proc_val}/{skim_val} events skimmed (fully skimmed)"
 
         # Check for known errors if not finished
         if has_error and error_regex:
@@ -386,6 +404,7 @@ def generate_completion_report(
 
     completed_count = len(completed_files)
     failed_count = len(failed_files)
+    skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
     pct = (completed_count / total_files * 100.0) if total_files > 0 else 0.0
 
     if failed_count == 0 and completed_count == total_files:
@@ -416,6 +435,7 @@ Failed / Errored Jobs ({failed_count}):
 """ + "\n".join(failed_lines) + "\n"
 
     expected_info = f"Expected Jobs:       {expected_jobs}\n" if expected_jobs else ""
+    skimmed_info = f" (including {skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
 
     report = f"""Hello,
 
@@ -429,7 +449,7 @@ Execution Summary:
 Host:                {fqdn} ({hostname})
 Directory:           {target_dir}
 Total Files Found:   {total_files}
-Finished Jobs:       {completed_count} ({pct:.1f}%)
+Finished Jobs:       {completed_count} ({pct:.1f}%){skimmed_info}
 Failed Jobs:         {failed_count}
 {expected_info}Finish Pattern:      {finish_pattern_str}
 Monitoring Started:  {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
@@ -816,12 +836,14 @@ def main() -> int:
             print(f"Scanning target directory: {target_dir}")
             print(f"Pattern: '{args.pattern}' | Finish Regex: '{finish_pattern_str}' | Threads: {threads}")
             total, done, in_prog = scan_directory(executor)
+            skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+            skimmed_info = f" (including {skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
 
             print("=" * 70)
             print(f"Total files found:  {total}")
             if expected_jobs:
                 print(f"Expected jobs:      {expected_jobs}")
-            print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%)")
+            print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%){skimmed_info}")
             print(f"In-progress jobs:   {in_prog}")
             print(f"Failed jobs:        {len(failed_files)}")
             print("=" * 70)
@@ -882,11 +904,13 @@ def main() -> int:
             pct = (done / total * 100.0) if total > 0 else 0.0
             fail_count = len(failed_files)
 
-            # Check completion condition: all files in dir have the finish message
+            # Check completion condition: all files in dir have the finish message or were fully skimmed
             if done == total and total >= threshold:
+                skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+                skimmed_info = f" ({skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
                 print("\n" + "=" * 70)
-                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] SUCCESS: All {done}/{total} jobs have completed successfully!")
-                print(f"All files in '{target_dir}' contain the finish message.")
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] SUCCESS: All {done}/{total} jobs have completed successfully!{skimmed_info}")
+                print(f"All files in '{target_dir}' have completed (finished or fully skimmed).")
                 print("=" * 70)
 
                 subject = args.subject or f"[Done] All {done} Condor Jobs Completed on {hostname} ({target_dir.name})"
@@ -946,7 +970,9 @@ def main() -> int:
 
             # Ongoing progress
             if not args.quiet:
-                status_parts = [f"{done}/{total} finished ({pct:.1f}%)"]
+                skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+                skim_str = f" [{skimmed_count} skimmed]" if skimmed_count > 0 else ""
+                status_parts = [f"{done}/{total} finished ({pct:.1f}%){skim_str}"]
                 if in_prog > 0:
                     status_parts.append(f"{in_prog} in progress")
                 if fail_count > 0:
