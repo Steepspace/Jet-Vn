@@ -22,6 +22,7 @@
 #include <centrality/CentralityInfo.h>
 
 #include <calotrigger/TriggerAnalyzer.h>
+#include <calotrigger/TriggerRunInfo.h>
 
 #include <TH1F.h>
 #include <TH2F.h>
@@ -141,6 +142,18 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       tree->Branch("zvtx", &m_data.zvtx);
       tree->Branch("centrality", &m_data.centrality);
     }
+  }
+
+  return Fun4AllReturnCodes::EVENT_OK;
+}
+
+int EventQA::InitRun(PHCompositeNode *topNode)
+{
+  TriggerRunInfo *trigInfo = findNode::getClass<TriggerRunInfo>(topNode, "TriggerRunInfo");
+  if (trigInfo)
+  {
+    m_prescale_12 = trigInfo->getPrescaleByBit(m_trig_12);
+    m_prescale_14 = trigInfo->getPrescaleByBit(m_trig_14);
   }
 
   return Fun4AllReturnCodes::EVENT_OK;
@@ -594,12 +607,22 @@ int EventQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-int EventQA::End([[maybe_unused]] PHCompositeNode *topNode)
+int EventQA::End(PHCompositeNode *topNode)
 {
   std::cout << "EventQA::End" << std::endl;
 
-  int prescale_12 = (m_triggerAnalyzer) ? m_triggerAnalyzer->getTriggerPrescale(m_trig_12) : -1;
-  int prescale_14 = (m_triggerAnalyzer) ? m_triggerAnalyzer->getTriggerPrescale(m_trig_14) : -1;
+  if ((m_prescale_12 < 0 || m_prescale_14 < 0) && topNode)
+  {
+    TriggerRunInfo *trigInfo = findNode::getClass<TriggerRunInfo>(topNode, "TriggerRunInfo");
+    if (trigInfo)
+    {
+      m_prescale_12 = trigInfo->getPrescaleByBit(m_trig_12);
+      m_prescale_14 = trigInfo->getPrescaleByBit(m_trig_14);
+    }
+  }
+
+  int prescale_12 = m_prescale_12;
+  int prescale_14 = m_prescale_14;
 
   std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_12, prescale_12);
   std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_14, prescale_14);

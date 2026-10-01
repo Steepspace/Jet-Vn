@@ -28,6 +28,7 @@ class EventQA : public SubsysReco
   EventQA &operator=(EventQA &&) = delete;
 
   int Init(PHCompositeNode *topNode) override;
+  int InitRun(PHCompositeNode *topNode) override;
   int process_event(PHCompositeNode *topNode) override;
   int ResetEvent(PHCompositeNode *topNode) override;
   int End(PHCompositeNode *topNode) override;
@@ -122,6 +123,9 @@ class EventQA : public SubsysReco
 
   const int m_trig_12 = 12; // MBD N&S >= 2, vtx < 10 cm
   const int m_trig_14 = 14; // MBD N&S >= 2, vtx < 150 cm
+
+  int m_prescale_12{-1};
+  int m_prescale_14{-1};
 
   std::vector<int> m_triggerBits = {m_trig_12, m_trig_14};
   std::vector<std::string> m_triggernames = {"MBD N&S >= 2, vtx < 10 cm",
