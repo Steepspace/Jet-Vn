@@ -153,6 +153,52 @@ def create_f4a_zdc_jobs(args):
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
+def create_f4a_sepd_calib_jobs(args):
+    manager = CondorJobManager(args, job_name="F4A sEPD Calib")
+    manager.add_file_to_check(args.f4a_macro)
+    manager.validate_paths()
+
+    manager.log_initialization({
+        'Logging Interval': f"{args.log_interval} Events",
+        'Fun4All Macro': Path(args.f4a_macro).resolve()
+    })
+
+    files_dir = manager.prepare_directories()
+    manager.copy_dependencies(extra_files=[args.f4a_macro])
+
+    jobs_file = manager.output_dir / 'jobs.list'
+    jobs_file.unlink(missing_ok=True)
+
+    all_dst_lines = []
+    lines = [line.strip() for line in manager.input_list.read_text(encoding='utf-8').splitlines() if line.strip()]
+    if any(Path(l).is_file() for l in lines):
+        for list_path_str in lines:
+            sub_list = Path(list_path_str)
+            if sub_list.is_file():
+                all_dst_lines.extend(sub_list.read_text(encoding='utf-8').splitlines())
+            else:
+                manager.logger.warning(f"Sub-list file not found: {sub_list}")
+    else:
+        all_dst_lines = lines
+
+    all_dst_lines = [l.strip() for l in all_dst_lines if l.strip()]
+
+    total_jobs = 0
+    with open(jobs_file, mode='w', encoding='utf-8') as f_jobs:
+        for i, chunk in enumerate(chunk_list(all_dst_lines, args.dst_per_job)):
+            chunk_file = files_dir / f'chunk-{i:05d}.list'
+            chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
+            f_jobs.write(f"{chunk_file.resolve()}\n")
+            total_jobs += 1
+
+    manager.logger.info(f"Total jobs prepared: {total_jobs}")
+
+    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) {args.events} {args.dbtag} {args.log_interval} {manager.output_dir}/output"
+    manager.write_submit_file(arguments=arguments)
+    manager.finalize_submission(queue_arg="input_dst from jobs.list")
+
+create_f4a_sepdcalib_jobs = create_f4a_sepd_calib_jobs
+
 def create_f4a_mc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A MC")
     manager.add_file_to_check(args.f4a_macro)
@@ -405,6 +451,11 @@ def setup_f4a_subparsers(subparsers):
     f4a_zdc.add_argument('-n3', '--log-interval', type=int, default=10000, help='Logging Event Frequency. Default: 10000.')
     f4a_zdc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_ZDC.C', help='Fun4All Macro.')
     f4a_zdc.set_defaults(memory=0.5, condor_script='scripts/genFun4AllZDC.sh', func=create_f4a_zdc_jobs)
+
+    f4a_sepd_calib = subparsers.add_parser('f4a_sepd_calib', aliases=['f4a_sepdcalib'], parents=[get_common_parser()], help='Create condor submission directory for sEPD Calibration.')
+    f4a_sepd_calib.add_argument('-n3', '--log-interval', type=int, default=5000, help='Logging Event Frequency. Default: 5000.')
+    f4a_sepd_calib.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_Calib.C', help='Fun4All Macro.')
+    f4a_sepd_calib.set_defaults(memory=0.5, condor_script='scripts/genFun4All_sEPD_Calib.sh', func=create_f4a_sepd_calib_jobs)
 
     f4a_mc = subparsers.add_parser('f4a_mc', parents=[get_common_parser()], help='Create condor submission directory.')
     f4a_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_MC.C', help='Fun4All Macro.')

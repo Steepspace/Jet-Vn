@@ -47,6 +47,7 @@ These commands generate Condor jobs for the core Fun4All analysis.
 **Commands:**
 - `f4a`: Standard sEPD Fun4All job.
 - `f4a_zdc`: ZDC-specific Fun4All job.
+- `f4a_sepd_calib`: sEPD Calibration Fun4All job.
 - `f4a_mc`: Monte Carlo analysis job.
 - `f4a_data_mc`: Data/MC analysis job that utilizes Q Vector Calibrations.
 
