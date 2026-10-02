@@ -94,6 +94,13 @@ class CondorJobManager:
         self.logger.info(f'Log File: {self.log_file}')
         if hasattr(self.args, 'memory'):
             self.logger.info(f'Condor Memory: {self.args.memory} GB')
+            retry_mem = getattr(self.args, 'retry_request_memory', None)
+            step = getattr(self.args, 'retry_memory_step', 0.5)
+            ceiling = getattr(self.args, 'retry_memory_max', 6.0)
+            if retry_mem:
+                self.logger.info(f'Retry Request Memory: {retry_mem}')
+            elif step and step > 0 and self.args.memory is not None:
+                self.logger.info(f'Retry Memory Policy: +{step} GB on OOM eviction up to ceiling {ceiling} GB')
         if self.condor_script:
             self.logger.info(f'Condor Script: {self.condor_script}')
         if self.condor_log_dir:
@@ -232,25 +239,76 @@ class CondorJobManager:
         self.logger.info(f"Total jobs created: {len(all_job_paths)} across {total_runs} runs.")
         return all_job_paths
 
-    def write_submit_file(self, arguments, executable=None, memory=None, sub_file_name="genFun4All.sub", stdout_dir="stdout", error_dir="error", log_prefix="job"):
+    def write_submit_file(
+        self,
+        arguments,
+        executable=None,
+        memory=None,
+        retry_request_memory=None,
+        retry_memory_step=None,
+        retry_memory_max=None,
+        sub_file_name="genFun4All.sub",
+        stdout_dir="stdout",
+        error_dir="error",
+        log_prefix="job",
+    ):
         exec_file = executable or (self.condor_script.name if self.condor_script else "script.sh")
-        mem = memory or getattr(self.args, 'memory', 1)
+        mem = memory if memory is not None else getattr(self.args, 'memory', 1.0)
+
+        # Parse base memory
+        mem_float = None
+        if isinstance(mem, (int, float)):
+            mem_float = float(mem)
+            mem_str = f"{int(mem_float)}GB" if mem_float.is_integer() else f"{mem_float:g}GB"
+        else:
+            mem_s = str(mem).strip()
+            m = re.match(r"^([\d\.]+)\s*([a-zA-Z]*)$", mem_s)
+            if m:
+                mem_float = float(m.group(1))
+                unit = m.group(2) or "GB"
+                mem_str = f"{mem_float:g}{unit}"
+            else:
+                mem_str = mem_s
+
+        # Determine retry_request_memory
+        retry_mem = retry_request_memory
+        if retry_mem is None:
+            retry_mem = getattr(self.args, 'retry_request_memory', None)
+
+        if retry_mem is None:
+            step = retry_memory_step if retry_memory_step is not None else getattr(self.args, 'retry_memory_step', 0.5)
+            ceiling = retry_memory_max if retry_memory_max is not None else getattr(self.args, 'retry_memory_max', 6.0)
+            if step and step > 0 and mem_float is not None and ceiling and ceiling > mem_float:
+                steps = []
+                curr = mem_float + float(step)
+                while round(curr, 4) <= round(float(ceiling), 4):
+                    val = round(curr, 4)
+                    steps.append(f"{int(val)}GB" if val.is_integer() else f"{val:g}GB")
+                    curr += float(step)
+                if steps:
+                    retry_mem = ", ".join(steps)
 
         log_dir = self.condor_log_dir or (self.output_dir / 'logs')
 
-        submit_content = textwrap.dedent(f"""\
-            executable     = {exec_file}
-            arguments      = {arguments}
-            log            = {log_dir}/{log_prefix}-$(ClusterId)-$(Process).log
-            output         = {stdout_dir}/job-$(ClusterId)-$(Process).out
-            error          = {error_dir}/job-$(ClusterId)-$(Process).err
-            request_memory = {mem}GB
-            max_retries    = {getattr(self.args, 'max_retries', 3)}
-            stream_output  = True
-            stream_error   = True
-        """)
+        lines = [
+            f"executable           = {exec_file}",
+            f"arguments            = {arguments}",
+            f"log                  = {log_dir}/{log_prefix}-$(ClusterId)-$(Process).log",
+            f"output               = {stdout_dir}/job-$(ClusterId)-$(Process).out",
+            f"error                = {error_dir}/job-$(ClusterId)-$(Process).err",
+            f"request_memory       = {mem_str}",
+        ]
+        if retry_mem:
+            lines.append(f"retry_request_memory = {retry_mem}")
+        lines.extend([
+            f"max_retries          = {getattr(self.args, 'max_retries', 3)}",
+            f"stream_output        = True",
+            f"stream_error         = True",
+            "",
+        ])
+
         sub_file = self.output_dir / sub_file_name
-        sub_file.write_text(submit_content)
+        sub_file.write_text("\n".join(lines))
         return sub_file
 
     def finalize_submission(self, queue_arg="input_dst from jobs.list", sub_file_name="genFun4All.sub", limit=15000, execute=False, use_ssh=None, clean_log_dir=None):
