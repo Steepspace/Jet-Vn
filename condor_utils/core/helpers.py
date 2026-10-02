@@ -123,7 +123,8 @@ def parse_submitters_output(output_text: str, user: str = "anarde") -> dict[str,
         for node in SUBMISSION_NODES
     }
 
-    user_lower = (user or "anarde").lower()
+    user_str = (user or "anarde").split("@")[0].lower()
+    user_lower = user_str.split(".")[-1]
 
     for line in output_text.splitlines():
         line = line.strip()
@@ -135,7 +136,8 @@ def parse_submitters_output(output_text: str, user: str = "anarde") -> dict[str,
             m = re.search(r"(sphnxuser0[1-8])", parts[1], re.IGNORECASE)
             if m:
                 node = m.group(1).lower()
-                submitter_user = parts[0].split("@")[0].lower()
+                raw_user = parts[0].split("@")[0].lower()
+                submitter_user = raw_user.split(".")[-1]
                 try:
                     r_jobs = int(parts[2])
                     i_jobs = int(parts[3])
@@ -145,7 +147,7 @@ def parse_submitters_output(output_text: str, user: str = "anarde") -> dict[str,
                 nodes[node]["total_running"] += r_jobs
                 nodes[node]["total_idle"] += i_jobs
 
-                if submitter_user == user_lower:
+                if submitter_user == user_lower or raw_user == user_str:
                     nodes[node]["user_running"] += r_jobs
                     nodes[node]["user_idle"] += i_jobs
                     nodes[node]["user_total"] += (r_jobs + i_jobs)
