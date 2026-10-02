@@ -197,6 +197,157 @@ def compute_profile_x_spread(values, xedges, yedges):
     return x_centers, mean, std
 
 
+def format_count(val):
+    if float(val).is_integer():
+        return f"{int(round(val)):,}"
+    return f"{val:,.1f}"
+
+
+def compute_calo_mbd_cut_stats(file, ref_profile=None, sigma_cut=3.5):
+    """
+    Computes or retrieves event counts satisfying vs failing the Calo-MBD sigma selection.
+    """
+    if "h2CaloE_MBD" in file:
+        uncut_vals, uncut_xe, uncut_ye = file["h2CaloE_MBD"].to_numpy()
+        n_total = float(np.sum(uncut_vals))
+
+        if ref_profile is not None and len(ref_profile[1]) == uncut_vals.shape[0]:
+            prof_x, prof_mean, prof_std = ref_profile
+        else:
+            prof_x, prof_mean, prof_std = compute_profile_x_spread(uncut_vals, uncut_xe, uncut_ye)
+
+        y_centers = (uncut_ye[:-1] + uncut_ye[1:]) / 2.0
+        mean = prof_mean[:, np.newaxis]
+        std = prof_std[:, np.newaxis]
+        valid = (std > 0.0) & np.isfinite(std) & np.isfinite(mean)
+        satisfy_mask = valid & (np.abs(y_centers[np.newaxis, :] - mean) <= sigma_cut * std)
+        n_satisfy_prof = float(np.sum(uncut_vals * satisfy_mask))
+        n_fail_prof = max(0.0, n_total - n_satisfy_prof)
+
+        has_cut_hist = "h2CaloE_MBD_cut" in file
+        n_satisfy_hist = None
+        if has_cut_hist:
+            cut_vals = file["h2CaloE_MBD_cut"].to_numpy()[0]
+            n_satisfy_hist = float(np.sum(cut_vals))
+
+        if has_cut_hist and abs(sigma_cut - 3.5) < 1e-4 and ref_profile is None:
+            n_satisfy = n_satisfy_hist
+            n_fail = max(0.0, n_total - n_satisfy)
+            method = "Cut Histogram (h2CaloE_MBD_cut)"
+        else:
+            n_satisfy = n_satisfy_prof
+            n_fail = n_fail_prof
+            method = f"2D Profile Integration ({sigma_cut:g}σ)"
+
+        pct_satisfy = min(100.0, (n_satisfy / n_total * 100.0)) if n_total > 0 else 0.0
+        pct_fail = max(0.0, 100.0 - pct_satisfy) if n_total > 0 else 0.0
+
+        return {
+            "n_total": n_total,
+            "n_satisfy": n_satisfy,
+            "n_fail": n_fail,
+            "pct_satisfy": pct_satisfy,
+            "pct_fail": pct_fail,
+            "sigma_cut": sigma_cut,
+            "method": method,
+            "n_satisfy_hist": n_satisfy_hist,
+            "n_satisfy_prof": n_satisfy_prof,
+        }
+
+    for pair_name in ["h2sEPD_Centrality", "h2sEPD_MBD", "h2sEPD_CaloE", "h2sEPD_North_South"]:
+        if pair_name in file and f"{pair_name}_cut" in file:
+            uncut_vals = file[pair_name].to_numpy()[0]
+            cut_vals = file[f"{pair_name}_cut"].to_numpy()[0]
+            n_total = float(np.sum(uncut_vals))
+            n_satisfy = float(np.sum(cut_vals))
+            n_fail = max(0.0, n_total - n_satisfy)
+            pct_satisfy = min(100.0, (n_satisfy / n_total * 100.0)) if n_total > 0 else 0.0
+            pct_fail = max(0.0, 100.0 - pct_satisfy) if n_total > 0 else 0.0
+            return {
+                "n_total": n_total,
+                "n_satisfy": n_satisfy,
+                "n_fail": n_fail,
+                "pct_satisfy": pct_satisfy,
+                "pct_fail": pct_fail,
+                "sigma_cut": sigma_cut,
+                "method": f"Cut Histogram ({pair_name}_cut)",
+                "n_satisfy_hist": n_satisfy,
+                "n_satisfy_prof": None,
+            }
+
+    return None
+
+
+def print_cut_summary_table(cut_summaries, output_dir=None):
+    if not cut_summaries:
+        return
+
+    first_sigma = cut_summaries[0]["sigma_cut"]
+    sigma_label = f"{first_sigma:g}-Sigma" if all(abs(item["sigma_cut"] - first_sigma) < 1e-4 for item in cut_summaries) else "Sigma"
+
+    lines = []
+    if len(cut_summaries) == 1:
+        item = cut_summaries[0]
+        run_str = f"Run {item['run_number']}" if item["run_number"] is not None else item["file_name"]
+        lines.append("=" * 72)
+        lines.append(f"  Calo-MBD {item['sigma_cut']:g}-Sigma Event Selection Summary")
+        lines.append("=" * 72)
+        lines.append(f" Run / File                  : {run_str} ({item['file_name']})")
+        lines.append(f" Selection Source            : {item['method']}")
+        lines.append(f" Total Events (Calo E > 0)   : {format_count(item['n_total']):>14}")
+        lines.append(f" Satisfied (<= {item['sigma_cut']:g}σ)        : {format_count(item['n_satisfy']):>14}  ({item['pct_satisfy']:6.2f}%)")
+        lines.append(f" Failed    (> {item['sigma_cut']:g}σ)         : {format_count(item['n_fail']):>14}  ({item['pct_fail']:6.2f}%)")
+        if item.get("n_satisfy_hist") is not None and item.get("n_satisfy_prof") is not None and item["method"].startswith("Cut Histogram"):
+            diff = abs(item["n_satisfy_hist"] - item["n_satisfy_prof"])
+            lines.append(f" (2D Profile Int. Consistency: {format_count(item['n_satisfy_prof'])} satisfied, diff = {format_count(diff)})")
+        lines.append("=" * 72)
+    else:
+        lines.append("=" * 92)
+        lines.append(f"                    Calo-MBD {sigma_label} Event Selection Summary")
+        lines.append("=" * 92)
+        lines.append(f"{'Run / File':<24} {'Total Events':>14} {'Satisfied':>15} {'Failed':>15} {'Pass %':>10} {'Fail %':>10}")
+        lines.append("-" * 92)
+
+        tot_events = 0.0
+        tot_satisfy = 0.0
+        tot_fail = 0.0
+
+        for item in cut_summaries:
+            run_str = f"Run {item['run_number']}" if item["run_number"] is not None else item["file_name"]
+            if len(run_str) > 23:
+                run_str = run_str[:20] + "..."
+            tot_events += item["n_total"]
+            tot_satisfy += item["n_satisfy"]
+            tot_fail += item["n_fail"]
+            lines.append(
+                f"{run_str:<24} {format_count(item['n_total']):>14} "
+                f"{format_count(item['n_satisfy']):>15} {format_count(item['n_fail']):>15} "
+                f"{item['pct_satisfy']:9.2f}% {item['pct_fail']:9.2f}%"
+            )
+
+        lines.append("-" * 92)
+        tot_pct_sat = min(100.0, (tot_satisfy / tot_events * 100.0)) if tot_events > 0 else 0.0
+        tot_pct_fail = max(0.0, 100.0 - tot_pct_sat) if tot_events > 0 else 0.0
+        lines.append(
+            f"{'Total All Runs':<24} {format_count(tot_events):>14} "
+            f"{format_count(tot_satisfy):>15} {format_count(tot_fail):>15} "
+            f"{tot_pct_sat:9.2f}% {tot_pct_fail:9.2f}%"
+        )
+        lines.append("=" * 92)
+
+    summary_text = "\n".join(lines)
+    print("\n" + summary_text + "\n")
+
+    if output_dir is not None:
+        try:
+            out_p = Path(output_dir)
+            out_p.mkdir(parents=True, exist_ok=True)
+            summary_file = out_p / "calo_mbd_cut_summary.txt"
+            summary_file.write_text(summary_text + "\n", encoding="utf-8")
+        except Exception:
+            pass
+
+
 def make_2d_plot(values, xedges, yedges, run_number, output_path, xlabel="", ylabel="", hist_name="", sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, calo_mbd_cut_profile=None, sigma_cut=3.5, custom_max_coord=None, custom_xlim=None, custom_ylim=None):
     if date_str is None:
         date_str = datetime.now().strftime("%m/%d/%Y")
@@ -535,15 +686,20 @@ def make_1d_slice_plot(values, yedges, cent_min, cent_max, run_number, output_pa
 def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABEL, date_str=None, save_pdf=False, ref_profile=None, sigma_cut=3.5):
     path = Path(path)
     if not path.exists():
-        return f"File not found: {path}"
+        return f"File not found: {path}", None
 
     run_number = parse_run_number(path)
     if runs_to_plot is not None and run_number is not None and run_number not in runs_to_plot:
-        return None
+        return None, None
 
     try:
         with uproot.open(path) as file:
             plotted_any = False
+            file_cut_info = compute_calo_mbd_cut_stats(file, ref_profile=ref_profile, sigma_cut=sigma_cut)
+            if file_cut_info is not None:
+                file_cut_info["file_name"] = path.name
+                file_cut_info["run_number"] = run_number
+                file_cut_info["path"] = str(path)
 
             # If h2sEPD_North_South is present, compute its max_coord for matching bounds
             ns_uncut_max_coord = None
@@ -686,11 +842,11 @@ def process_file(path, output_dir, runs_to_plot=None, sphenix_label=SPHENIX_LABE
                     plotted_any = True
 
             if not plotted_any:
-                return f"None of target histograms found in {path.name}"
+                return f"None of target histograms found in {path.name}", None
 
-        return None
+        return None, file_cut_info
     except Exception as e:
-        return f"Error processing {path}: {e}"
+        return f"Error processing {path}: {e}", None
 
 
 def main():
@@ -761,11 +917,22 @@ def main():
     )
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        errors = list(tqdm.tqdm(executor.map(process_func, file_list), total=len(file_list)))
+        results = list(tqdm.tqdm(executor.map(process_func, file_list), total=len(file_list)))
 
-    for err in errors:
+    errors = []
+    cut_summaries = []
+    for res in results:
+        if res is None:
+            continue
+        err, cut_info = res
         if err:
+            errors.append(err)
             print(f"Warning: {err}")
+        if cut_info is not None:
+            cut_summaries.append(cut_info)
+
+    if cut_summaries:
+        print_cut_summary_table(cut_summaries, output_dir=args.output_dir)
 
     print(f"Plots saved to: {args.output_dir}")
     print("Done!")
