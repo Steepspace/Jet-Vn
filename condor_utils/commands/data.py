@@ -114,5 +114,5 @@ def setup_data_subparsers(subparsers):
     data_parser.add_argument('-i2', '--zdc-calib-prefix', type=str, default='dst_zdc_calib', help='ZDC Calib DST List Prefix.')
     data_parser.add_argument('-t', '--tag', type=str, default='pro001_pcdb001_v001', help='Tag.')
     data_parser.add_argument('-o', '--output-dir', type=str, default='files/run3auau', help='Output Directory.')
-    data_parser.add_argument('-s', '--merge-script', type=str, default='scripts/merge_lists.sh', help='Merge Lists Script.')
+    data_parser.add_argument('-s', '--merge-script', type=str, default='scripts/data/merge_lists.py', help='Merge Lists Script.')
     data_parser.set_defaults(func=setup_data)

@@ -21,7 +21,7 @@ python3 utils.py data --tag <dst_tag> --output-dir <output_dir>
 **What it does:**
 - Queries `sphnxdaqdbreplica` for physics runs longer than 5 minutes.
 - Uses `CreateDstList.pl` to find the corresponding `DST_CALOFITTING` and `DST_ZDC_RAW` files.
-- Merges the lists using `merge_lists.sh` so they can be processed by downstream Condor jobs.
+- Merges the lists using `scripts/data/merge_lists.py` so they can be processed by downstream Condor jobs.
 
 ---
 
