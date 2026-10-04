@@ -39,7 +39,6 @@ then
     cut -d ',' -f 3 "$input" > dst_sepd.list
 
     getinputfiles.pl --verbose --filelist dst_calofit.list
-    getinputfiles.pl --verbose --filelist dst_sepd.list
 
     # Create/clear a temporary file for the basenames
     > dst_zdc_local.list
@@ -57,6 +56,23 @@ then
 
     # Overwrite the original list with the basename-only list
     mv dst_zdc_local.list dst_zdc.list
+
+    # Create/clear a temporary file for the basenames
+    > dst_sepd_local.list
+
+    while IFS= read -r file; do
+        # Skip empty lines if there are any
+        [ -z "$file" ] && continue
+
+        # Copy the file to the current directory
+        cp -v "$file" .
+
+        # Extract just the filename and save it to our local list
+        basename "$file" >> dst_sepd_local.list
+    done < dst_sepd.list
+
+    # Overwrite the original list with the basename-only list
+    mv dst_sepd_local.list dst_sepd.list
 
     test -e "$input_calib" && cp -v "$input_calib" .
     ls -lah

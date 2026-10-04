@@ -13,22 +13,6 @@ output=${3}
 nEvents=${4}
 dbtag=${5}
 submitDir=${6}
-do_sepd=${7:-auto}
-
-# Determine whether sEPD should be processed
-use_sepd=0
-if [[ "$do_sepd" == "1" || "$do_sepd" == "true" || "$do_sepd" == "True" ]]; then
-    use_sepd=1
-elif [[ "$do_sepd" == "0" || "$do_sepd" == "false" || "$do_sepd" == "False" ]]; then
-    use_sepd=0
-else
-    # Auto-detect: check if input list has a non-empty 3rd comma-separated field
-    first_line=$(head -n 1 "$input")
-    f3=$(echo "$first_line" | cut -d ',' -f 3)
-    if [[ -n "$f3" && "$f3" != "$first_line" ]]; then
-        use_sepd=1
-    fi
-fi
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -51,15 +35,29 @@ then
         exit 1
     }
 
-    if [[ $use_sepd -eq 1 ]]; then
-        cut -d ',' -f 3 "$input" > dst_sepd.list
-        getinputfiles.pl --verbose --filelist dst_sepd.list || {
-            echo "Error: getinputfiles.pl failed for dst_sepd.list at $(date) on $(hostname)" >&2
+    cut -d ',' -f 3 "$input" > dst_sepd.list
+
+    # Create/clear a temporary file for the basenames
+    > dst_sepd_local.list
+
+    while IFS= read -r file; do
+        # Skip empty lines if there are any
+        [ -z "$file" ] && continue
+
+        # Copy the file to the current directory
+        cp -v "$file" . || {
+            echo "Error: Failed to copy sEPD file $file at $(date) on $(hostname)" >&2
             mkdir -p "$submitDir/failures"
-            echo "getinputfiles failure (dst_sepd) for $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+            echo "copy failure (dst_sepd) for $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
             exit 1
         }
-    fi
+
+        # Extract just the filename and save it to our local list
+        basename "$file" >> dst_sepd_local.list
+    done < dst_sepd.list
+
+    # Overwrite the original list with the basename-only list
+    mv dst_sepd_local.list dst_sepd.list
 
     # Create/clear a temporary file for the basenames
     > dst_zdc_local.list
@@ -95,13 +93,7 @@ printenv
 mkdir -p "$run"
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-if [[ $use_sepd -eq 1 ]]; then
-    echo "Running Event QA with sEPD enabled"
-    root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$run/$output\", $nEvents, \"$dbtag\")"
-else
-    echo "Running Event QA without sEPD"
-    root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"$run/$output\", $nEvents, \"$dbtag\")"
-fi
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$run/$output\", $nEvents, \"$dbtag\")"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then

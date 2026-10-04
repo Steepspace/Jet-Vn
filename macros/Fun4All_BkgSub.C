@@ -11,7 +11,6 @@
 #include <TROOT.h>
 #include <TF1.h>
 
-#include <caloreco/CaloTowerBuilder.h>
 
 #include <mbd/MbdReco.h>
 #include <mbd/MbdEvent.h>
@@ -55,7 +54,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &flist_dst_zdc = "",
                     const std::string &flist_dst_sepd = "",
                     // const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
-                    // const std::string &flist_dst_sepd = "DST_SEPD_RAW_run3auau_pro001_pcdb001_v001-00068144-00000.root",
+                    // const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                     const std::string &input_QVecCalib = "default",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
@@ -169,20 +168,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   MbdReco* mbdreco = new MbdReco();
   se->registerSubsystem(mbdreco);
 
-  CaloTowerDefs::BuilderType buildertype = CaloTowerDefs::kPRDFTowerv4;
-
-  // sEPD Reconstruction--Calib Info: Packets -> TOWERS_SEPD
+  // sEPD Reconstruction--Calib Info
   if (do_flow == 3)
   {
-    CaloTowerBuilder *caEPD = new CaloTowerBuilder("SEPDBUILDER");
-    caEPD->set_detector_type(CaloTowerDefs::SEPD);
-    caEPD->set_builder_type(buildertype);
-    caEPD->set_processing_type(CaloWaveformProcessing::TEMPLATE);
-    caEPD->set_nsamples(12);
-    caEPD->set_offlineflag();
-    se->registerSubsystem(caEPD);
-
-    // sEPD Reconstruction--Calib Info
     EpdReco* epdreco = new EpdReco();
     se->registerSubsystem(epdreco);
   }
