@@ -37,6 +37,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import smtplib
 import socket
 import subprocess
@@ -75,6 +76,26 @@ SKIMMER_PROCESSED_RE = re.compile(
 )
 SKIMMER_SKIMMED_RE = re.compile(
     r"CaloStatusSkimmer(?:::End)?\s+Total events skimmed:\s*([0-9,]+)", re.IGNORECASE
+)
+
+DEFAULT_MISSING_INPUT_PATTERN = (
+    r"(All segments failed to fetch"
+    r"|all segments failed"
+    r"|could not retrieve .* from filecatalog"
+    r"|getinputfiles failure"
+    r"|getinputfiles\.pl failed"
+    r"|Fetched 0 of \d+ segments successfully"
+    r"|Aborted:\s*All segments)"
+)
+MISSING_INPUT_BYTE_TOKENS = (
+    b"All segments failed to fetch",
+    b"all segments failed",
+    b"could not retrieve",
+    b"filecatalog",
+    b"getinputfiles failure",
+    b"getinputfiles.pl failed",
+    b"Fetched 0 of",
+    b"Aborted: All segments",
 )
 
 
@@ -287,6 +308,61 @@ def count_jobs_in_list(jobs_list_path: Path) -> int:
         return 0
 
 
+def find_failure_log(target_dir: Path) -> Path | None:
+    """Searches target_dir and related directories for failure-log.txt."""
+    candidates = [
+        target_dir / "failures" / "failure-log.txt",
+        target_dir.parent / "failures" / "failure-log.txt",
+        target_dir.parent / "output" / "failures" / "failure-log.txt",
+        target_dir / "output" / "failures" / "failure-log.txt",
+    ]
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+def find_unsubmitted_missing_lists(target_dir: Path, failure_log_path: Path | None = None) -> set[str]:
+    """
+    Extracts input list names that are unrunnable/aborted due to missing segments
+    and excluded from submission.
+    Sources:
+      1) Difference between resubmit_all_aborted.list and resubmit_available.list
+      2) failure-log.txt (both 'all segments failed for' and 'getinputfiles failure')
+    """
+    missing_lists: set[str] = set()
+    base_dir = target_dir.parent if target_dir.name in ("stdout", "error", "output") else target_dir
+
+    # Source 1: Check diff between all aborted vs available resubmission lists
+    all_aborted_file = base_dir / "resubmit_all_aborted.list"
+    avail_file = base_dir / "resubmit_available.list"
+    if all_aborted_file.is_file() and avail_file.is_file():
+        try:
+            with all_aborted_file.open("r", errors="ignore") as fa, avail_file.open("r", errors="ignore") as fv:
+                all_set = {Path(line.strip()).name for line in fa if line.strip()}
+                avail_set = {Path(line.strip()).name for line in fv if line.strip()}
+                missing_lists.update(all_set - avail_set)
+        except Exception:
+            pass
+
+    # Source 2: failure-log.txt
+    flog = failure_log_path or find_failure_log(target_dir)
+    if flog and flog.is_file():
+        try:
+            with flog.open("r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    if "all segments failed for" in line:
+                        parts = line.split("all segments failed for")
+                        if len(parts) > 1:
+                            raw = parts[1].strip().split()[0]
+                            missing_lists.add(Path(raw).name)
+        except Exception:
+            pass
+
+    return missing_lists
+
+
+
 def resolve_target_dir(raw_path: str, pattern: str) -> tuple[Path, str]:
     """
     Resolves target directory. If given directory has a 'stdout' subdirectory
@@ -315,12 +391,13 @@ def inspect_log_file(
     file_path: str | Path,
     finish_regex: re.Pattern,
     error_regex: re.Pattern | None = None,
+    missing_input_regex: re.Pattern | None = None,
     max_bytes: int = 8192,
     size: int | None = None,
     finish_token: bytes | None = b"Finished",
 ) -> tuple[bool, str, str | None]:
     """
-    Inspects the tail of a log file for finish message or errors.
+    Inspects the tail of a log file for finish message, errors, or missing catalog inputs.
     Optimized with fast byte-level pre-filtering and optional pre-computed file size.
 
     Returns:
@@ -339,24 +416,54 @@ def inspect_log_file(
                 f.seek(size - read_bytes)
             chunk = f.read(read_bytes)
 
-        # Fast byte pre-filter:
-        # Check if the finish token, skimmer token, or any known error token is present in raw bytes.
-        # This allows 99% of normal in-progress files to return instantly without line splitting or regex.
+        # Fast byte pre-filter
         has_finish = (finish_token is None) or (finish_token in chunk)
         has_error = (error_regex is not None) and any(token in chunk for token in ERROR_BYTE_TOKENS)
         has_skimmer = SKIMMER_BYTE_TOKEN in chunk
+        has_missing_inputs = (missing_input_regex is not None) and any(token in chunk for token in MISSING_INPUT_BYTE_TOKENS)
 
-        if not has_finish and not has_error and not has_skimmer:
+        # Check if corresponding .err file has missing input errors (e.g. getinputfiles.pl failures)
+        err_has_missing = False
+        err_msg = None
+        if not has_finish and not has_skimmer and not has_missing_inputs:
+            p = Path(file_path)
+            err_candidates = [
+                p.with_suffix(".err"),
+                p.parent.parent / "error" / f"{p.stem}.err" if p.parent.name == "stdout" else None,
+            ]
+            for ec in err_candidates:
+                if ec and ec.is_file():
+                    try:
+                        esz = ec.stat().st_size
+                        if 0 < esz <= 32768:
+                            with open(ec, "rb") as ef:
+                                echunk = ef.read()
+                            if any(token in echunk for token in MISSING_INPUT_BYTE_TOKENS):
+                                err_has_missing = True
+                                etext = echunk.decode("utf-8", errors="ignore")
+                                if missing_input_regex:
+                                    for eline in reversed(etext.splitlines()):
+                                        eline = eline.strip()
+                                        if missing_input_regex.search(eline):
+                                            err_msg = eline[:80]
+                                            break
+                                if not err_msg:
+                                    err_msg = "All segments failed to fetch (from error log)"
+                                break
+                    except Exception:
+                        pass
+
+        if not has_finish and not has_error and not has_skimmer and not has_missing_inputs and not err_has_missing:
             return False, "In progress", None
 
         # Decode tail chunk only when a candidate token was detected
         text = chunk.decode("utf-8", errors="ignore")
         lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines:
+        if not lines and not err_has_missing:
             return False, "No readable text", None
 
         # Check for finish message from the bottom up
-        if has_finish:
+        if has_finish and lines:
             for line in reversed(lines):
                 if finish_regex.search(line):
                     return True, "Finished", line
@@ -371,8 +478,18 @@ def inspect_log_file(
                 if proc_val == skim_val:
                     return True, "Skimmed", f"CaloStatusSkimmer: {proc_val}/{skim_val} events skimmed (fully skimmed)"
 
+        # Check for missing inputs from stdout
+        if has_missing_inputs and missing_input_regex and lines:
+            for line in reversed(lines):
+                if missing_input_regex.search(line):
+                    return True, "MissingInputs", f"Missing inputs: {line[:80]}"
+
+        # Check for missing inputs detected from stderr
+        if err_has_missing:
+            return True, "MissingInputs", f"Missing inputs: {err_msg}"
+
         # Check for known errors if not finished
-        if has_error and error_regex:
+        if has_error and error_regex and lines:
             for line in reversed(lines):
                 if error_regex.search(line):
                     return False, f"Failed: {line[:80]}", None
@@ -392,6 +509,7 @@ def generate_completion_report(
     finish_pattern_str: str,
     interval_sec: float,
     expected_jobs: int | None = None,
+    unsubmitted_missing: set[str] | None = None,
 ) -> str:
     """Builds a diagnostic completion report email."""
     now = datetime.now()
@@ -405,10 +523,19 @@ def generate_completion_report(
     completed_count = len(completed_files)
     failed_count = len(failed_files)
     skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+    missing_in_files = sum(1 for m in completed_files.values() if "missing" in m.lower())
+    unsubmitted_count = len(unsubmitted_missing) if unsubmitted_missing else 0
+    total_missing_inputs = missing_in_files + unsubmitted_count
+    succeeded_count = max(0, completed_count - skimmed_count - missing_in_files)
+
+    effective_total = total_files + unsubmitted_count
     pct = (completed_count / total_files * 100.0) if total_files > 0 else 0.0
 
-    if failed_count == 0 and completed_count == total_files:
-        status_header = "ALL JOBS COMPLETED SUCCESSFULLY"
+    if failed_count == 0 and (completed_count + unsubmitted_count >= total_files):
+        if total_missing_inputs > 0:
+            status_header = f"ALL JOBS COMPLETED ({total_missing_inputs} WITH MISSING INPUTS SKIPPED)"
+        else:
+            status_header = "ALL JOBS COMPLETED SUCCESSFULLY"
     elif failed_count > 0:
         status_header = f"COMPLETED WITH {failed_count} ERROR(S)"
     else:
@@ -423,6 +550,21 @@ def generate_completion_report(
 
     sample_completed_str = "\n".join(sample_completed) if sample_completed else "  (None)"
 
+    # Missing inputs section (if any)
+    missing_section = ""
+    missing_items = []
+    for fname, match_line in completed_files.items():
+        if "missing" in match_line.lower():
+            missing_items.append(f"  - {fname}: {match_line}")
+    if unsubmitted_missing:
+        for fname in sorted(unsubmitted_missing):
+            missing_items.append(f"  - {fname}: All segments missing from FileCatalog (unsubmitted/excluded)")
+    if missing_items:
+        missing_section = f"""
+Missing Input / Aborted Lists ({len(missing_items)}):
+----------------------------------------------------------------------
+""" + "\n".join(missing_items[:25]) + ("\n  ... and more." if len(missing_items) > 25 else "") + "\n"
+
     # Failed files list (if any)
     failed_section = ""
     if failed_files:
@@ -436,6 +578,7 @@ Failed / Errored Jobs ({failed_count}):
 
     expected_info = f"Expected Jobs:       {expected_jobs}\n" if expected_jobs else ""
     skimmed_info = f" (including {skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
+    missing_info = f" ({total_missing_inputs} missing catalog/inputs)" if total_missing_inputs > 0 else ""
 
     report = f"""Hello,
 
@@ -449,7 +592,10 @@ Execution Summary:
 Host:                {fqdn} ({hostname})
 Directory:           {target_dir}
 Total Files Found:   {total_files}
-Finished Jobs:       {completed_count} ({pct:.1f}%){skimmed_info}
+Finished Jobs:       {completed_count} ({pct:.1f}%){skimmed_info}{missing_info}
+Succeeded Jobs:      {succeeded_count}
+Skimmed Jobs:        {skimmed_count}
+Missing Inputs:      {total_missing_inputs}
 Failed Jobs:         {failed_count}
 {expected_info}Finish Pattern:      {finish_pattern_str}
 Monitoring Started:  {start_time.strftime('%Y-%m-%d %H:%M:%S %Z')}
@@ -461,8 +607,7 @@ Check Interval:      {interval_sec:.1f}s
 Sample Completed Files ({min(len(completed_files), 12)} shown):
 ----------------------------------------------------------------------
 {sample_completed_str}
-{failed_section}
-----------------------------------------------------------------------
+{missing_section}{failed_section}----------------------------------------------------------------------
 Notification generated by scripts/condor/monitor_jobs.py
 """
     return report
@@ -566,6 +711,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect directory once and report current job completion status, then exit",
     )
     parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Signal an ongoing monitor on this directory to finish gracefully, then exit",
+    )
+    parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
@@ -643,9 +793,34 @@ def main() -> int:
         print(f"[FAILED] Could not send test email: {msg}", file=sys.stderr)
         return 1
 
+    # Handle stop mode
+    if args.stop:
+        if not raw_dir:
+            parser.error("Target directory is required for --stop.")
+        target_dir, _ = resolve_target_dir(raw_dir, args.pattern)
+        stop_file = target_dir / ".stop_monitor"
+        try:
+            stop_file.touch()
+            print(f"[SUCCESS] Placed stop request file at '{stop_file}'.")
+            print("The active monitor process will detect this and terminate gracefully on its next check.")
+            return 0
+        except Exception as e:
+            print(f"[ERROR] Could not create stop file '{stop_file}': {e}", file=sys.stderr)
+            return 1
+
     # For monitoring or run-once, target directory is required
     if not raw_dir:
         parser.error("Target directory is required. Specify as first positional argument or via --dir.")
+
+    def _sig_handler(signum, frame):
+        raise KeyboardInterrupt
+
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, _sig_handler)
+            except (ValueError, AttributeError):
+                pass
 
     # Parse interval
     try:
@@ -667,6 +842,7 @@ def main() -> int:
         parser.error(f"Invalid finish-message regex '{finish_pattern_str}': {e}")
 
     error_regex = re.compile(DEFAULT_ERROR_PATTERN, re.IGNORECASE)
+    missing_input_regex = re.compile(DEFAULT_MISSING_INPUT_PATTERN, re.IGNORECASE)
 
     # Pre-filter token for raw byte scanning
     finish_token: bytes | None = b"Finished"
@@ -678,6 +854,12 @@ def main() -> int:
     target_dir, resolve_note = resolve_target_dir(raw_dir, args.pattern)
     if resolve_note and not args.quiet:
         print(f"[INFO] {resolve_note}")
+
+    # Detect failure log and missing lists
+    failure_log = find_failure_log(target_dir)
+    missing_from_log = find_unsubmitted_missing_lists(target_dir, failure_log)
+    if missing_from_log and not args.quiet:
+        print(f"[INFO] Auto-detected {len(missing_from_log)} lists with missing/unrunnable segments excluded from submission")
 
     # Detect expected jobs
     expected_jobs = args.expected_jobs
@@ -801,6 +983,7 @@ def main() -> int:
                     fpath,
                     finish_regex=finish_regex,
                     error_regex=error_regex,
+                    missing_input_regex=missing_input_regex,
                     max_bytes=args.tail_bytes,
                     size=fsize,
                     finish_token=finish_token,
@@ -837,13 +1020,20 @@ def main() -> int:
             print(f"Pattern: '{args.pattern}' | Finish Regex: '{finish_pattern_str}' | Threads: {threads}")
             total, done, in_prog = scan_directory(executor)
             skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
-            skimmed_info = f" (including {skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
+            missing_in_files = sum(1 for m in completed_files.values() if "missing" in m.lower())
+            unsubmitted_missing = missing_from_log if (missing_from_log and expected_jobs and total < expected_jobs) else set()
+            total_missing = missing_in_files + len(unsubmitted_missing)
+            accounted_total = total + len(unsubmitted_missing)
 
             print("=" * 70)
             print(f"Total files found:  {total}")
             if expected_jobs:
                 print(f"Expected jobs:      {expected_jobs}")
-            print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%){skimmed_info}")
+            print(f"Completed jobs:     {done} ({(done / total * 100.0 if total > 0 else 0.0):.1f}%)")
+            if skimmed_count > 0:
+                print(f"  - Fully skimmed:  {skimmed_count}")
+            if total_missing > 0:
+                print(f"  - Missing inputs: {total_missing}")
             print(f"In-progress jobs:   {in_prog}")
             print(f"Failed jobs:        {len(failed_files)}")
             print("=" * 70)
@@ -855,9 +1045,10 @@ def main() -> int:
                 if len(failed_files) > 10:
                     print(f"  ... and {len(failed_files) - 10} more.")
 
-            all_done = (done == total) and (total >= (expected_jobs or args.min_files)) and (total > 0)
+            all_done = (done == total) and (accounted_total >= (expected_jobs or args.min_files)) and (total > 0)
             if all_done:
-                print("[STATUS] ALL JOBS COMPLETED SUCCESSFULLY!")
+                status_note = f" (including {total_missing} lists skipped due to missing inputs)" if total_missing > 0 else ""
+                print(f"[STATUS] ALL JOBS COMPLETED SUCCESSFULLY!{status_note}")
                 return 0
             print("[STATUS] Incomplete / pending jobs remaining.")
             return 1
@@ -880,6 +1071,22 @@ def main() -> int:
 
         check_count = 0
         while True:
+            # Check for stop sentinel file (.stop_monitor or .stop)
+            stop_sentinels = [
+                target_dir / ".stop_monitor",
+                target_dir.parent / ".stop_monitor",
+                target_dir / ".stop",
+            ]
+            for sf in stop_sentinels:
+                if sf.is_file():
+                    try:
+                        sf.unlink()
+                    except OSError:
+                        pass
+                    elapsed_str = format_duration((datetime.now() - start_time).total_seconds())
+                    print(f"\n[INFO] Stop sentinel '{sf.name}' detected. Gracefully stopping monitor after {check_count} checks ({elapsed_str}). Exiting.")
+                    return 0
+
             check_count += 1
             now = datetime.now()
             elapsed_str = format_duration((now - start_time).total_seconds())
@@ -903,17 +1110,23 @@ def main() -> int:
 
             pct = (done / total * 100.0) if total > 0 else 0.0
             fail_count = len(failed_files)
+            skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+            missing_in_files = sum(1 for m in completed_files.values() if "missing" in m.lower())
+            unsubmitted_missing = missing_from_log if (missing_from_log and expected_jobs and total < expected_jobs) else set()
+            total_missing = missing_in_files + len(unsubmitted_missing)
+            accounted_total = total + len(unsubmitted_missing)
 
-            # Check completion condition: all files in dir have the finish message or were fully skimmed
-            if done == total and total >= threshold:
-                skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
+            # Check completion condition: all files in dir have reached terminal state (finish, skimmed, or missing inputs)
+            if done == total and (accounted_total >= threshold or total >= threshold):
                 skimmed_info = f" ({skimmed_count} fully skimmed)" if skimmed_count > 0 else ""
+                missing_info = f" ({total_missing} missing inputs skipped)" if total_missing > 0 else ""
                 print("\n" + "=" * 70)
-                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] SUCCESS: All {done}/{total} jobs have completed successfully!{skimmed_info}")
-                print(f"All files in '{target_dir}' have completed (finished or fully skimmed).")
+                print(f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] SUCCESS: All {done}/{total} jobs have completed!{skimmed_info}{missing_info}")
+                print(f"All files in '{target_dir}' have completed (finished, fully skimmed, or missing inputs).")
                 print("=" * 70)
 
-                subject = args.subject or f"[Done] All {done} Condor Jobs Completed on {hostname} ({target_dir.name})"
+                missing_subj = f" [{total_missing} missing inputs skipped]" if total_missing > 0 else ""
+                subject = args.subject or f"[Done] All {done} Condor Jobs Completed on {hostname} ({target_dir.name}){missing_subj}"
                 body = generate_completion_report(
                     target_dir=target_dir,
                     start_time=start_time,
@@ -924,6 +1137,7 @@ def main() -> int:
                     finish_pattern_str=finish_pattern_str,
                     interval_sec=interval,
                     expected_jobs=expected_jobs,
+                    unsubmitted_missing=unsubmitted_missing,
                 )
 
                 print(f"Sending notification email to {email_addr}...")
@@ -957,6 +1171,7 @@ def main() -> int:
                     finish_pattern_str=finish_pattern_str,
                     interval_sec=interval,
                     expected_jobs=expected_jobs,
+                    unsubmitted_missing=unsubmitted_missing,
                 )
 
                 print(f"Sending failure notification email to {email_addr}...")
@@ -970,15 +1185,19 @@ def main() -> int:
 
             # Ongoing progress
             if not args.quiet:
-                skimmed_count = sum(1 for m in completed_files.values() if "skimmed" in m.lower())
-                skim_str = f" [{skimmed_count} skimmed]" if skimmed_count > 0 else ""
+                info_tags = []
+                if skimmed_count > 0:
+                    info_tags.append(f"{skimmed_count} skimmed")
+                if total_missing > 0:
+                    info_tags.append(f"{total_missing} missing inputs")
+                skim_str = f" [{', '.join(info_tags)}]" if info_tags else ""
                 status_parts = [f"{done}/{total} finished ({pct:.1f}%){skim_str}"]
                 if in_prog > 0:
                     status_parts.append(f"{in_prog} in progress")
                 if fail_count > 0:
                     status_parts.append(f"{fail_count} failed")
-                if expected_jobs and total < expected_jobs:
-                    status_parts.append(f"waiting for {expected_jobs - total} more output files")
+                if expected_jobs and accounted_total < expected_jobs:
+                    status_parts.append(f"waiting for {expected_jobs - accounted_total} more output files")
 
                 status_line = ", ".join(status_parts)
                 print(f"[{now.strftime('%H:%M:%S')}] Check #{check_count} (Elapsed: {elapsed_str}): {status_line}")
