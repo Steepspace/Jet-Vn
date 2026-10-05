@@ -247,6 +247,7 @@ class CondorJobManager:
         retry_request_memory=None,
         retry_memory_step=None,
         retry_memory_max=None,
+        max_retries=None,
         sub_file_name="genFun4All.sub",
         stdout_dir="stdout",
         error_dir="error",
@@ -290,6 +291,16 @@ class CondorJobManager:
 
         log_dir = self.condor_log_dir or (self.output_dir / 'logs')
 
+        # Ensure max_retries has enough attempts for all retry_request_memory tiers
+        num_memory_tiers = len([s for s in retry_mem.split(',') if s.strip()]) if retry_mem else 0
+        base_retries = max_retries if max_retries is not None else getattr(self.args, 'max_retries', 3)
+        effective_retries = max(int(base_retries), num_memory_tiers)
+        if num_memory_tiers > int(base_retries):
+            self.logger.info(
+                f"Elevating max_retries from {base_retries} to {effective_retries} "
+                f"to cover all {num_memory_tiers} memory retry tiers."
+            )
+
         lines = [
             f"executable           = {exec_file}",
             f"arguments            = {arguments}",
@@ -301,7 +312,7 @@ class CondorJobManager:
         if retry_mem:
             lines.append(f"retry_request_memory = {retry_mem}")
         lines.extend([
-            f"max_retries          = {getattr(self.args, 'max_retries', 3)}",
+            f"max_retries          = {effective_retries}",
             f"stream_output        = True",
             f"stream_error         = True",
             "",
