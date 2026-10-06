@@ -3,7 +3,7 @@ import re
 import shutil
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.core.helpers import run_command_and_log, get_line_count, chunk_list
+from condor_utils.core.helpers import chunk_list
 from condor_utils.cli import get_common_parser
 
 def parse_calib_list(calib_list, logger=None):
@@ -105,33 +105,7 @@ def create_f4a_jobs(args):
 
     calib_map = parse_calib_list(calib_list, manager.logger)
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-    jobs_temp_file = manager.output_dir / 'jobs-temp.list'
-    jobs_temp_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_temp_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
-
-    with open(jobs_temp_file, mode='r', encoding='utf-8') as file_in, \
-         open(jobs_file, mode='w', encoding='utf-8') as file_out:
-        for line in file_in:
-            line = Path(line.strip()).resolve()
-            run = line.stem.split('-')[1].lstrip('0')
-            if run in calib_map:
-                file_out.write(f'{line},{calib_map[run]}\n')
-            else:
-                file_out.write(f'{line},default\n')
-
-    jobs_temp_file.unlink(missing_ok=True)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map)
 
     if "Fun4All_BkgSub" in args.f4a_macro:
         eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
@@ -250,19 +224,7 @@ def create_f4a_mc_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -347,19 +309,7 @@ def create_f4a_nobkgsub_jobs(args):
     extra_files = [args.f4a_macro, args.calo_calib_macro, args.NoBkgdSubJetReco_macro]
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -379,19 +329,7 @@ def create_f4a_noise_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -409,19 +347,7 @@ def create_f4a_calofittingqa_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -443,19 +369,7 @@ def create_f4a_sepdqa_jobs(args):
     files_dir = manager.prepare_directories()
     manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro], extra_dirs=[args.src_dir])
 
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    for line in manager.input_list.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        manager.logger.info(f'Processing: {line}')
-        file_stem = Path(line).stem
-
-        command = f'split --lines {args.dst_per_job} {line} -d -a 3 {file_stem}- --additional-suffix=.list'
-        run_command_and_log(command, manager.logger, files_dir, False)
-
-        command = f'realpath {files_dir}/{file_stem}* >> {jobs_file.name}'
-        run_command_and_log(command, manager.logger, manager.output_dir, False)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
