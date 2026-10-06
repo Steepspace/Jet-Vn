@@ -55,49 +55,79 @@ then
 
     echo "Reading inputs from: $input"
 
-    cut -d ',' -f 1 "$input" > dst_calofit.list
-    cut -d ',' -f 2 "$input" > dst_zdc.list
-    cut -d ',' -f 3 "$input" > dst_sepd.list
+    # Initialize empty list files for Fun4All
+    > dst_calofit.list
+    > dst_zdc.list
+    > dst_sepd.list
 
-    getinputfiles.pl --verbose --filelist dst_calofit.list || {
-        echo "Error: getinputfiles.pl failed for dst_calofit.list at $(date) on $(hostname)" >&2
-        mkdir -p "$submitDir/failures"
-        echo "getinputfiles failure (dst_calofit) for $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+    # Ensure failure log directory exists
+    mkdir -p "$submitDir/failures"
+
+    total_segments=0
+    successful_segments=0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        # Skip empty lines
+        [ -z "$line" ] && continue
+
+        total_segments=$((total_segments + 1))
+
+        # Extract comma-separated paths for this segment
+        IFS=',' read -r calofit zdc sepd <<< "$line"
+        calofit=$(echo "$calofit" | tr -d '[:space:]')
+        zdc=$(echo "$zdc" | tr -d '[:space:]')
+        sepd=$(echo "$sepd" | tr -d '[:space:]')
+
+        [ -z "$calofit" ] && continue
+
+        segment_ok=1
+
+        # 1. Fetch calofitting file via getinputfiles.pl
+        if ! getinputfiles.pl --verbose "$calofit"; then
+            echo "Error: getinputfiles.pl failed for $calofit in $file at $(date) on $(hostname)" >&2
+            echo "getinputfiles failure (dst_calofit) for $calofit in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+            segment_ok=0
+        fi
+
+        # 2. Copy ZDC file
+        if [ $segment_ok -eq 1 ]; then
+            if ! cp -v "$zdc" .; then
+                echo "Error: Failed to copy ZDC file $zdc in $file at $(date) on $(hostname)" >&2
+                echo "copy failure (dst_zdc) for $zdc in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+                rm -f "$(basename "$calofit")"
+                segment_ok=0
+            fi
+        fi
+
+        # 3. Copy sEPD file
+        if [ $segment_ok -eq 1 ]; then
+            if ! cp -v "$sepd" .; then
+                echo "Error: Failed to copy sEPD file $sepd in $file at $(date) on $(hostname)" >&2
+                echo "copy failure (dst_sepd) for $sepd in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+                rm -f "$(basename "$calofit")"
+                rm -f "$(basename "$zdc")"
+                segment_ok=0
+            fi
+        fi
+
+        # If all 3 files succeeded, register this segment
+        if [ $segment_ok -eq 1 ]; then
+            basename "$calofit" >> dst_calofit.list
+            basename "$zdc" >> dst_zdc.list
+            basename "$sepd" >> dst_sepd.list
+            successful_segments=$((successful_segments + 1))
+        fi
+    done < "$input"
+
+    echo "Fetched $successful_segments of $total_segments segments successfully."
+
+    # If no segments could be fetched, abort this job
+    if [ ! -s dst_calofit.list ]; then
+        echo "Aborted: All segments failed to fetch (missing catalog/data files) for $file at $(date) on $(hostname)"
+        echo "Error: All segments failed to fetch for $file at $(date) on $(hostname)! Aborting." >&2
+        echo "all segments failed for $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
         exit 1
-    }
-    # Create/clear a temporary file for the basenames
-    > dst_zdc_local.list
-
-    while IFS= read -r file; do
-        # Skip empty lines if there are any
-        [ -z "$file" ] && continue
-
-        # Copy the file to the current directory
-        cp -v "$file" .
-
-        # Extract just the filename and save it to our local list
-        basename "$file" >> dst_zdc_local.list
-    done < dst_zdc.list
-
-    # Overwrite the original list with the basename-only list
-    mv dst_zdc_local.list dst_zdc.list
-
-    # Create/clear a temporary file for the basenames
-    > dst_sepd_local.list
-
-    while IFS= read -r file; do
-        # Skip empty lines if there are any
-        [ -z "$file" ] && continue
-
-        # Copy the file to the current directory
-        cp -v "$file" .
-
-        # Extract just the filename and save it to our local list
-        basename "$file" >> dst_sepd_local.list
-    done < dst_sepd.list
-
-    # Overwrite the original list with the basename-only list
-    mv dst_sepd_local.list dst_sepd.list
+    fi
 
     test -e "$input_calib" && cp -v "$input_calib" .
     if [[ -n "$eta_calib_path" && "$eta_calib_path" != "none" && "$eta_calib_path" != "default" ]]; then
