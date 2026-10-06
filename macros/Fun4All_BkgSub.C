@@ -55,7 +55,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &flist_dst_sepd = "",
                     // const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                     // const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
-                    const std::string &input_QVecCalib = "default",
+                    const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/10-04-26-v2/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144v2.root",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
                     int do_flow = 3,
@@ -133,7 +133,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
 
   Fun4AllServer *se = Fun4AllServer::instance();
   se->Verbosity(Fun4AllBase::VERBOSITY_SOME);
-  se->VerbosityDownscale(1000);
+  se->VerbosityDownscale(5000);
 
   recoConsts *rc = recoConsts::instance();
 
@@ -185,15 +185,25 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   trig->Verbosity(1);
   se->registerSubsystem(trig);
 
+  // custom centrality calib
+  std::string cent_calib_dir = "/sphenix/user/anarde/sEPD-Study/centrality_calib";
+  std::string cent_divs = std::format("{}/divs/cdb_centrality_{}.root", cent_calib_dir, runnumber);
+  // DEFAULT use 68144 if needed
+  // std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_68144.root", cent_calib_dir);
+  std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_{}.root", cent_calib_dir, runnumber);
+  std::string cent_vtx = std::format("{}/vertexscales/cdb_centrality_vertex_scale_{}.root", cent_calib_dir, runnumber);
+
   // Minimum Bias Classifier
   MinimumBiasClassifier* mb = new MinimumBiasClassifier();
-  mb->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
-  mb->set_mbd_total_charge_cut(2100);
+  mb->setOverwriteScale(cent_scale);
+  mb->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(mb);
 
-  // Centrality
+  // Centrality Reco
   CentralityReco* cent = new CentralityReco();
-  cent->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  cent->setOverwriteDivs(cent_divs);
+  cent->setOverwriteScale(cent_scale);
+  cent->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(cent);
 
   bool do_detailed = !event_list.empty() || event_id != 0;
@@ -204,6 +214,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   {
     event_qa->set_do_hist(false);
   }
+  event_qa->set_cent_max(80);
   event_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(event_qa);
 
@@ -222,30 +233,23 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Calo QA
   CaloQA* calo_qa = new CaloQA();
   calo_qa->set_do_hist(false);
-  if (do_detailed)
-  {
-    calo_qa->set_do_detailed(true);
-    calo_qa->set_do_iter(true);
-    calo_qa->set_do_mult(do_mult);
-  }
+  calo_qa->set_do_detailed(do_detailed);
+  calo_qa->set_do_iter(do_detailed);
+  calo_qa->set_do_mult(do_detailed && do_mult);
   calo_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(calo_qa);
 
   // Global QA
   GlobalQA* global_qa = new GlobalQA();
   global_qa->set_do_ep(do_flow);
-  global_qa->set_do_sepd(false);
-  global_qa->set_do_mbd(false);
+  global_qa->set_do_hist(false);
   global_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(global_qa);
 
   // Jet Validation
   JetValidationv3* jet_validation = new JetValidationv3();
   jet_validation->set_do_mult(do_mult);
-  if (do_detailed)
-  {
-    jet_validation->set_do_detailed(true);
-  }
+  jet_validation->set_do_detailed(do_detailed);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);
 
@@ -253,10 +257,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   if (do_rcone)
   {
     RandomConeValidation* random_cone_validation = new RandomConeValidation();
-    if (do_detailed)
-    {
-      random_cone_validation->set_do_detailed(true);
-    }
+    random_cone_validation->set_do_detailed(do_detailed);
     random_cone_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
     se->registerSubsystem(random_cone_validation);
   }
