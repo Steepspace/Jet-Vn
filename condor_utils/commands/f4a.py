@@ -1,9 +1,54 @@
 import math
+import re
 import shutil
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import run_command_and_log, get_line_count, chunk_list
 from condor_utils.cli import get_common_parser
+
+def parse_calib_list(calib_list, logger=None):
+    """
+    Parses a calibration list file and returns a mapping from run number (str) to calibration line/path.
+    Extracts run number from directory or filename, normalizes by stripping leading zeros,
+    and ignores empty or commented lines.
+    """
+    calib_map = {}
+    if not calib_list:
+        return calib_map
+
+    calib_path = Path(calib_list)
+    if not calib_path.is_file():
+        if logger:
+            logger.warning(f"Calib list file does not exist: {calib_list}")
+        return calib_map
+
+    for line in calib_path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+
+        raw_path = line.split(',')[0].strip()
+        path_obj = Path(raw_path)
+
+        # Prefer parent directory if numeric (e.g. /CDB/<run>/<file>); fallback to filename pattern (e.g. -<run>v2.root or -<run>.root)
+        if len(path_obj.parts) >= 2 and path_obj.parts[-2].isdigit():
+            run = path_obj.parts[-2].lstrip('0')
+        else:
+            match = re.search(r'-(\d+)(?:v\d+)?\.root$', path_obj.name)
+            run = match.group(1).lstrip('0') if match else None
+
+        if run:
+            if logger:
+                logger.debug(f'Processing Calib: {line}, run: {run}')
+            calib_map[run] = line
+        else:
+            if logger:
+                logger.warning(f'Could not parse run number from calib entry: {line}')
+
+    if logger:
+        logger.info(f'Loaded {len(calib_map)} calibration entries from {calib_path.name}')
+
+    return calib_map
 
 def create_f4a_jobs(args):
     if "Fun4All_BkgSub" in args.f4a_macro:
@@ -58,15 +103,7 @@ def create_f4a_jobs(args):
 
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
-    calib_map = {}
-    if calib_list:
-        for line in calib_list.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            run = Path(line.split(',')[0]).parts[-2]
-            manager.logger.info(f'Processing Calib: {line}, run: {run}')
-            calib_map[run] = line
+    calib_map = parse_calib_list(calib_list, manager.logger)
 
     jobs_file = manager.output_dir / 'jobs.list'
     jobs_file.unlink(missing_ok=True)
@@ -261,15 +298,7 @@ def create_f4a_data_mc_jobs(args):
 
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
-    calib_map = {}
-    if calib_list:
-        for line in calib_list.read_text(encoding='utf-8').splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            run = Path(line.split(',')[0]).parts[-2]
-            manager.logger.info(f'Processing Calib: {line}, run: {run}')
-            calib_map[run] = line
+    calib_map = parse_calib_list(calib_list, manager.logger)
 
     jobs_file = manager.output_dir / 'jobs.list'
     jobs_file.unlink(missing_ok=True)
