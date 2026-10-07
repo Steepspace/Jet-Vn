@@ -1,3 +1,4 @@
+import os
 import math
 import re
 import shutil
@@ -74,7 +75,23 @@ def create_f4a_jobs(args):
 
     manager.validate_paths()
 
+    default_build = Path(os.environ['OFFLINE_MAIN']).name if os.environ.get('OFFLINE_MAIN') else 'new'
+    build_val = getattr(args, 'build', None) or default_build
+    raw_install = getattr(args, 'myinstall', None)
+    if raw_install:
+        if raw_install.lower() in ('default', 'none'):
+            myinstall_val = raw_install.lower()
+        else:
+            myinstall_path = Path(os.path.expandvars(os.path.expanduser(raw_install)))
+            myinstall_val = str(myinstall_path.resolve())
+            if not myinstall_path.is_dir():
+                manager.logger.warning(f"Install directory does not exist: {myinstall_val}")
+    else:
+        myinstall_val = 'default'
+
     init_log = {
+        'sPHENIX Build': build_val,
+        'MyInstall': myinstall_val if myinstall_val != 'default' else "$HOME/Documents/sPHENIX/install (default)",
         'Calib List': calib_list if calib_list else "Not Provided (Using default)",
         'Eta Calib': eta_calib if eta_calib else "Not Provided (Using default/empty)",
         'Event List': event_list if event_list else "Not Provided (Using all events)",
@@ -118,7 +135,7 @@ def create_f4a_jobs(args):
     else:
         bkgsub_args = ""
 
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
+    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output {build_val} {myinstall_val}"
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst,input_calib from jobs.list")
 
@@ -376,7 +393,10 @@ def create_f4a_sepdqa_jobs(args):
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
 def setup_f4a_subparsers(subparsers):
+    default_build = Path(os.environ['OFFLINE_MAIN']).name if os.environ.get('OFFLINE_MAIN') else 'new'
     f4a = subparsers.add_parser('f4a', parents=[get_common_parser()], help='Create condor submission directory.')
+    f4a.add_argument('-b', '--build', type=str, default=default_build, help=f'sPHENIX build tag/version (e.g. new, ana.575). Default: "{default_build}" (from $OFFLINE_MAIN).')
+    f4a.add_argument('--myinstall', '--install-dir', dest='myinstall', type=str, default=os.environ.get('MYINSTALL', None), help='Custom path to local install directory ($MYINSTALL). Default: $MYINSTALL or $HOME/Documents/sPHENIX/install.')
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
     f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file. (Optional)')

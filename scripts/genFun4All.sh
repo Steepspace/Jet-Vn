@@ -2,10 +2,27 @@
 export USER="$(id -u -n)"
 export LOGNAME=${USER}
 export HOME=/sphenix/u/${LOGNAME}
-export MYINSTALL="$HOME/Documents/sPHENIX/install"
+if [ -n "$9" ]; then
+    build="$9"
+elif [ -n "$OFFLINE_MAIN" ]; then
+    build="$(basename "$OFFLINE_MAIN")"
+else
+    build="new"
+fi
+myinstall_arg=${10:-${MYINSTALL:-default}}
 
-source /opt/sphenix/core/bin/sphenix_setup.sh -n new
-source /opt/sphenix/core/bin/setup_local.sh $MYINSTALL
+if [[ -z "$myinstall_arg" || "$myinstall_arg" == "default" ]]; then
+    export MYINSTALL="$HOME/Documents/sPHENIX/install"
+elif [[ "$myinstall_arg" == "none" ]]; then
+    export MYINSTALL=""
+else
+    export MYINSTALL="$myinstall_arg"
+fi
+
+source /opt/sphenix/core/bin/sphenix_setup.sh -n "$build"
+if [[ -n "$MYINSTALL" ]]; then
+    source /opt/sphenix/core/bin/setup_local.sh "$MYINSTALL"
+fi
 
 f4a_macro=${1}
 input=${2}
