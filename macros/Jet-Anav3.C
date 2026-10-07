@@ -46,6 +46,14 @@ class JetAnalysisv3
 {
  public:
   // The constructor takes the configuration
+  JetAnalysisv3(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir)
+    : m_input_file(std::move(input_file))
+    , m_calo_mbd_file(std::move(calo_mbd_file))
+    , m_events_to_process(events)
+    , m_output_dir(std::move(output_dir))
+  {
+  }
+
   JetAnalysisv3(std::string input_file, long long events, std::string output_dir)
     : m_input_file(std::move(input_file))
     , m_events_to_process(events)
@@ -55,8 +63,8 @@ class JetAnalysisv3
 
   void run()
   {
+    setup_calo_mbd_cut();
     setup_chain();
-    load_calo_centrality_cuts();
     init_hists();
     process_events();
     save_results();
@@ -81,6 +89,12 @@ class JetAnalysisv3
   void set_verbosity(int verbosity) { m_verbosity = verbosity; }
   int get_verbosity() const { return m_verbosity; }
 
+  void set_calo_mbd_file(std::string file) { m_calo_mbd_file = std::move(file); }
+  const std::string &get_calo_mbd_file() const { return m_calo_mbd_file; }
+
+  void set_sigma_cut(double sigma) { m_sigma_cut = sigma; }
+  double get_sigma_cut() const { return m_sigma_cut; }
+
  private:
   static constexpr size_t m_bins_cent = 60;
   static constexpr double m_cent_low = -0.5;
@@ -99,9 +113,6 @@ class JetAnalysisv3
 
     TH2 *h2CaloECentrality_default{nullptr};
     TH2 *h2CaloECentrality{nullptr};
-
-    TH1 *hCaloECentrality_min{nullptr};
-    TH1 *hCaloECentrality_max{nullptr};
 
     TH1 *hCaloV2Fail_iter{nullptr};
     TH1 *hCaloV2Fail_mult{nullptr};
@@ -212,6 +223,9 @@ class JetAnalysisv3
     double ihcal_energy{0};
     double ohcal_energy{0};
 
+    double mbd_charge_south{0.0};
+    double mbd_charge_north{0.0};
+
     double psi2_raw_S{0};
     double psi2_raw_N{0};
     double psi2_raw_NS{0};
@@ -245,6 +259,7 @@ class JetAnalysisv3
 
     // Event Checks
     bool pass_calo_cent{false};
+    bool pass_cent{false};
   };
 
   struct HighPtEvent
@@ -265,6 +280,7 @@ class JetAnalysisv3
 
   // Configuration stored as members
   std::string m_input_file;
+  std::string m_calo_mbd_file;
   long long m_events_to_process;
   std::string m_output_dir;
   int m_verbosity{0};
@@ -300,10 +316,14 @@ class JetAnalysisv3
   std::map<std::string, std::unique_ptr<TProfile>> m_profiles;
   std::map<std::string, std::unique_ptr<TProfile2D>> m_profiles2D;
 
+  double m_sigma_cut{3.5};
+  bool m_has_calo_mbd_cut{false};
+  std::unique_ptr<TProfile> m_profile_calo_mbd{nullptr};
+
   // --- Private Helper Methods ---
   void setup_chain();
 
-  void load_calo_centrality_cuts();
+  void setup_calo_mbd_cut();
 
   void init_hists();
 
@@ -338,6 +358,7 @@ void JetAnalysisv3::setup_chain()
   // Common branches between data and sim
   std::unordered_set<std::string> branchNames = {"event", "centrality", "zvtx",
                                                  "emcal_energy", "ihcal_energy", "ohcal_energy",
+                                                 "mbd_charge_south", "mbd_charge_north",
                                                  "psi2_raw_S", "psi2_raw_N", "psi2_raw_NS",
                                                  "psi2_S", "psi2_N", "psi2_NS"};
 
@@ -400,6 +421,9 @@ void JetAnalysisv3::setup_chain()
   m_chain->SetBranchAddress("emcal_energy", &m_event_data.emcal_energy);
   m_chain->SetBranchAddress("ihcal_energy", &m_event_data.ihcal_energy);
   m_chain->SetBranchAddress("ohcal_energy", &m_event_data.ohcal_energy);
+
+  m_chain->SetBranchAddress("mbd_charge_south", &m_event_data.mbd_charge_south);
+  m_chain->SetBranchAddress("mbd_charge_north", &m_event_data.mbd_charge_north);
 
   m_chain->SetBranchAddress("psi2_raw_S", &m_event_data.psi2_raw_S);
   m_chain->SetBranchAddress("psi2_raw_N", &m_event_data.psi2_raw_N);
@@ -491,22 +515,42 @@ void JetAnalysisv3::setup_chain()
   std::cout << "Finished... setup_chain" << std::endl;
 }
 
-void JetAnalysisv3::load_calo_centrality_cuts()
+void JetAnalysisv3::setup_calo_mbd_cut()
 {
-  std::string filename = "/direct/sphenix+u/anarde/Documents/sPHENIX/analysis-sEPD-Study/sEPD-Study/files/calib/run2auau_all_weights.root";
-  std::string hLow_name = "h1_sumE_cent_min";
-  std::string hHigh_name = "h1_sumE_cent_max";
-
-  auto file = std::unique_ptr<TFile>(TFile::Open(filename.c_str()));
-
-  // Check if the file was opened successfully.
-  if (!file || file->IsZombie())
+  if (m_calo_mbd_file.empty())
   {
-    throw std::runtime_error(std::format("Could not open file '{}'", filename));
+    throw std::runtime_error("Calo-MBD input file is required but was not provided.");
   }
 
-  m_hists.hCaloECentrality_min = file->Get<TH1>(hLow_name.c_str());
-  m_hists.hCaloECentrality_max = file->Get<TH1>(hHigh_name.c_str());
+  if (!std::filesystem::exists(m_calo_mbd_file))
+  {
+    throw std::runtime_error(std::format("Calo-MBD file does not exist: {}", m_calo_mbd_file));
+  }
+
+  auto tfile = std::unique_ptr<TFile>(TFile::Open(m_calo_mbd_file.c_str(), "READ"));
+  if (!tfile || tfile->IsZombie())
+  {
+    throw std::runtime_error(std::format("Could not open Calo-MBD file: {}", m_calo_mbd_file));
+  }
+
+  TH2 *h2 = dynamic_cast<TH2 *>(tfile->Get("h2TotalCaloE_MBD"));
+  if (!h2)
+  {
+    throw std::runtime_error(std::format("h2TotalCaloE_MBD not found in {}", m_calo_mbd_file));
+  }
+
+  // Profile X with "s" option so error is spread (standard deviation)
+  TProfile *pfx = h2->ProfileX("pfx_calo_mbd_cut", 1, -1, "s");
+  if (!pfx)
+  {
+    throw std::runtime_error(std::format("Failed to create ProfileX from h2TotalCaloE_MBD in {}", m_calo_mbd_file));
+  }
+
+  pfx->SetDirectory(nullptr);
+  m_profile_calo_mbd = std::unique_ptr<TProfile>(pfx);
+  m_has_calo_mbd_cut = true;
+
+  std::cout << std::format("Successfully loaded h2TotalCaloE_MBD from {} and created ProfileX with 's' option (sigma cut: {:.2f})\n", m_calo_mbd_file, m_sigma_cut);
 }
 
 void JetAnalysisv3::init_hists()
@@ -843,7 +887,7 @@ void JetAnalysisv3::init_hists()
 
 void JetAnalysisv3::process_jets()
 {
-  if (!m_event_data.pass_calo_cent)
+  if (!m_event_data.pass_calo_cent || !m_event_data.pass_cent)
   {
     return;
   }
@@ -1025,7 +1069,7 @@ void JetAnalysisv3::process_jets()
 
 void JetAnalysisv3::process_rcones()
 {
-  if (!m_event_data.pass_calo_cent)
+  if (!m_event_data.pass_calo_cent || !m_event_data.pass_cent)
   {
     return;
   }
@@ -1075,14 +1119,23 @@ bool JetAnalysisv3::check_CaloMBD() const
   double total_OHCal = m_event_data.ohcal_energy;
   double total_energy = total_EMCal + total_IHCal + total_OHCal;
 
+  double mbd_total = m_event_data.mbd_charge_south + m_event_data.mbd_charge_north;
   double cent = m_event_data.centrality;
 
-  int bin = m_hists.hCaloECentrality_min->FindBin(cent);
-
-  double CaloE_min = m_hists.hCaloECentrality_min->GetBinContent(bin);
-  double CaloE_max = m_hists.hCaloECentrality_max->GetBinContent(bin);
-
-  bool pass = total_energy > CaloE_min && total_energy < CaloE_max;
+  bool pass = false;
+  if (m_has_calo_mbd_cut && m_profile_calo_mbd)
+  {
+    int bin = m_profile_calo_mbd->FindBin(mbd_total);
+    if (bin >= 1 && bin <= m_profile_calo_mbd->GetNbinsX())
+    {
+      double mean = m_profile_calo_mbd->GetBinContent(bin);
+      double sigma = m_profile_calo_mbd->GetBinError(bin);
+      if (sigma > 0.0 && std::abs(total_energy - mean) <= m_sigma_cut * sigma)
+      {
+        pass = true;
+      }
+    }
+  }
 
   m_hists.h2CaloECentrality_default->Fill(total_energy, cent);
 
@@ -1100,6 +1153,7 @@ void JetAnalysisv3::process_event_check()
 
   double cent = ed.centrality;
 
+  ed.pass_cent = cent <= m_cent_high;
   ed.pass_calo_cent = check_CaloMBD();
 
   m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX10_MB));
@@ -1215,7 +1269,11 @@ void JetAnalysisv3::process_events()
 void JetAnalysisv3::print_event_info(long long event_idx) const
 {
   std::cout << std::format("\n{:=^70}\n", std::format(" Event {} (Entry ID: {}) ", event_idx, m_event_data.event));
-  std::cout << std::format(" Centrality: {:.2f} %\n", m_event_data.centrality);
+  std::cout << std::format(" Centrality: {:.2f} % (Pass Cut: {})\n", m_event_data.centrality,
+                           m_event_data.pass_cent ? "Yes" : "No");
+  double mbd_total = m_event_data.mbd_charge_south + m_event_data.mbd_charge_north;
+  std::cout << std::format(" MBD Charge   - Total: {:.2f}, South: {:.2f}, North: {:.2f}\n",
+                           mbd_total, m_event_data.mbd_charge_south, m_event_data.mbd_charge_north);
   std::cout << std::format(" Calo Energy [GeV] - EMCal: {:.2f}, IHCal: {:.2f}, OHCal: {:.2f} (Pass Cut: {})\n",
                            m_event_data.emcal_energy, m_event_data.ihcal_energy, m_event_data.ohcal_energy,
                            m_event_data.pass_calo_cent ? "Yes" : "No");
@@ -1340,27 +1398,30 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 2 || argc > 11)
+  if (argc < 3 || argc > 13)
   {
-    std::cout << "Usage: " << argv[0] << " input_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut]" << std::endl;
     return 1;
   }
 
   int ctr = 1;
   const std::string input_file = argv[ctr++];
+  const std::string calo_mbd_file = argv[ctr++];
   long long events = (argc >= ctr + 1) ? std::atoll(argv[ctr++]) : 0;
   double jet_pt_min = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 10;
   std::string output_dir = (argc >= ctr + 1) ? argv[ctr++] : ".";
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
   bool do_iter = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
-  bool do_mult = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
+  bool do_mult = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
   bool do_unsub = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
-  bool do_rcone = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
+  bool do_rcone = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
   double lead_jet_pt_threshold = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 100.0;
+  double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
   std::cout << std::format("Input: {}\n", input_file);
+  std::cout << std::format("Calo-MBD File: {}\n", calo_mbd_file);
   std::cout << std::format("Events: {}\n", events);
   std::cout << std::format("Jet pT min: {} [GeV]\n", jet_pt_min);
   std::cout << std::format("Output Dir: {}\n", output_dir);
@@ -1370,11 +1431,12 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Do Unsub: {}\n", do_unsub);
   std::cout << std::format("Do RCone: {}\n", do_rcone);
   std::cout << std::format("Lead Jet pT Threshold: {} [GeV]\n", lead_jet_pt_threshold);
+  std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   std::cout << std::format("{:#<20}\n", "");
 
   try
   {
-    JetAnalysisv3 analysis(input_file, events, output_dir);
+    JetAnalysisv3 analysis(input_file, calo_mbd_file, events, output_dir);
     analysis.set_jet_pt_min(jet_pt_min);
     analysis.set_verbosity(verbosity);
     analysis.set_do_iter(do_iter);
@@ -1382,6 +1444,7 @@ int main(int argc, const char *const argv[])
     analysis.set_do_unsub(do_unsub);
     analysis.set_do_rcone(do_rcone);
     analysis.set_lead_jet_pt_threshold(lead_jet_pt_threshold);
+    analysis.set_sigma_cut(sigma_cut);
     analysis.run();
   }
   catch (const std::exception &e)

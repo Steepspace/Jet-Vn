@@ -7,17 +7,19 @@ source /opt/sphenix/core/bin/sphenix_setup.sh -n new
 
 jetAna_bin=${1}
 input=${2}
-jet_pt_min=${3}
-submitDir=${4}
-do_iter=${5:-1}
-do_mult=${6:-1}
-do_unsub=${7:-1}
-do_rcone=${8:-1}
-lead_jet_pt_threshold=${9:-100}
+input_calo_mbd=${3}
+jet_pt_min=${4}
+submitDir=${5}
+do_iter=${6:-1}
+do_mult=${7:-1}
+do_unsub=${8:-1}
+do_rcone=${9:-1}
+lead_jet_pt_threshold=${10:-100}
 
 # extract runnumber from file name
-run=$(head -n 1 "$input" | grep -oP '(?<=/)\d+(?=/tree/)')
+run=$(head -n 1 "$input" | grep -oP '(?<=/)\d+(?=/tree/)' || head -n 1 "$input" | grep -oP '\d{5,8}')
 input_file=$(basename "$input")
+input_calo_mbd_file=$(basename "$input_calo_mbd")
 
 if [[ -n "$_CONDOR_SCRATCH_DIR" && -d "$_CONDOR_SCRATCH_DIR" ]]
 then
@@ -28,6 +30,8 @@ then
     cat "$input" | xargs -I {} -P 4 cp -v {} input/
 
     realpath input/* > "$input_file"
+
+    cp -v "$input_calo_mbd" .
 
     ls -lah
 else
@@ -40,7 +44,7 @@ printenv
 
 mkdir -p "$run"
 
-$jetAna_bin "$input_file" 0 "$jet_pt_min" "$run" 0 "$do_iter" "$do_mult" "$do_unsub" "$do_rcone" "$lead_jet_pt_threshold"
+$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$jet_pt_min" "$run" 0 "$do_iter" "$do_mult" "$do_unsub" "$do_rcone" "$lead_jet_pt_threshold"
 
 echo "All Done and Transferring Files Back"
 

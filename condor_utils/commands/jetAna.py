@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -9,6 +10,8 @@ def run_jet_jobs(args, version):
     manager = CondorJobManager(args, job_name=version)
     if version == "jetAna":
         manager.add_file_to_check(args.f4a_qa_list)
+    elif version == "jetAnav3":
+        manager.add_file_to_check(args.calo_mbd_list)
     manager.add_file_to_check(args.jetAna_macro)
     manager.add_file_to_check(args.jetAna_bin)
 
@@ -40,6 +43,7 @@ def run_jet_jobs(args, version):
         jet_eta_max = args.jet_eta_max
         init_log['Jet eta Max'] = jet_eta_max
     elif version == "jetAnav3":
+        init_log['Calo-MBD List'] = Path(args.calo_mbd_list).resolve()
         init_log['Do Iter'] = args.do_iter
         init_log['Do Mult'] = args.do_mult
         init_log['Do Unsub'] = args.do_unsub
@@ -56,15 +60,28 @@ def run_jet_jobs(args, version):
     input_lines = manager.input_list.read_text(encoding='utf-8').splitlines()
 
     for line in input_lines:
-        tree_path = Path(line.strip())
+        line_str = line.strip()
+        if not line_str:
+            continue
+        tree_path = Path(line_str)
         run_id = tree_path.parent.parent.name
+        if not run_id.isdigit():
+            m = re.search(r'/(?:run_)?(\d{5,8})(?:/|$)', str(tree_path))
+            if m:
+                run_id = m.group(1)
         if run_id not in run_trees:
             run_trees[run_id] = []
         run_trees[run_id].append(str(tree_path))
 
     if version == "jetAna":
-        run_paths = [Path(l.strip()) for l in Path(args.f4a_qa_list).resolve().read_text(encoding='utf-8').splitlines()]
+        run_paths = [Path(l.strip()) for l in Path(args.f4a_qa_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
         run_map = {p.stem: str(p) for p in run_paths}
+    elif version == "jetAnav3":
+        run_paths = [Path(l.strip()) for l in Path(args.calo_mbd_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
+        run_map = {}
+        for p in run_paths:
+            run_map[p.stem] = str(p)
+            run_map[p.stem.lstrip('0')] = str(p)
 
     jobs_list_file = manager.output_dir / 'jobs.list'
     jobs_list_file.unlink(missing_ok=True)
@@ -77,12 +94,17 @@ def run_jet_jobs(args, version):
                     manager.logger.warning(f"Run {run_id} found in input trees but not in QA list. Skipping.")
                     continue
                 qa_file = run_map[run_id]
+            elif version == "jetAnav3":
+                qa_file = run_map.get(run_id) or run_map.get(run_id.lstrip('0'))
+                if not qa_file:
+                    manager.logger.warning(f"Run {run_id} found in input trees but not in Calo-MBD list. Skipping.")
+                    continue
 
             for i, chunk in enumerate(chunk_list(trees, files_per_job)):
                 chunk_file = files_dir / f'{run_id}_part_{i}.list'
                 chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
 
-                if version == "jetAna":
+                if version in ("jetAna", "jetAnav3"):
                     f_jobs.write(f"{chunk_file},{qa_file}\n")
                 else:
                     f_jobs.write(f"{chunk_file}\n")
@@ -97,8 +119,8 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {jet_eta_max} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
     elif version == "jetAnav3":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold}"
-        queue_arg = "input_tree_list from jobs.list"
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold}"
+        queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     else:
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
@@ -146,6 +168,7 @@ def setup_jetAna_subparsers(subparsers):
 
     jetAnav3 = subparsers.add_parser('jetAnav3', help='jetAnav3 condor jobs.')
     add_common_args(jetAnav3, "Anav3")
+    jetAnav3.add_argument('-i2', '--calo-mbd-list', '--event-qa-list', dest='calo_mbd_list', type=str, required=True, help='List of Calo-MBD / Event QA files.')
     jetAnav3.add_argument('--do-iter', type=int, default=1, help='Do iter. Default: 1')
     jetAnav3.add_argument('--do-mult', type=int, default=1, help='Do mult. Default: 1')
     jetAnav3.add_argument('--do-unsub', type=int, default=1, help='Do unsub. Default: 1')
