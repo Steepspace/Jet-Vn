@@ -145,7 +145,7 @@ def add_common_args(parser, name_suffix):
     parser.add_argument('-f', '--jetAna-macro', type=str, default=f'macros/Jet-{name_suffix}.C', help=f'Jet-Ana Macro. Default: macros/Jet-{name_suffix}.C')
     parser.add_argument('-f2', '--jetAna-bin', type=str, default=f'bin/Jet-{name_suffix}', help=f'Jet-Ana Bin. Default: bin/Jet-{name_suffix}')
     parser.add_argument('-o', '--output-dir', type=str, default='scratch/test', help='Output Directory. Default: scratch/test')
-    parser.add_argument('-s', '--memory', type=float, default=1, help='Memory (units of GB). Default: 1 GB.')
+    parser.add_argument('-s', '--memory', type=float, default=1.5, help='Memory (units of GB). Default: 1.5 GB.')
     parser.add_argument('--retry-memory-step', type=float, default=0.5, help='Memory in GB to add if job is evicted for exceeding memory. Default: 0.5 GB. Set to 0 to disable.')
     parser.add_argument('--retry-memory-max', type=float, default=6.0, help='Ceiling / max memory in GB for automatic memory retries. Default: 6.0 GB.')
     parser.add_argument('--retry-request-memory', type=str, default=None, help='Explicit retry_request_memory setting (e.g. "1.5GB"). If None, computed as memory + retry_memory_step up to retry_memory_max.')
