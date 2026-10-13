@@ -51,10 +51,8 @@ R__LOAD_LIBRARY(libsEPDValidation.so)
 R__LOAD_LIBRARY(libTreeFiller.so)
 
 void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3auau_pro001_pcdb001_v001-00068144-00000.root",
-                    const std::string &flist_dst_zdc = "",
-                    const std::string &flist_dst_sepd = "",
-                    // const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
-                    // const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
+                    const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
+                    const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                     const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/10-04-26-v2/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144v2.root",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
@@ -99,6 +97,34 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     runnumber = runseg.first;
     segment = runseg.second;
     infile_stream.close();
+  }
+
+  // ZDC and sEPD inputs must come from the same run as calofit
+  // (the default paths are for run 68144)
+  if (!is_single_dst)
+  {
+    const std::vector<std::pair<std::string, std::string>> run_inputs = {
+        {"zdc", flist_dst_zdc},
+        {"sepd", flist_dst_sepd}};
+
+    for (const auto& [name, path] : run_inputs)
+    {
+      // same list-vs-single-file handling as the calofit input
+      std::string filepath = path;
+      if (isFileList)
+      {
+        std::ifstream list_stream(path);
+        std::getline(list_stream, filepath);
+      }
+
+      int input_run = Fun4AllUtils::GetRunSegment(filepath).first;
+      if (input_run != runnumber)
+      {
+        std::cout << "Error: " << name << " input run " << input_run
+                  << " does not match calofit run " << runnumber << std::endl;
+        return;
+      }
+    }
   }
 
   std::cout << "########################" << std::endl;
