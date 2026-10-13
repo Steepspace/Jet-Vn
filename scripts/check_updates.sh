@@ -38,18 +38,41 @@ check_updates() {
   fi
 }
 
+# Has the upstream tree changed since we last integrated? Works after a squash merge,
+# where --cherry-pick matching finds nothing even though the content landed.
+check_pinned() {
+  local repo_path="$1"
+  local pinned="$2"
+  local upstream="$3"
+  local path_filter="$4"
+
+  echo -e "\n${BOLD}${CYAN}=== Checking [${repo_path##*/}] : ${upstream} vs ${pinned} (${path_filter}) ===${RESET}"
+
+  git -C "$repo_path" fetch --all --quiet
+
+  if git -C "$repo_path" diff --quiet "$pinned" "$upstream" -- "$path_filter"; then
+    echo -e "${GREEN}Up to date. No upstream changes.${RESET}"
+  else
+    echo -e "${YELLOW}Upstream changed:${RESET}"
+    git -C "$repo_path" diff --stat --color=always "$pinned" "$upstream" -- "$path_filter"
+  fi
+}
+
 # --- Repository Definitions ---
 MINBIAS_DIR="$HOME/sPHENIX/coresoftware-MinBias"
-JETBG_DIR="$HOME/sPHENIX/coresoftware-jetbackground"
+JETBG_DIR="$HOME/sPHENIX/coresoftware-jetbackground-v2"
+JETBG_PINNED="aabb69b48"   # upstream commit jetbackground-v2 is built on; bump after each integration
 
 # 1. MinBias: trigger package against master
 check_updates "$MINBIAS_DIR" "MinBias" "master" ":/offline/packages/trigger"
 
-# 2. Jetbackground: jetbackground package against master
-check_updates "$JETBG_DIR" "jetbackground" "master" ":/offline/packages/jetbackground"
+# 2. jetbackground-v2: upstream commits v2 doesn't have yet (PR #4465, tmengel's jstgtf03)
+check_updates "$JETBG_DIR" "jetbackground-v2" "tanner/jstgtf03" ":/offline/packages/jetbackground"
+check_updates "$JETBG_DIR" "jetbackground-v2" "tanner/jstgtf03" ":/offline/packages/jetbase"
 
-# 3. Jetbackground: jetbackground package against ppg14
-check_updates "$JETBG_DIR" "jetbackground" "ppg14" ":/offline/packages/jetbackground"
+# 3. jetbackground-v2: has upstream's jet content moved past the pinned commit?
+check_pinned "$JETBG_DIR" "$JETBG_PINNED" "tanner/jstgtf03" ":/offline/packages/jetbackground"
+check_pinned "$JETBG_DIR" "$JETBG_PINNED" "tanner/jstgtf03" ":/offline/packages/jetbase"
 
 echo -e "\n${BOLD}Done.${RESET}"
 
