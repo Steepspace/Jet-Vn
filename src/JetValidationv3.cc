@@ -354,6 +354,18 @@ int JetValidationv3::process_UE(PHCompositeNode *topNode)
                 << " | v2: " << m_data.calo_v2_iter
                 << " | flow_fail: " << m_data.is_flow_failure_iter << std::endl;
     }
+
+    // debug: 1st iteration (seed type 0) seed count
+    if (Verbosity() > 1)
+    {
+      TowerBackground* towerBkg_iter1 = findNode::getClass<TowerBackground>(topNode, "TowerInfoBackground_Sub1");
+      if (towerBkg_iter1)
+      {
+        std::cout << "JetValidationv3::process_UE - [Event " << event_id << "] [Iter1] seeds: " << towerBkg_iter1->get_nHIRecoSeedsSub()
+                  << " | v2: " << towerBkg_iter1->get_v2()
+                  << " | flow_fail: " << towerBkg_iter1->get_flow_failure_flag() << std::endl;
+      }
+    }
   }
 
   if (m_do_mult)
