@@ -1,35 +1,50 @@
 #!/usr/bin/env bash
 
-# Usage: ./builds.sh <project_name> [-f] [build_dir]
+# Usage: ./builds.sh <project_name> [-f] [-i install_dir] [build_dir]
 # Examples:
 #   ./builds.sh jetbackground
 #   ./builds.sh jetbackground -f
 #   ./builds.sh jetbackground -f custom_builds
 #   ./builds.sh jetbackground custom_builds -f
+#   ./builds.sh jetbackground -i /path/to/install
+#   ./builds.sh jetbackground -i /path/to/install -f custom_builds
+#
+# Install prefix defaults to $MYINSTALL; -i overrides it.
+# -i only affects the configure step, so it has no effect with -f.
 
 SRC_INPUT=$1
 FAST_MODE=""
 BUILD_BASE="${BUILD_BASE_DIR:-builds}"
+INSTALL_PREFIX="${MYINSTALL:-}"
 
 # Check if project name/path was provided
 if [ -z "$SRC_INPUT" ]; then
     echo "Error: Please provide a project name or path."
-    echo "Usage: $0 <source_path_or_name> [-f] [build_dir]"
+    echo "Usage: $0 <source_path_or_name> [-f] [-i install_dir] [build_dir]"
     exit 1
 fi
 
-# Parse optional arguments for fast mode (-f) and build directory
-if [ "$2" == "-f" ]; then
-    FAST_MODE="-f"
-    if [ -n "$3" ]; then
-        BUILD_BASE="$3"
-    fi
-elif [ -n "$2" ]; then
-    BUILD_BASE="$2"
-    if [ "$3" == "-f" ]; then
-        FAST_MODE="-f"
-    fi
-fi
+# Parse optional arguments: -f (fast mode), -i <install_dir>, and build directory
+shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -f)
+            FAST_MODE="-f"
+            ;;
+        -i)
+            if [ -z "$2" ]; then
+                echo "Error: -i requires an install directory."
+                exit 1
+            fi
+            INSTALL_PREFIX="$2"
+            shift
+            ;;
+        *)
+            BUILD_BASE="$1"
+            ;;
+    esac
+    shift
+done
 
 PROJ_NAME="$(basename "$SRC_INPUT")"
 
@@ -63,12 +78,13 @@ else
     echo ">>> Full Build: Refreshing and configuring $PROJ_NAME..."
     echo "    Source: $SRC_DIR"
     echo "    Build:  $BUILD_DIR"
-    
+    echo "    Install: $INSTALL_PREFIX"
+
     # 1. Clean and Create Build Dir
     rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR" || exit 1
     
     # 2. Configure (autogen)
-    cd "$BUILD_DIR" && "$SRC_DIR"/autogen.sh --prefix="$MYINSTALL" || exit 1
+    cd "$BUILD_DIR" && "$SRC_DIR"/autogen.sh --prefix="$INSTALL_PREFIX" || exit 1
     
     # 3. Build and Install
     if command -v bear >/dev/null 2>&1; then
