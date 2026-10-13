@@ -40,6 +40,7 @@ class JetValidationv3 : public SubsysReco
 
   void set_do_unsub(bool b = true) { m_do_unsub = b; }
   void set_do_iter(bool b = true) { m_do_iter = b; }
+  void set_do_iter_noflow(bool b = true) { m_do_iter_noflow = b; }
   void set_do_mult(bool b = true) { m_do_mult = b; }
   void set_do_detailed(bool b = true) { m_do_detailed = b; }
   void set_do_r02(bool b = true) { m_do_r02 = b; }
@@ -56,6 +57,7 @@ class JetValidationv3 : public SubsysReco
 
   bool get_do_unsub() const { return m_do_unsub; }
   bool get_do_iter() const { return m_do_iter; }
+  bool get_do_iter_noflow() const { return m_do_iter_noflow; }
   bool get_do_mult() const { return m_do_mult; }
   bool get_do_detailed() const { return m_do_detailed; }
   bool get_do_r02() const { return m_do_r02; }
@@ -115,12 +117,14 @@ class JetValidationv3 : public SubsysReco
   struct EventData
   {
     // UE
-    // key: iter -> UE Iterative Method
-    //      mult -> UE Multiplicity Method (New)
+    // key: iter   -> UE Iterative Method
+    //      iternf -> UE Iterative Method w/o flow modulation
+    //      mult   -> UE Multiplicity Method (New)
     float calo_v2_iter{0};
     float calo_v2_mult{0};
 
     int seeds_iter{0};
+    int seeds_iternf{0};
     int seeds_mult{0};
 
     bool is_flow_failure_iter{false};
@@ -129,6 +133,8 @@ class JetValidationv3 : public SubsysReco
     // jets
     JetData iter_r02;
     JetData iter_r03;
+    JetData iternf_r02;
+    JetData iternf_r03;
     JetData mult_r02;
     JetData mult_r03;
     JetData unsub_r02;
@@ -147,6 +153,15 @@ class JetValidationv3 : public SubsysReco
   std::string m_recoJetName_iter_calib_r03{"AntiKt_Tower_r03_Sub1_calib"};
   std::string m_recoJetName_mult_calib_r03{"AntiKt_Tower_r03_MultSub1_calib"};
 
+  std::string m_recoJetName_iternf_r02{"AntiKt_Tower_r02_NoFlowSub1"};
+  std::string m_recoJetName_iternf_calib_r02{"AntiKt_Tower_r02_NoFlowSub1_calib"};
+  std::string m_recoJetName_iternf_r03{"AntiKt_Tower_r03_NoFlowSub1"};
+  std::string m_recoJetName_iternf_calib_r03{"AntiKt_Tower_r03_NoFlowSub1_calib"};
+
+  std::string m_towerNode_iternf_cemc{"NOFLOW_TOWERINFO_CALIB_CEMC_RETOWER_SUB1"};
+  std::string m_towerNode_iternf_ihcal{"NOFLOW_TOWERINFO_CALIB_HCALIN_SUB1"};
+  std::string m_towerNode_iternf_ohcal{"NOFLOW_TOWERINFO_CALIB_HCALOUT_SUB1"};
+
   std::string m_towerNode_mult_cemc{"MULTSUB_TOWERINFO_CALIB_CEMC_RETOWER_SUB1"};
   std::string m_towerNode_mult_ihcal{"MULTSUB_TOWERINFO_CALIB_HCALIN_SUB1"};
   std::string m_towerNode_mult_ohcal{"MULTSUB_TOWERINFO_CALIB_HCALOUT_SUB1"};
@@ -160,6 +175,7 @@ class JetValidationv3 : public SubsysReco
 
   bool m_do_unsub{true};
   bool m_do_iter{true};
+  bool m_do_iter_noflow{false};
   bool m_do_mult{true};
   bool m_do_detailed{false};
   bool m_do_r02{true};
