@@ -3,7 +3,14 @@ export USER="$(id -u -n)"
 export LOGNAME=${USER}
 export HOME=/sphenix/u/${LOGNAME}
 
-source /opt/sphenix/core/bin/sphenix_setup.sh -n new
+# sPHENIX build comes from the submit file environment, set by condor_utils
+build="${SPHENIX_BUILD:-${OFFLINE_MAIN:+$(basename "$OFFLINE_MAIN")}}"
+if [[ -z "$build" ]]; then
+    echo "Error: SPHENIX_BUILD is not set" >&2
+    exit 1
+fi
+
+source /opt/sphenix/core/bin/sphenix_setup.sh -n "$build"
 
 jetAna_bin=${1}
 input=${2}

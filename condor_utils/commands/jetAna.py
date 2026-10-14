@@ -4,7 +4,7 @@ from pathlib import Path
 
 from condor_utils.core.helpers import chunk_list
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.cli import get_common_parser
+from condor_utils.cli import get_common_parser, add_build_args
 
 def run_jet_jobs(args, version):
     manager = CondorJobManager(args, job_name=version)
@@ -157,17 +157,20 @@ def add_common_args(parser, name_suffix):
 def setup_jetAna_subparsers(subparsers):
     jetAna = subparsers.add_parser('jetAna', help='jetAna condor jobs.')
     add_common_args(jetAna, "Ana")
+    add_build_args(jetAna, myinstall=False)
     jetAna.add_argument('-i2', '--f4a-qa-list', type=str, required=True, help='List of F4A QA.')
     jetAna.add_argument('-j2', '--jet-radius-type', type=float, default=3, help='Jet Radius Type. Default: 3 (i.e. R = 0.3)')
     jetAna.set_defaults(func=jetAna_jobs)
 
     jetAnav2 = subparsers.add_parser('jetAnav2', help='jetAnav2 condor jobs.')
     add_common_args(jetAnav2, "Anav2")
+    add_build_args(jetAnav2, myinstall=False)
     jetAnav2.add_argument('-e', '--jet-eta-max', type=float, default=0.9, help='Maximum Jet eta. Default: 0.9')
     jetAnav2.set_defaults(func=jetAnav2_jobs)
 
     jetAnav3 = subparsers.add_parser('jetAnav3', help='jetAnav3 condor jobs.')
     add_common_args(jetAnav3, "Anav3")
+    add_build_args(jetAnav3)
     jetAnav3.add_argument('-i2', '--calo-mbd-list', '--event-qa-list', dest='calo_mbd_list', type=str, required=True, help='List of Calo-MBD / Event QA files.')
     jetAnav3.add_argument('--do-iter', type=int, default=1, help='Do iter. Default: 1')
     jetAnav3.add_argument('--do-mult', type=int, default=0, help='Do mult. Default: 0')

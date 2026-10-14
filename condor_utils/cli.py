@@ -1,4 +1,19 @@
 import argparse
+import os
+from pathlib import Path
+
+def add_build_args(parser, myinstall=True, short_flag=True):
+    """
+    Adds --build (and --myinstall, for workers that source setup_local.sh) to a subparser.
+    short_flag=False skips -b for commands that already use it.
+    """
+    default_build = Path(os.environ['OFFLINE_MAIN']).name if os.environ.get('OFFLINE_MAIN') else None
+    flags = ['-b', '--build'] if short_flag else ['--build']
+    parser.add_argument(*flags, dest='build', type=str, default=default_build, required=default_build is None,
+                        help=f'sPHENIX build tag/version (e.g. new, ana.576), resolved to the concrete build at submit time. Default: "{default_build}" (from $OFFLINE_MAIN).')
+    if myinstall:
+        parser.add_argument('--myinstall', '--install-dir', dest='myinstall', type=str, default=os.environ.get('MYINSTALL'),
+                            help='Local install directory sourced via setup_local.sh, or "none". Default: $MYINSTALL (none if unset).')
 
 def get_common_parser():
     """Returns a parent parser with arguments common to most jobs."""

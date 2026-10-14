@@ -1,11 +1,10 @@
-import os
 import math
 import re
 import shutil
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list
-from condor_utils.cli import get_common_parser
+from condor_utils.cli import get_common_parser, add_build_args
 
 def parse_calib_list(calib_list, logger=None):
     """
@@ -128,23 +127,7 @@ def create_f4a_jobs(args):
 
     manager.validate_paths()
 
-    default_build = Path(os.environ['OFFLINE_MAIN']).name if os.environ.get('OFFLINE_MAIN') else 'new'
-    build_val = getattr(args, 'build', None) or default_build
-    raw_install = getattr(args, 'myinstall', None)
-    if raw_install:
-        if raw_install.lower() in ('default', 'none'):
-            myinstall_val = raw_install.lower()
-        else:
-            myinstall_path = Path(os.path.expandvars(os.path.expanduser(raw_install)))
-            myinstall_val = str(myinstall_path.resolve())
-            if not myinstall_path.is_dir():
-                manager.logger.warning(f"Install directory does not exist: {myinstall_val}")
-    else:
-        myinstall_val = 'default'
-
     init_log = {
-        'sPHENIX Build': build_val,
-        'MyInstall': myinstall_val if myinstall_val != 'default' else "$HOME/Documents/sPHENIX/install (default)",
         'Calib List': calib_list if calib_list else "Not Provided (Using default)",
         'Eta Calib': eta_calib if eta_calib else "Not Provided (Using default/empty)",
         'Event List': event_list if event_list else "Not Provided (Using all events)",
@@ -209,7 +192,7 @@ def create_f4a_jobs(args):
         bkgsub_args = ""
         queue_arg = "input_dst,input_calib from jobs.list"
 
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output {build_val} {myinstall_val}"
+    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg=queue_arg)
 
@@ -467,10 +450,8 @@ def create_f4a_sepdqa_jobs(args):
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
 def setup_f4a_subparsers(subparsers):
-    default_build = Path(os.environ['OFFLINE_MAIN']).name if os.environ.get('OFFLINE_MAIN') else 'new'
     f4a = subparsers.add_parser('f4a', parents=[get_common_parser()], help='Create condor submission directory.')
-    f4a.add_argument('-b', '--build', type=str, default=default_build, help=f'sPHENIX build tag/version (e.g. new, ana.575). Default: "{default_build}" (from $OFFLINE_MAIN).')
-    f4a.add_argument('--myinstall', '--install-dir', dest='myinstall', type=str, default=os.environ.get('MYINSTALL', None), help='Custom path to local install directory ($MYINSTALL). Default: $MYINSTALL or $HOME/Documents/sPHENIX/install.')
+    add_build_args(f4a)
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
     f4a.add_argument('-i4_calib', '--zs-calib', dest='zs_calib', type=str, default=None, help='List of ZS cross calib T0 files (CEMC/HCALIN/HCALOUT per run), used by Fun4All_BkgSub. Runs without an entry fall back to the CDB. (Optional)')
@@ -486,20 +467,24 @@ def setup_f4a_subparsers(subparsers):
     f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')
+    add_build_args(f4a_zdc, myinstall=False)
     f4a_zdc.add_argument('-n3', '--log-interval', type=int, default=10000, help='Logging Event Frequency. Default: 10000.')
     f4a_zdc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_ZDC.C', help='Fun4All Macro.')
     f4a_zdc.set_defaults(memory=0.5, condor_script='scripts/genFun4AllZDC.sh', func=create_f4a_zdc_jobs)
 
     f4a_sepd_calib = subparsers.add_parser('f4a_sepd_calib', aliases=['f4a_sepdcalib'], parents=[get_common_parser()], help='Create condor submission directory for sEPD Calibration.')
+    add_build_args(f4a_sepd_calib, myinstall=False)
     f4a_sepd_calib.add_argument('-n3', '--log-interval', type=int, default=5000, help='Logging Event Frequency. Default: 5000.')
     f4a_sepd_calib.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_Calib.C', help='Fun4All Macro.')
     f4a_sepd_calib.set_defaults(memory=0.5, condor_script='scripts/genFun4All_sEPD_Calib.sh', func=create_f4a_sepd_calib_jobs)
 
     f4a_mc = subparsers.add_parser('f4a_mc', parents=[get_common_parser()], help='Create condor submission directory.')
+    add_build_args(f4a_mc)
     f4a_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_MC.C', help='Fun4All Macro.')
     f4a_mc.set_defaults(dbtag='MDC2', dst_per_job=500, memory=0.5, condor_script='scripts/genFun4All_MC.sh', func=create_f4a_mc_jobs)
 
     f4a_data_mc = subparsers.add_parser('f4a_data_mc', parents=[get_common_parser()], help='Create condor submission directory.')
+    add_build_args(f4a_data_mc)
     f4a_data_mc.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a_data_mc.add_argument('-c', '--jet-pt-min', type=float, default=10, help='Jet pT min cut. Default: 10 GeV.')
     f4a_data_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_DataMC.C', help='Fun4All Macro.')
@@ -508,20 +493,24 @@ def setup_f4a_subparsers(subparsers):
     f4a_data_mc.set_defaults(memory=0.5, condor_script='scripts/genFun4All_DataMC.sh', func=create_f4a_data_mc_jobs)
 
     f4a_nobkgsub = subparsers.add_parser('f4a_nobkgsub', parents=[get_common_parser()], help='Create condor submission directory for NoBkgSub.')
+    add_build_args(f4a_nobkgsub)
     f4a_nobkgsub.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_NoBkgSub.C', help='Fun4All Macro.')
     f4a_nobkgsub.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a_nobkgsub.add_argument('-f6', '--NoBkgdSubJetReco-macro', type=str, default='macros/NoBkgdSubJetReco.C', help='NoBkgdSubJetReco Macro.')
     f4a_nobkgsub.set_defaults(memory=1.5, condor_script='scripts/genFun4All_NoBkgSub.sh', func=create_f4a_nobkgsub_jobs)
 
     f4a_noise = subparsers.add_parser('f4a_noise', parents=[get_common_parser()], help='Create condor submission directory for Noise.')
+    add_build_args(f4a_noise)
     f4a_noise.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_Noise.C', help='Fun4All Macro.')
     f4a_noise.set_defaults(memory=1.5, condor_script='scripts/genFun4All_Noise.sh', func=create_f4a_noise_jobs)
 
     f4a_calofittingqa = subparsers.add_parser('f4a_calofittingqa', parents=[get_common_parser()], help='Create condor submission directory for CaloFittingQA.')
+    add_build_args(f4a_calofittingqa)
     f4a_calofittingqa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_CaloFittingQA.C', help='Fun4All Macro.')
     f4a_calofittingqa.set_defaults(memory=1.5, condor_script='scripts/genFun4All_CaloFittingQA.sh', func=create_f4a_calofittingqa_jobs)
 
     f4a_sepdqa = subparsers.add_parser('f4a_sepdqa', parents=[get_common_parser()], help='Create condor submission directory for sEPDQA.')
+    add_build_args(f4a_sepdqa)
     f4a_sepdqa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPDQA.C', help='Fun4All Macro.')
     f4a_sepdqa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a_sepdqa.set_defaults(memory=1.5, condor_script='scripts/genFun4All_sEPDQA.sh', func=create_f4a_sepdqa_jobs)

@@ -2,25 +2,17 @@
 export USER="$(id -u -n)"
 export LOGNAME=${USER}
 export HOME=/sphenix/u/${LOGNAME}
-if [ -n "$9" ]; then
-    build="$9"
-elif [ -n "$OFFLINE_MAIN" ]; then
-    build="$(basename "$OFFLINE_MAIN")"
-else
-    build="new"
+# sPHENIX build (and local install) come from the submit file environment, set by condor_utils
+build="${SPHENIX_BUILD:-${OFFLINE_MAIN:+$(basename "$OFFLINE_MAIN")}}"
+if [[ -z "$build" ]]; then
+    echo "Error: SPHENIX_BUILD is not set" >&2
+    exit 1
 fi
-myinstall_arg=${10:-${MYINSTALL:-default}}
-
-if [[ -z "$myinstall_arg" || "$myinstall_arg" == "default" ]]; then
-    export MYINSTALL="$HOME/Documents/sPHENIX/install"
-elif [[ "$myinstall_arg" == "none" ]]; then
-    export MYINSTALL=""
-else
-    export MYINSTALL="$myinstall_arg"
-fi
+myinstall="${SPHENIX_MYINSTALL:-${MYINSTALL:-none}}"
 
 source /opt/sphenix/core/bin/sphenix_setup.sh -n "$build"
-if [[ -n "$MYINSTALL" ]]; then
+if [[ "$myinstall" != "none" ]]; then
+    export MYINSTALL="$myinstall"
     source /opt/sphenix/core/bin/setup_local.sh "$MYINSTALL"
 fi
 

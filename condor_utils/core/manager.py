@@ -1,3 +1,4 @@
+import os
 import re
 import sys
 import shutil
@@ -9,6 +10,20 @@ from concurrent.futures import ThreadPoolExecutor
 
 from condor_utils.core.logging import setup_logging
 from condor_utils.core.helpers import run_command_and_log, get_line_count, get_best_submit_node
+
+def find_build_dir(build):
+    """
+    Resolves a build tag (e.g. new, new.20, ana, ana.576) to its release directory, using the same
+    lookup as `sphenix_setup.sh -n <build>`: <optbasepath>/release/<build>, with optbasepath
+    three levels above $OPT_SPHENIX. Symlinks are resolved, so a rolling tag like 'new' maps to
+    the concrete build it currently points to. Returns None if not found.
+    """
+    if not os.environ.get('OPT_SPHENIX'):
+        return None
+    build_dir = Path(os.environ['OPT_SPHENIX']).parents[2] / 'release' / build
+    if build_dir.is_dir():
+        return build_dir.resolve()
+    return None
 
 class CondorJobManager:
     def __init__(self, args, job_name="Job"):
@@ -37,6 +52,36 @@ class CondorJobManager:
             self.files_to_check.append(self.condor_script)
         if self.common_errors:
             self.files_to_check.append(self.common_errors)
+
+        self.resolve_build()
+
+    def resolve_build(self):
+        """
+        Resolves --build to a concrete release (e.g. new -> new.1) so every job runs the build whose
+        rebuild.info/rebuild.log get copied, and resolves --myinstall to an absolute path or 'none'.
+        Both are passed to the worker via the submit file environment (SPHENIX_BUILD / SPHENIX_MYINSTALL).
+        Commands whose worker does not use a local install have no --myinstall option.
+        """
+        self.build_tag = getattr(self.args, 'build', None)
+        self.build_dir = None
+        self.build = None
+        if self.build_tag:
+            self.build_dir = find_build_dir(self.build_tag)
+            if not self.build_dir:
+                self.logger.critical(f'sPHENIX build "{self.build_tag}" not found ($OPT_SPHENIX: {os.environ.get("OPT_SPHENIX")})')
+                sys.exit(1)
+            self.build = self.build_dir.name
+
+        self.myinstall = None
+        if 'myinstall' in vars(self.args):
+            raw_install = self.args.myinstall
+            if not raw_install or raw_install.lower() == 'none':
+                self.myinstall = 'none'
+            else:
+                myinstall_path = Path(os.path.expandvars(os.path.expanduser(raw_install)))
+                self.myinstall = str(myinstall_path.resolve())
+                if not myinstall_path.is_dir():
+                    self.logger.warning(f"Install directory does not exist: {self.myinstall}")
 
     def add_file_to_check(self, path):
         if path:
@@ -107,6 +152,10 @@ class CondorJobManager:
             self.logger.info(f'Condor Log Directory: {self.condor_log_dir}')
         if self.common_errors:
             self.logger.info(f'Common Errors File: {self.common_errors}')
+        if self.build:
+            self.logger.info(f'sPHENIX Build: {self.build} (requested: {self.build_tag}) -> {self.build_dir}')
+        if self.myinstall:
+            self.logger.info(f'MyInstall: {self.myinstall}')
         if self.job_name != "hadd":
             ranked_nodes, node_status = self.get_best_submit_node()
             top_node = ranked_nodes[0]
@@ -176,6 +225,20 @@ class CondorJobManager:
                 if d:
                     src = Path(d).resolve()
                     shutil.copytree(src, self.output_dir / src.name, dirs_exist_ok=True)
+
+        self.copy_build_info()
+
+    def copy_build_info(self):
+        """Copies rebuild.info and rebuild.log of the resolved build into the submit directory."""
+        if not self.build_dir:
+            return
+        for fname in ['rebuild.info', 'rebuild.log']:
+            src = self.build_dir / fname
+            if src.is_file():
+                shutil.copy(src, self.output_dir)
+                self.logger.info(f"Copied {fname} from {self.build_dir}")
+            else:
+                self.logger.warning(f"{fname} not found in {self.build_dir}")
 
     def prepare_job_lists(self, dst_per_job, files_dir=None, jobs_file_name="jobs.list", max_workers=16, calib_map=None, extra_columns=None):
         """
@@ -327,6 +390,13 @@ class CondorJobManager:
         ]
         if retry_mem:
             lines.append(f"retry_request_memory = {retry_mem}")
+        env = []
+        if self.build:
+            env.append(f"SPHENIX_BUILD={self.build}")
+        if self.myinstall:
+            env.append(f"SPHENIX_MYINSTALL={self.myinstall}")
+        if env:
+            lines.append(f'environment          = "{" ".join(env)}"')
         lines.extend([
             f"max_retries          = {effective_retries}",
             "",

@@ -2,7 +2,7 @@ import math
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list
-from condor_utils.cli import get_common_parser
+from condor_utils.cli import get_common_parser, add_build_args
 
 def create_calo_qa_jobs(args):
     manager = CondorJobManager(args, job_name="Calo QA")
@@ -120,6 +120,7 @@ def create_sepd_qa_jobs(args):
 def setup_qa_subparsers(subparsers):
     # calo_qa
     calo_qa = subparsers.add_parser('calo_qa', parents=[get_common_parser()], help='Create condor submission directory.')
+    add_build_args(calo_qa)
     calo_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_CaloQA.C', help='Fun4All Macro.')
     calo_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     calo_qa.set_defaults(
@@ -131,6 +132,7 @@ def setup_qa_subparsers(subparsers):
 
     # event_qa
     event_qa = subparsers.add_parser('event_qa', parents=[get_common_parser()], help='Create condor submission directory for Event QA.')
+    add_build_args(event_qa)
     event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_EventQA.C', help='Fun4All Macro.')
     event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     event_qa.set_defaults(
@@ -142,6 +144,7 @@ def setup_qa_subparsers(subparsers):
 
     # sepd_qa
     sepd_qa = subparsers.add_parser('sepd_qa', parents=[get_common_parser()], help='Create condor submission directory for sEPD QA.')
+    add_build_args(sepd_qa, myinstall=False, short_flag=False)
     sepd_qa.add_argument('-f', '--sepd-macro', type=str, default='macros/sEPD-QA.C', help='sEPD-QA Macro. Default: macros/sEPD-QA.C')
     sepd_qa.add_argument('-b', '--sepd-bin', type=str, default='bin/sEPD-QA', help='sEPD-QA Bin. Default: bin/sEPD-QA')
     sepd_qa.add_argument('-p', '--files-per-job', type=int, default=100, help='Number of trees per job list. Default: 100')

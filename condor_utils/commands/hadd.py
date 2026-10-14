@@ -5,7 +5,7 @@ from pathlib import Path
 
 from condor_utils.core.helpers import chunk_list
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.cli import get_common_parser
+from condor_utils.cli import get_common_parser, add_build_args
 
 def hadd_jobs(args):
     manager = CondorJobManager(args, job_name="hadd")
@@ -139,4 +139,5 @@ def setup_hadd_subparsers(subparsers):
     hadd_parser.add_argument('-m', '--max-retries', type=int, default=3, help='Max Condor job retries on failure. Default: 3.')
     hadd_parser.add_argument('-l', '--condor-log-dir', type=str, default='/tmp/anarde/dump', help='Condor Log Directory.')
     hadd_parser.add_argument('-f', '--condor-script', type=str, default='scripts/genHadd.sh', help='Condor Script.')
+    add_build_args(hadd_parser, myinstall=False)
     hadd_parser.set_defaults(func=hadd_jobs)
