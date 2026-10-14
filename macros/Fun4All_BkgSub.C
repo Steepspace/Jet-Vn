@@ -294,8 +294,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   }
   Enable::HIJETS_TOWER_MULTSUB = do_mult;
   Enable::HIJETS_TOWER_NOBKG = true;
-  // with do_flow == 0 the default iterative chain is already no-flow
+  // with do_flow == 0 the default iterative/mult chains are already no-flow
   Enable::HIJETS_TOWER_NOFLOW = (do_flow != 0);
+  Enable::HIJETS_TOWER_MULTSUB_NOFLOW = do_mult && (do_flow != 0);
   HIJetReco();
 
   // Calo QA
@@ -318,6 +319,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   JetValidationv3* jet_validation = new JetValidationv3();
   jet_validation->set_do_mult(do_mult);
   jet_validation->set_do_iter_noflow(Enable::HIJETS_TOWER_NOFLOW);
+  jet_validation->set_do_mult_noflow(Enable::HIJETS_TOWER_MULTSUB_NOFLOW);
   jet_validation->set_do_detailed(do_detailed);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);

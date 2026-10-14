@@ -163,6 +163,12 @@ int JetValidationv3::Init([[maybe_unused]] PHCompositeNode *topNode)
     book_radii(m_data.mult_r02, m_data.mult_r03, "mult");
   }
 
+  if (m_do_mult_noflow)
+  {
+    tree->Branch("seeds_multnf", &m_data.seeds_multnf);
+    book_radii(m_data.multnf_r02, m_data.multnf_r03, "multnf");
+  }
+
   if (m_do_unsub)
   {
     book_radii(m_data.unsub_r02, m_data.unsub_r03, "unsub");
@@ -301,6 +307,23 @@ int JetValidationv3::process_UE(PHCompositeNode *topNode)
       std::cout << "JetValidationv3::process_UE - [Event " << event_id << "] [Mult] seeds: " << m_data.seeds_mult
                 << " | v2: " << m_data.calo_v2_mult
                 << " | flow_fail: " << m_data.is_flow_failure_mult << std::endl;
+    }
+  }
+
+  if (m_do_mult_noflow)
+  {
+    TowerBackground* towerBkg_multnf = findNode::getClass<TowerBackground>(topNode, "TowerInfoBackground_MultNoFlowSub2");
+    if (!towerBkg_multnf)
+    {
+      std::cout << "Aborting Run: Mult NoFlow Background Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+
+    m_data.seeds_multnf = towerBkg_multnf->get_nHIRecoSeedsSub();
+
+    if (Verbosity() > 0)
+    {
+      std::cout << "JetValidationv3::process_UE - [Event " << event_id << "] [MultNF] seeds: " << m_data.seeds_multnf << std::endl;
     }
   }
 
@@ -660,6 +683,43 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     }
   }
 
+  if (m_do_mult_noflow)
+  {
+    TowerInfoContainer* cemc_multnf = nullptr;
+    TowerInfoContainer* ihcal_multnf = nullptr;
+    TowerInfoContainer* ohcal_multnf = nullptr;
+    if (m_do_detailed)
+    {
+      cemc_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_cemc);
+      ihcal_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_ihcal);
+      ohcal_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_ohcal);
+    }
+
+    if (m_do_r02)
+    {
+      JetContainer *jets_multnf_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_r02);
+      JetContainer *jets_multnf_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_calib_r02);
+      if (!jets_multnf_r02 || !jets_multnf_calib_r02)
+      {
+        std::cout << "Aborting Run: Mult NoFlow R=0.2 Jets Info null" << std::endl;
+        return Fun4AllReturnCodes::ABORTRUN;
+      }
+      fill_jets(jets_multnf_r02, jets_multnf_calib_r02, m_data.multnf_r02, 0.2, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.2");
+    }
+
+    if (m_do_r03)
+    {
+      JetContainer *jets_multnf_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_r03);
+      JetContainer *jets_multnf_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_calib_r03);
+      if (!jets_multnf_r03 || !jets_multnf_calib_r03)
+      {
+        std::cout << "Aborting Run: Mult NoFlow R=0.3 Jets Info null" << std::endl;
+        return Fun4AllReturnCodes::ABORTRUN;
+      }
+      fill_jets(jets_multnf_r03, jets_multnf_calib_r03, m_data.multnf_r03, 0.3, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.3");
+    }
+  }
+
   if (m_do_unsub)
   {
     TowerInfoContainer* cemc_unsub = nullptr;
@@ -703,7 +763,7 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
 //____________________________________________________________________________..
 int JetValidationv3::process_event(PHCompositeNode *topNode)
 {
-  if (m_do_iter || m_do_iter_noflow || m_do_mult)
+  if (m_do_iter || m_do_iter_noflow || m_do_mult || m_do_mult_noflow)
   {
     int ret = process_UE(topNode);
     if (ret)
@@ -712,7 +772,7 @@ int JetValidationv3::process_event(PHCompositeNode *topNode)
     }
   }
 
-  if (m_do_iter || m_do_iter_noflow || m_do_mult || m_do_unsub)
+  if (m_do_iter || m_do_iter_noflow || m_do_mult || m_do_mult_noflow || m_do_unsub)
   {
     int ret = process_jets(topNode);
     if (ret)
@@ -770,6 +830,19 @@ int JetValidationv3::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
     if (m_do_r03)
     {
       m_data.mult_r03.clear();
+    }
+  }
+
+  if (m_do_mult_noflow)
+  {
+    m_data.seeds_multnf = 0;
+    if (m_do_r02)
+    {
+      m_data.multnf_r02.clear();
+    }
+    if (m_do_r03)
+    {
+      m_data.multnf_r03.clear();
     }
   }
 

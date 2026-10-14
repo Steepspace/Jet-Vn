@@ -55,6 +55,7 @@ namespace Enable
   bool HIJETS_TOWER_MULTSUB = false; ///< make multi-sub tower jets
   bool HIJETS_TOWER_NOBKG = false;   ///< make unsubtracted (raw) tower jets
   bool HIJETS_TOWER_NOFLOW = false;  ///< make iterative-sub tower jets w/o flow modulation (requires HIJETS_TOWER)
+  bool HIJETS_TOWER_MULTSUB_NOFLOW = false;  ///< make multi-sub tower jets w/o flow modulation (requires HIJETS_TOWER_MULTSUB)
   bool HIJETS_TOWER_CALIB = true;    ///< apply jet calibration
   bool HIJETS_TRACK = false;  ///< make track jets
   bool HIJETS_PFLOW = false;  ///< make particle flow jets
@@ -466,6 +467,85 @@ void MakeHITowerJetsMultSub()
 }
 
 // ----------------------------------------------------------------------------
+//! Make jets out of mult-subtracted towers without flow modulation.
+//! Reuses the kt seed jets and TowerRho_MULT_* nodes booked in
+//! MakeHITowerJetsMultSub(), so that must be registered first.
+// ----------------------------------------------------------------------------
+void MakeHITowerJetsMultSubNoFlow()
+{
+  unsigned int verbosity = static_cast<unsigned int>(std::max(Enable::VERBOSITY, Enable::HIJETS_VERBOSITY));
+  Fun4AllServer *se = Fun4AllServer::instance();
+
+  auto GetTowerInput = [](const Jet::SRC src, const std::string & prefix = "TOWERINFO_CALIB") {
+    auto * input = new TowerJetInput(src, prefix);
+    if (HIJETS::do_vertex_type) input->set_GlobalVertexType(HIJETS::vertex_type);
+    return input;
+  };
+
+  std::string seed_jet_name = Form("Kt_TowerInfo_HIRecoSeedsRaw_r0%d", static_cast<int>(HIJETS::kt_fj_opts.jet_R * 10));
+  const std::string out_prefix = "MULTSUB_NOFLOW_" + HIJETS::tower_prefix;
+
+  DetermineTowerBackgroundv1 *dtb = new DetermineTowerBackgroundv1("DetermineTowerBackgroundv1_EmbNoFlow");
+  dtb->SetBackgroundOutputName("TowerInfoBackground_MultNoFlowSub2");
+  dtb->SetFlowMode(DetermineTowerBackgroundv1::FlowMode::NoFlow);
+  dtb->SetPsi2Mode(DetermineTowerBackgroundv1::Psi2Mode::NoPsi2);
+  dtb->SetSeedJetName(seed_jet_name);
+  dtb->SetCEMC_RhoNode("TowerRho_MULT_CEMC");
+  dtb->SetIHCAL_RhoNode("TowerRho_MULT_HCALIN");
+  dtb->SetOHCAL_RhoNode("TowerRho_MULT_HCALOUT");
+  dtb->SetNOmitSeeds(2);
+  dtb->Verbosity(verbosity);
+  dtb->UseReweighting(true);
+  if (!HIJETS::eta_calib_direct_path.empty())
+  {
+    dtb->SetEtaCalib_DirectPath(HIJETS::eta_calib_direct_path);
+  }
+  se->registerSubsystem(dtb);
+
+  SubtractTowers *st = new SubtractTowers("SubtractTowers_EmbNoFlow");
+  st->set_inputTowerBackgroundNode("TowerInfoBackground_MultNoFlowSub2");
+  st->set_inputNodePrefix(HIJETS::tower_prefix);
+  st->set_outputNodePrefix(out_prefix);
+  st->SetFlowModulation(false);
+  st->Verbosity(verbosity);
+  st->set_towerinfo(true);
+  se->registerSubsystem(st);
+
+  JetReco *towerjetreco = new JetReco("TowerJetReco_Emb_NoFlowSub1");
+  for (const auto & src : { Jet::CEMC_TOWERINFO_SUB1, Jet::HCALIN_TOWERINFO_SUB1, Jet::HCALOUT_TOWERINFO_SUB1 })
+  {
+    towerjetreco->add_input(GetTowerInput(src, out_prefix));
+  }
+  for (const float R : HIJETS::jet_radii)
+  {
+    int r_int = static_cast<int>(std::round(R * 10));
+    towerjetreco->add_algo(HIJETS::GetFJAlgo(R), Form("%s_Tower_r%02d_MultNoFlowSub1", HIJETS::algo_prefix.c_str(), r_int));
+  }
+  towerjetreco->set_algo_node(HIJETS::jet_node);
+  towerjetreco->set_input_node("TOWER");
+  towerjetreco->Verbosity(verbosity);
+  se->registerSubsystem(towerjetreco);
+
+  if (Enable::HIJETS_TOWER_CALIB)
+  {
+    for (const float R : HIJETS::jet_radii)
+    {
+      int r_int = static_cast<int>(std::round(R * 10));
+      JetCalib* jetCalib = new JetCalib(Form("JetCalib_Tower_r%02d_MultNoFlowSub1", r_int));
+      jetCalib->set_InputNode(Form("%s_Tower_r%02d_MultNoFlowSub1", HIJETS::algo_prefix.c_str(), r_int));
+      jetCalib->set_OutputNode(Form("%s_Tower_r%02d_MultNoFlowSub1_calib", HIJETS::algo_prefix.c_str(), r_int));
+      jetCalib->set_JetRadius(R);
+      jetCalib->set_ApplyZvrtxDependentCalib(true);
+      jetCalib->set_ApplyEtaDependentCalib(true);
+      jetCalib->set_UseEMfracCalib(false);
+      se->registerSubsystem(jetCalib);
+    }
+  }
+
+  return;
+}
+
+// ----------------------------------------------------------------------------
 //! Make jets out of iteratively subtracted towers without flow modulation.
 //! Reuses the raw seed jets (AntiKt_TowerInfo_HIRecoSeedsRaw_r02) booked in
 //! MakeHITowerJets(), so that must be registered first.
@@ -704,6 +784,11 @@ void HIJetReco()
   if (Enable::HIJETS_TOWER_MULTSUB)
   {
     MakeHITowerJetsMultSub();
+  }
+  // needs the kt seed jets and rho nodes from MakeHITowerJetsMultSub()
+  if (Enable::HIJETS_TOWER_MULTSUB && Enable::HIJETS_TOWER_MULTSUB_NOFLOW)
+  {
+    MakeHITowerJetsMultSubNoFlow();
   }
   if (Enable::HIJETS_TOWER_NOBKG)
   {
