@@ -2,8 +2,8 @@
 export USER="$(id -u -n)"
 export LOGNAME=${USER}
 export HOME=/sphenix/u/${LOGNAME}
-if [ -n "$11" ]; then
-    build="$11"
+if [ -n "${11}" ]; then
+    build="${11}"
 elif [ -n "$OFFLINE_MAIN" ]; then
     build="$(basename "$OFFLINE_MAIN")"
 else

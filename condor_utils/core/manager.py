@@ -177,11 +177,13 @@ class CondorJobManager:
                     src = Path(d).resolve()
                     shutil.copytree(src, self.output_dir / src.name, dirs_exist_ok=True)
 
-    def prepare_job_lists(self, dst_per_job, files_dir=None, jobs_file_name="jobs.list", max_workers=16, calib_map=None):
+    def prepare_job_lists(self, dst_per_job, files_dir=None, jobs_file_name="jobs.list", max_workers=16, calib_map=None, extra_columns=None):
         """
         Splits input lists into chunks of dst_per_job and writes resolved chunk paths to jobs_file_name.
         Uses multithreading and native Python file I/O for speed across thousands of runs.
         If calib_map is provided, appends the corresponding calibration file (or 'default') to each entry.
+        If extra_columns is provided, it is called with the run number (str) and the returned
+        comma-separated string is appended to each entry after the calibration column.
         """
         if files_dir is None:
             files_dir = self.output_dir / 'files'
@@ -222,14 +224,17 @@ class CondorJobManager:
                 return []
 
             calib_suffix = ""
-            if calib_map is not None:
+            if calib_map is not None or extra_columns is not None:
                 parts = stem.split('-')
                 if len(parts) >= 2 and any(c.isdigit() for c in parts[1]):
                     run = parts[1].lstrip('0')
                 else:
                     match = re.search(r'\b(\d+)\b', stem)
                     run = match.group(1).lstrip('0') if match else stem.lstrip('0')
-                calib_suffix = f",{calib_map.get(run, 'default')}"
+                if calib_map is not None:
+                    calib_suffix = f",{calib_map.get(run, 'default')}"
+                if extra_columns is not None:
+                    calib_suffix += f",{extra_columns(run)}"
 
             job_paths = []
             for idx, chunk_start in enumerate(range(0, len(lines), dst_per_job)):

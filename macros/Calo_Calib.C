@@ -36,6 +36,10 @@ namespace CaloCalib
   bool do_neg_energy_threshold = true;
   float neg_energy_threshold = -2.0F;
   std::string cemc_globalBadTowerMap_override = "";
+  // direct URLs for the T0-dependent ZS cross calibration (empty: use CDB)
+  std::string cemc_ZScrosscalibT0_url = "";
+  std::string hcalin_ZScrosscalibT0_url = "";
+  std::string hcalout_ZScrosscalibT0_url = "";
 }  // namespace CaloCalib
 
 namespace CALOCALIB = CaloCalib;
@@ -136,6 +140,10 @@ void Process_Calo_Calib()
   calibEMC->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibEMC->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
   calibEMC->set_doAbortMissingCalib(true);
+  if (!CaloCalib::cemc_ZScrosscalibT0_url.empty())
+  {
+    calibEMC->set_directURL_ZScrosscalibT0(CaloCalib::cemc_ZScrosscalibT0_url);
+  }
   se->registerSubsystem(calibEMC);
 
   std::cout << "Calibrating OHcal" << std::endl;
@@ -144,6 +152,10 @@ void Process_Calo_Calib()
   calibOHCal->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibOHCal->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
   calibOHCal->set_doAbortMissingCalib(true);
+  if (!CaloCalib::hcalout_ZScrosscalibT0_url.empty())
+  {
+    calibOHCal->set_directURL_ZScrosscalibT0(CaloCalib::hcalout_ZScrosscalibT0_url);
+  }
   se->registerSubsystem(calibOHCal);
 
   std::cout << "Calibrating IHcal" << std::endl;
@@ -152,6 +164,10 @@ void Process_Calo_Calib()
   calibIHCal->set_doNegEnergyThreshold(CaloCalib::do_neg_energy_threshold);
   calibIHCal->set_negEnergyThreshold(CaloCalib::neg_energy_threshold);
   calibIHCal->set_doAbortMissingCalib(true);
+  if (!CaloCalib::hcalin_ZScrosscalibT0_url.empty())
+  {
+    calibIHCal->set_directURL_ZScrosscalibT0(CaloCalib::hcalin_ZScrosscalibT0_url);
+  }
   se->registerSubsystem(calibIHCal);
 
   ////////////////

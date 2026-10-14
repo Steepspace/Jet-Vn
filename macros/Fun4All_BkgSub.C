@@ -1,4 +1,6 @@
 // c++ includes --
+#include <algorithm>
+#include <map>
 #include <string>
 #include <iostream>
 #include <filesystem>
@@ -67,7 +69,10 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     bool do_mult = false,
                     const std::string &output_dst = "",
                     bool do_neg_energy_threshold = true,
-                    float neg_energy_threshold = -2.0F)
+                    float neg_energy_threshold = -2.0F,
+                    const std::string &zs_calib_cemc = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalin = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalout = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
 {
   bool is_single_dst = flist_dst_zdc.empty() || flist_dst_zdc == "none";
 
@@ -127,6 +132,35 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     }
   }
 
+  // ZS cross calib T0 files must also match the run (the defaults are for run 68144)
+  // "none" or empty: no direct URL, CaloTowerCalib falls back to the CDB
+  const std::vector<std::pair<std::string, std::string>> zs_calibs = {
+      {"CEMC", zs_calib_cemc},
+      {"HCALIN", zs_calib_hcalin},
+      {"HCALOUT", zs_calib_hcalout}};
+
+  std::map<std::string, std::string> zs_urls;
+  for (const auto& [name, path] : zs_calibs)
+  {
+    if (path.empty() || path == "none")
+    {
+      std::cout << "No ZS cross calib T0 for " << name << ", using CDB" << std::endl;
+      continue;
+    }
+
+    // file names end in _<run>.root
+    std::string stem = std::filesystem::path(path).stem().string();
+    std::string run_str = stem.substr(stem.find_last_of('_') + 1);
+    int calib_run = (!run_str.empty() && std::all_of(run_str.begin(), run_str.end(), ::isdigit)) ? std::stoi(run_str) : -1;
+    if (calib_run != runnumber)
+    {
+      std::cout << "Error: " << name << " ZS cross calib T0 run " << calib_run
+                << " does not match calofit run " << runnumber << ": " << path << std::endl;
+      return;
+    }
+    zs_urls[name] = path;
+  }
+
   std::cout << "########################" << std::endl;
   std::cout << "Run Parameters" << std::endl;
   if (is_single_dst)
@@ -155,6 +189,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "do_mult: " << do_mult << std::endl;
   std::cout << "do_neg_energy_threshold: " << do_neg_energy_threshold << std::endl;
   std::cout << "neg_energy_threshold: " << neg_energy_threshold << std::endl;
+  std::cout << "zs_calib_cemc: " << zs_calib_cemc << std::endl;
+  std::cout << "zs_calib_hcalin: " << zs_calib_hcalin << std::endl;
+  std::cout << "zs_calib_hcalout: " << zs_calib_hcalout << std::endl;
   std::cout << "########################" << std::endl;
 
   Fun4AllServer *se = Fun4AllServer::instance();
@@ -188,6 +225,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Calibrate Towers
   CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
   CaloCalib::neg_energy_threshold = neg_energy_threshold;
+  CaloCalib::cemc_ZScrosscalibT0_url = zs_urls["CEMC"];
+  CaloCalib::hcalin_ZScrosscalibT0_url = zs_urls["HCALIN"];
+  CaloCalib::hcalout_ZScrosscalibT0_url = zs_urls["HCALOUT"];
   Process_Calo_Calib();
 
   // MBD Reconstruction
@@ -398,10 +438,14 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     bool do_mult,
                     const std::string &output_dst,
                     bool do_neg_energy_threshold = true,
-                    float neg_energy_threshold = -2.0F)
+                    float neg_energy_threshold = -2.0F,
+                    const std::string &zs_calib_cemc = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalin = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalout = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
 {
   Fun4All_BkgSub(input_dst, /*flist_dst_zdc=*/"", /*flist_dst_sepd=*/"",
                  input_QVecCalib, output, output_tree, do_flow, nEvents, nSkip, event_id,
                  dbtag, eta_calib_direct_path, event_list, do_rcone, do_mult, output_dst,
-                 do_neg_energy_threshold, neg_energy_threshold);
+                 do_neg_energy_threshold, neg_energy_threshold,
+                 zs_calib_cemc, zs_calib_hcalin, zs_calib_hcalout);
 }

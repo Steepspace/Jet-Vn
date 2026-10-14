@@ -51,6 +51,48 @@ def parse_calib_list(calib_list, logger=None):
 
     return calib_map
 
+ZS_DETECTORS = ('CEMC', 'HCALIN', 'HCALOUT')
+
+def parse_zs_calib_list(zs_list, logger=None):
+    """
+    Parses a ZS cross calib T0 list file (<DET>_ZSCrossCalibT0_..._<run>.root, one file per line)
+    and returns a mapping from run number (str, leading zeros stripped) to {detector: path}.
+    """
+    zs_map = {}
+    if not zs_list:
+        return zs_map
+
+    zs_path = Path(zs_list)
+    if not zs_path.is_file():
+        if logger:
+            logger.warning(f"ZS calib list file does not exist: {zs_list}")
+        return zs_map
+
+    pattern = re.compile(rf"^({'|'.join(ZS_DETECTORS)})_ZSCrossCalibT0_.*_(\d+)\.root$")
+    for line in zs_path.read_text(encoding='utf-8').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+
+        match = pattern.match(Path(line).name)
+        if not match:
+            if logger:
+                logger.warning(f'Could not parse detector/run from ZS calib entry: {line}')
+            continue
+
+        det, run = match.group(1), match.group(2).lstrip('0')
+        zs_map.setdefault(run, {})[det] = line
+
+    for run, entry in sorted(zs_map.items(), key=lambda kv: int(kv[0])):
+        missing = [det for det in ZS_DETECTORS if det not in entry]
+        if missing and logger:
+            logger.warning(f"Run {run} ZS calib list is missing {', '.join(missing)}; passing none for those")
+
+    if logger:
+        logger.info(f'Loaded ZS cross calib T0 entries for {len(zs_map)} runs from {zs_path.name}')
+
+    return zs_map
+
 def create_f4a_jobs(args):
     if "Fun4All_BkgSub" in args.f4a_macro:
         args.condor_script = 'scripts/genFun4All_BkgSub.sh'
@@ -72,6 +114,10 @@ def create_f4a_jobs(args):
     event_list = Path(args.event_list).resolve() if getattr(args, 'event_list', None) else None
     if event_list:
         manager.add_file_to_check(event_list)
+
+    zs_calib_list = Path(args.zs_calib).resolve() if getattr(args, 'zs_calib', None) else None
+    if zs_calib_list:
+        manager.add_file_to_check(zs_calib_list)
 
     manager.validate_paths()
 
@@ -105,6 +151,7 @@ def create_f4a_jobs(args):
         init_log['Do Mult'] = bool(getattr(args, 'do_mult', 0))
         init_log['Do Neg Energy Threshold'] = bool(getattr(args, 'do_neg_energy_threshold', 1))
         init_log['Neg Energy Threshold'] = float(getattr(args, 'neg_energy_threshold', -2.0))
+        init_log['ZS Calib List'] = zs_calib_list if zs_calib_list else "Not Provided (Using CDB)"
 
     manager.log_initialization(init_log)
 
@@ -117,12 +164,30 @@ def create_f4a_jobs(args):
         extra_files.append(eta_calib)
     if event_list:
         extra_files.append(event_list)
+    if zs_calib_list:
+        extra_files.append(zs_calib_list)
 
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
     calib_map = parse_calib_list(calib_list, manager.logger)
 
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map)
+    # ZS cross calib T0 columns (BkgSub only): one file per detector, 'none' falls back to the CDB
+    zs_columns = None
+    missing_zs_runs = set()
+    if "Fun4All_BkgSub" in args.f4a_macro:
+        zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
+
+        def zs_columns(run):
+            entry = zs_map.get(run, {})
+            if not entry:
+                missing_zs_runs.add(run)
+            return ",".join(entry.get(det, 'none') for det in ZS_DETECTORS)
+
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map, extra_columns=zs_columns)
+
+    if zs_calib_list and missing_zs_runs:
+        runs_str = ", ".join(sorted(missing_zs_runs, key=lambda r: int(r) if r.isdigit() else r))
+        manager.logger.warning(f"No ZS cross calib T0 entry for {len(missing_zs_runs)} run(s), passing none (CDB fallback): {runs_str}")
 
     if "Fun4All_BkgSub" in args.f4a_macro:
         eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
@@ -131,13 +196,15 @@ def create_f4a_jobs(args):
         do_mult_val = getattr(args, 'do_mult', 0)
         do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
         neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-        bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} "
+        bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
+        queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
     else:
         bkgsub_args = ""
+        queue_arg = "input_dst,input_calib from jobs.list"
 
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output {build_val} {myinstall_val}"
     manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst,input_calib from jobs.list")
+    manager.finalize_submission(queue_arg=queue_arg)
 
 def create_f4a_zdc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A ZDC")
@@ -399,6 +466,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--myinstall', '--install-dir', dest='myinstall', type=str, default=os.environ.get('MYINSTALL', None), help='Custom path to local install directory ($MYINSTALL). Default: $MYINSTALL or $HOME/Documents/sPHENIX/install.')
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
+    f4a.add_argument('-i4_calib', '--zs-calib', dest='zs_calib', type=str, default=None, help='List of ZS cross calib T0 files (CEMC/HCALIN/HCALOUT per run), used by Fun4All_BkgSub. Runs without an entry fall back to the CDB. (Optional)')
     f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file. (Optional)')
     f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD.C', help='Fun4All Macro.')
     f4a.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
