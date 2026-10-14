@@ -103,6 +103,13 @@ def create_f4a_jobs(args):
     manager.add_file_to_check(args.HIJetReco_macro)
     manager.add_dir_to_check(args.src_dir)
 
+    # the eta calib is only used by the mult subtraction, so it implies --do-mult 1
+    # unless --do-mult was given explicitly
+    if getattr(args, 'do_mult', 0) is None:
+        args.do_mult = 1 if getattr(args, 'eta_calib_path', None) else 0
+        if args.do_mult:
+            manager.logger.info('--eta-calib-path given without --do-mult: enabling mult subtraction')
+
     calib_list = Path(args.calib).resolve() if args.calib else None
     if calib_list:
         manager.add_file_to_check(calib_list)
@@ -473,7 +480,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
     f4a.add_argument('--do-flow', type=int, default=3, help='Flow modulation configuration for JetReco/QA (default=3)')
     f4a.add_argument('--do-rcone', action='store_true', default=False, help='Enable random cone validation.')
-    f4a.add_argument('--do-mult', type=int, default=0, choices=[0, 1], help='Enable multiple subtraction (default=0).')
+    f4a.add_argument('--do-mult', type=int, default=None, choices=[0, 1], help='Enable multiplicity subtraction (default: 1 if --eta-calib-path is given, else 0).')
     f4a.add_argument('--do-neg-energy-threshold', type=int, default=1, choices=[0, 1], help='Enable negative energy threshold rejection (default=1).')
     f4a.add_argument('--neg-energy-threshold', type=float, default=-2.0, help='Negative energy threshold cut in GeV (default=-2.0).')
     f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
