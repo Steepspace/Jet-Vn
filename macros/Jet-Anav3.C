@@ -147,10 +147,14 @@ class JetAnalysisv3
     };
 
     JetHistSet iter_r02;
+    JetHistSet iternf_r02;
     JetHistSet mult_r02;
+    JetHistSet multnf_r02;
 
     JetHistSet iter_r03;
+    JetHistSet iternf_r03;
     JetHistSet mult_r03;
+    JetHistSet multnf_r03;
 
     JetHistSet unsub_r02;
     JetHistSet unsub_r03;
@@ -178,7 +182,9 @@ class JetAnalysisv3
 
     TH2 *h2Seeds_iter_mult{nullptr};
     TH2 *h2Seeds_iter{nullptr};
+    TH2 *h2Seeds_iternf{nullptr};
     TH2 *h2Seeds_mult{nullptr};
+    TH2 *h2Seeds_multnf{nullptr};
 
     TH2 *h2Psi2_S_raw{nullptr};
     TH2 *h2Psi2_N_raw{nullptr};
@@ -235,13 +241,17 @@ class JetAnalysisv3
     double psi2_NS{0};
 
     // UE
-    // key: iter -> UE Iterative Method
-    //      mult -> UE Multiplicity Method (New)
+    // key: iter   -> UE Iterative Method
+    //      iternf -> UE Iterative Method w/o flow modulation
+    //      mult   -> UE Multiplicity Method (New)
+    //      multnf -> UE Multiplicity Method w/o flow modulation
     float calo_v2_iter{0};
     float calo_v2_mult{0};
 
     int seeds_iter{0};
+    int seeds_iternf{0};
     int seeds_mult{0};
+    int seeds_multnf{0};
 
     bool is_flow_failure_iter{false};
     bool is_flow_failure_mult{false};
@@ -249,8 +259,12 @@ class JetAnalysisv3
     // jets
     JetData iter_r02;
     JetData iter_r03;
+    JetData iternf_r02;
+    JetData iternf_r03;
     JetData mult_r02;
     JetData mult_r03;
+    JetData multnf_r02;
+    JetData multnf_r03;
     JetData unsub_r02;
     JetData unsub_r03;
 
@@ -290,6 +304,10 @@ class JetAnalysisv3
   bool m_do_iter{true};
   bool m_do_mult{true};
   bool m_do_rcone{true};
+
+  // No flow subtraction, enabled if iter / mult are enabled and the branches exist
+  bool m_has_iternf{false};
+  bool m_has_multnf{false};
 
   // Jet Cuts
   double m_jet_pt_min{10}; /*GeV*/
@@ -381,6 +399,34 @@ void JetAnalysisv3::setup_chain()
         "pt_mult_r03", "pt_calib_mult_r03", "e_mult_r03", "phi_mult_r03", "eta_mult_r03"
     });
   }
+
+  // No flow subtraction branches are optional: enable only if all exist
+  auto add_noflow = [&](std::string_view ue) -> bool
+  {
+    std::vector<std::string> names = {std::format("seeds_{}", ue)};
+    for (const char *r : {"r02", "r03"})
+    {
+      for (const char *var : {"max_pt", "pt", "pt_calib", "e", "phi", "eta"})
+      {
+        names.push_back(std::format("{}_{}_{}", var, ue, r));
+      }
+    }
+
+    for (const auto &name : names)
+    {
+      if (!m_chain->GetBranch(name.c_str()))
+      {
+        std::cout << std::format("Branch '{}' not found, skipping {} hists\n", name, ue);
+        return false;
+      }
+    }
+
+    branchNames.insert(names.begin(), names.end());
+    return true;
+  };
+
+  m_has_iternf = m_do_iter && add_noflow("iternf");
+  m_has_multnf = m_do_mult && add_noflow("multnf");
 
   if (m_do_unsub)
   {
@@ -475,6 +521,30 @@ void JetAnalysisv3::setup_chain()
     m_chain->SetBranchAddress("e_mult_r03", &m_event_data.mult_r03.e);
     m_chain->SetBranchAddress("phi_mult_r03", &m_event_data.mult_r03.phi);
     m_chain->SetBranchAddress("eta_mult_r03", &m_event_data.mult_r03.eta);
+  }
+
+  auto set_jet_branches = [this](JetData &jd, std::string_view ue, std::string_view r)
+  {
+    m_chain->SetBranchAddress(std::format("max_pt_{}_{}", ue, r).c_str(), &jd.max_pt);
+    m_chain->SetBranchAddress(std::format("pt_{}_{}", ue, r).c_str(), &jd.pt);
+    m_chain->SetBranchAddress(std::format("pt_calib_{}_{}", ue, r).c_str(), &jd.pt_calib);
+    m_chain->SetBranchAddress(std::format("e_{}_{}", ue, r).c_str(), &jd.e);
+    m_chain->SetBranchAddress(std::format("phi_{}_{}", ue, r).c_str(), &jd.phi);
+    m_chain->SetBranchAddress(std::format("eta_{}_{}", ue, r).c_str(), &jd.eta);
+  };
+
+  if (m_has_iternf)
+  {
+    m_chain->SetBranchAddress("seeds_iternf", &m_event_data.seeds_iternf);
+    set_jet_branches(m_event_data.iternf_r02, "iternf", "r02");
+    set_jet_branches(m_event_data.iternf_r03, "iternf", "r03");
+  }
+
+  if (m_has_multnf)
+  {
+    m_chain->SetBranchAddress("seeds_multnf", &m_event_data.seeds_multnf);
+    set_jet_branches(m_event_data.multnf_r02, "multnf", "r02");
+    set_jet_branches(m_event_data.multnf_r03, "multnf", "r03");
   }
 
   if (m_do_unsub)
@@ -634,7 +704,9 @@ void JetAnalysisv3::init_hists()
 
   std::vector<std::string> ue_list;
   if (m_do_iter) ue_list.push_back("iter");
+  if (m_has_iternf) ue_list.push_back("iternf");
   if (m_do_mult) ue_list.push_back("mult");
+  if (m_has_multnf) ue_list.push_back("multnf");
   if (m_do_unsub) ue_list.push_back("unsub");
 
   for (const char *r : {"r02", "r03"})
@@ -749,6 +821,16 @@ void JetAnalysisv3::init_hists()
     m_hists2D["h2Seeds_mult"] = std::make_unique<TH2F>("h2Seeds_mult", "Multiplicity Seeds; Centrality [%]; Seeds Multiplicity", m_bins_cent, m_cent_low, m_cent_high, bins_seeds_mult, seeds_mult_low, seeds_mult_high);
   }
 
+  if (m_has_iternf)
+  {
+    m_hists2D["h2Seeds_iternf"] = std::make_unique<TH2F>("h2Seeds_iternf", "Iterative No Flow Seeds; Centrality [%]; Seeds Iterative No Flow", m_bins_cent, m_cent_low, m_cent_high, bins_seeds_iter, seeds_iter_low, seeds_iter_high);
+  }
+
+  if (m_has_multnf)
+  {
+    m_hists2D["h2Seeds_multnf"] = std::make_unique<TH2F>("h2Seeds_multnf", "Multiplicity No Flow Seeds; Centrality [%]; Seeds Multiplicity No Flow", m_bins_cent, m_cent_low, m_cent_high, bins_seeds_mult, seeds_mult_low, seeds_mult_high);
+  }
+
   m_hists2D["h2Psi2_S_raw"] = std::make_unique<TH2F>("h2Psi2_S_raw", "; 2 #Psi_{2}; Centrality [%]", bins_psi, psi_low, psi_high, m_bins_cent, m_cent_low, m_cent_high);
 
   clone_hist(m_hists2D, "h2Psi2_S_raw", "h2Psi2_N_raw");
@@ -782,6 +864,16 @@ void JetAnalysisv3::init_hists()
     m_hists.hCaloV2Fail_mult = m_hists1D["hCaloV2Fail_mult"].get();
     m_hists.h2CaloV2_mult_Centrality = m_hists2D["h2CaloV2_mult_Centrality"].get();
     m_hists.h2Seeds_mult = m_hists2D["h2Seeds_mult"].get();
+  }
+
+  if (m_has_iternf)
+  {
+    m_hists.h2Seeds_iternf = m_hists2D["h2Seeds_iternf"].get();
+  }
+
+  if (m_has_multnf)
+  {
+    m_hists.h2Seeds_multnf = m_hists2D["h2Seeds_multnf"].get();
   }
 
   if (m_do_iter && m_do_mult)
@@ -828,6 +920,16 @@ void JetAnalysisv3::init_hists()
   {
     bind_jet_set(m_hists.mult_r02, "r02", "mult");
     bind_jet_set(m_hists.mult_r03, "r03", "mult");
+  }
+  if (m_has_iternf)
+  {
+    bind_jet_set(m_hists.iternf_r02, "r02", "iternf");
+    bind_jet_set(m_hists.iternf_r03, "r03", "iternf");
+  }
+  if (m_has_multnf)
+  {
+    bind_jet_set(m_hists.multnf_r02, "r02", "multnf");
+    bind_jet_set(m_hists.multnf_r03, "r03", "multnf");
   }
   if (m_do_unsub)
   {
@@ -1059,6 +1161,35 @@ void JetAnalysisv3::process_jets()
     }
   }
 
+  // No flow: gated on the flow failure of the respective method so the event selection matches
+  if (m_has_iternf)
+  {
+    if (!m_event_data.is_flow_failure_iter)
+    {
+      fill_jet_hists(m_event_data.iternf_r02, m_event_data.calo_v2_iter, m_hists.iternf_r02, m_jet_eta_max_r02, 0.2, "iternf");
+      fill_jet_hists(m_event_data.iternf_r03, m_event_data.calo_v2_iter, m_hists.iternf_r03, m_jet_eta_max_r03, 0.3, "iternf");
+    }
+    else
+    {
+      fill_jet_flow_fail_hists(m_event_data.iternf_r02, m_hists.iternf_r02, m_jet_eta_max_r02);
+      fill_jet_flow_fail_hists(m_event_data.iternf_r03, m_hists.iternf_r03, m_jet_eta_max_r03);
+    }
+  }
+
+  if (m_has_multnf)
+  {
+    if (!m_event_data.is_flow_failure_mult)
+    {
+      fill_jet_hists(m_event_data.multnf_r02, m_event_data.calo_v2_mult, m_hists.multnf_r02, m_jet_eta_max_r02, 0.2, "multnf");
+      fill_jet_hists(m_event_data.multnf_r03, m_event_data.calo_v2_mult, m_hists.multnf_r03, m_jet_eta_max_r03, 0.3, "multnf");
+    }
+    else
+    {
+      fill_jet_flow_fail_hists(m_event_data.multnf_r02, m_hists.multnf_r02, m_jet_eta_max_r02);
+      fill_jet_flow_fail_hists(m_event_data.multnf_r03, m_hists.multnf_r03, m_jet_eta_max_r03);
+    }
+  }
+
   if (m_do_unsub)
   {
     // Process unsubtracted jets
@@ -1174,6 +1305,10 @@ void JetAnalysisv3::process_event_check()
         m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::FLOW_PASS_ITER));
         m_hists.h2CaloV2_iter_Centrality->Fill(cent, ed.calo_v2_iter);
         m_hists.h2Seeds_iter->Fill(cent, ed.seeds_iter);
+        if (m_has_iternf)
+        {
+          m_hists.h2Seeds_iternf->Fill(cent, ed.seeds_iternf);
+        }
       }
     }
 
@@ -1189,6 +1324,10 @@ void JetAnalysisv3::process_event_check()
         m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::FLOW_PASS_MULT));
         m_hists.h2CaloV2_mult_Centrality->Fill(cent, ed.calo_v2_mult);
         m_hists.h2Seeds_mult->Fill(cent, ed.seeds_mult);
+        if (m_has_multnf)
+        {
+          m_hists.h2Seeds_multnf->Fill(cent, ed.seeds_multnf);
+        }
       }
     }
 
@@ -1289,6 +1428,14 @@ void JetAnalysisv3::print_event_info(long long event_idx) const
                              m_event_data.calo_v2_mult, m_event_data.is_flow_failure_mult ? "Yes" : "No",
                              m_event_data.seeds_mult);
   }
+  if (m_has_iternf)
+  {
+    std::cout << std::format(" Seeds Iter No Flow: {}\n", m_event_data.seeds_iternf);
+  }
+  if (m_has_multnf)
+  {
+    std::cout << std::format(" Seeds Mult No Flow: {}\n", m_event_data.seeds_multnf);
+  }
   std::cout << std::format(" Psi2 Raw  - S: {:.4f}, N: {:.4f}, NS: {:.4f}\n", m_event_data.psi2_raw_S, m_event_data.psi2_raw_N, m_event_data.psi2_raw_NS);
   std::cout << std::format(" Psi2 Corr - S: {:.4f}, N: {:.4f}, NS: {:.4f}\n", m_event_data.psi2_S, m_event_data.psi2_N, m_event_data.psi2_NS);
 
@@ -1324,6 +1471,16 @@ void JetAnalysisv3::print_event_info(long long event_idx) const
   {
     print_jet_collection("r02_mult", m_event_data.mult_r02);
     print_jet_collection("r03_mult", m_event_data.mult_r03);
+  }
+  if (m_has_iternf)
+  {
+    print_jet_collection("r02_iternf", m_event_data.iternf_r02);
+    print_jet_collection("r03_iternf", m_event_data.iternf_r03);
+  }
+  if (m_has_multnf)
+  {
+    print_jet_collection("r02_multnf", m_event_data.multnf_r02);
+    print_jet_collection("r03_multnf", m_event_data.multnf_r03);
   }
   if (m_do_unsub)
   {
@@ -1412,7 +1569,7 @@ int main(int argc, const char *const argv[])
   std::string output_dir = (argc >= ctr + 1) ? argv[ctr++] : ".";
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
   bool do_iter = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
-  bool do_mult = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
+  bool do_mult = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
   bool do_unsub = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
   bool do_rcone = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
   double lead_jet_pt_threshold = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 100.0;
