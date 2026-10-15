@@ -63,16 +63,16 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     int nSkip = 0,
                     int event_id = 0,
                     const std::string &dbtag = "newcdbtag",
-                    const std::string &eta_calib_direct_path = "",
+                    const std::string &eta_calib_direct_path = "/direct/sphenix+u/anarde/Documents/sPHENIX/Jet-Vn/files/calib/rho_eta_calib_cdb_signed.root",
                     const std::string &event_list = "",
                     bool do_rcone = false,
-                    bool do_mult = false,
+                    bool do_mult = true,
                     const std::string &output_dst = "",
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
-                    const std::string &zs_calib_cemc = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalin = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalout = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
+                    const std::string &zs_calib_cemc = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalin = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_hcalout = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
 {
   bool is_single_dst = flist_dst_zdc.empty() || flist_dst_zdc == "none";
 
