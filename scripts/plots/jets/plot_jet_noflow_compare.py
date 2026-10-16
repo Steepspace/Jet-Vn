@@ -25,6 +25,11 @@ METHODS = {
     "multnf": {"label": "Multiplicity No Flow", "color": "#ff7f00", "marker": "D", "event_bin": 3},
 }
 
+# Unsubtracted jets, overlaid with --unsub. They are not gated on flow failure, so they use the
+# "Good Calo-Cent" event count (hEvent bin 2) instead of a flow pass count
+UNSUB = {"label": "Unsubtracted", "color": "#7f7f7f", "marker": "x", "event_bin": 1, "linestyle": "--"}
+STYLES_WITH_UNSUB = {**METHODS, "unsub": UNSUB}
+
 # (name, denominator, numerator, ratio label, per-event normalization)
 # Flow vs no flow share the same event selection -> raw counts
 # Iter vs mult have different flow failures -> per-event yield
@@ -90,12 +95,12 @@ def add_header(ax, run_number, r_jet, lumi):
     ax.text(1.0, 1.01, text, transform=ax.transAxes, ha="right", va="bottom", fontsize=14)
 
 
-def load_hists(file_path, r_tag, kind="pt"):
+def load_hists(file_path, r_tag, kind="pt", with_unsub=False):
     """Loads hJetPtv3 (kind="pt") or the eta projection of h2JetEtav3 (kind="eta") for each method, with the flow pass event counts."""
     data = {}
     with uproot.open(file_path) as rf:
         n_events = rf["hEvent"].values()
-        for method, meta in METHODS.items():
+        for method, meta in (STYLES_WITH_UNSUB if with_unsub else METHODS).items():
             hist_name = f"hJetPtv3_{r_tag}_{method}" if kind == "pt" else f"h2JetEtav3_{r_tag}_{method}"
             if hist_name not in rf:
                 print(f"Warning: {hist_name} not found in {file_path}")
@@ -120,16 +125,21 @@ def load_hists(file_path, r_tag, kind="pt"):
     return data
 
 
-def info_text(method_label=None):
-    return TEXT_INFO if method_label is None else f"{method_label}\n{TEXT_INFO}"
+# Eta comes from h2JetEtav3, which has a jet pT axis of 10-80 GeV (calibrated pT >= 10 GeV from the jet cut)
+ETA_PT_CUT = r"$10 \leq p_{T} < 80$ GeV"
 
 
-def plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, output_path, ratio_ylim=None, pt_max=None, save_pdf=False, styles=METHODS, method_label=None, ylabel=None):
+def info_text(method_label=None, pt_cut=None):
+    text = TEXT_INFO if method_label is None else f"{method_label}\n{TEXT_INFO}"
+    return text if pt_cut is None else f"{text}\n{pt_cut}"
+
+
+def plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, output_path, ratio_ylim=None, pt_max=None, save_pdf=False, styles=METHODS, method_label=None, ylabel=None, extra=()):
     hep.style.use("ATLAS")
 
     curves = {}
     max_x_val = 0
-    for method in (den, num):
+    for method in (den, num, *extra):
         d = hists[method]
         scale = 1.0 / d["n_events"] if per_event else 1.0
         curves[method] = {
@@ -145,10 +155,12 @@ def plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, 
 
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
 
-    for method in (den, num):
+    # Extra curves (unsub) are drawn first so the compared curves stay on top
+    for method in (*extra, den, num):
         c = curves[method]
         meta = styles[method]
-        hep.histplot((c["values"], c["edges"]), ax=ax, histtype="step", color=meta["color"], linewidth=2, label=meta["label"])
+        hep.histplot((c["values"], c["edges"]), ax=ax, histtype="step", color=meta["color"], linewidth=2,
+                     linestyle=meta.get("linestyle", "-"), label=meta["label"])
 
     # Ratio: num / den
     d, n = curves[den], curves[num]
@@ -182,8 +194,8 @@ def plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, 
     ax.set_ylabel(ylabel if ylabel is not None else (r"$\frac{1}{N_{\mathrm{evt}}}\frac{dN}{dp_{T}}$ [GeV$^{-1}$]" if per_event else "Counts"))
 
     add_header(ax, run_number, r_jet, lumi)
-    ax.text(0.95, 0.95, info_text(method_label), transform=ax.transAxes, ha="right", va="top", fontsize=13)
-    ax.legend(loc="upper right", bbox_to_anchor=(0.95, 0.55), frameon=False, fontsize=13)
+    ax.text(0.95, 0.95, info_text(method_label), transform=ax.transAxes, ha="right", va="top", fontsize=15)
+    ax.legend(loc="upper right", bbox_to_anchor=(0.99, 0.55), frameon=False, fontsize=15)
 
     setup_ratio_panel(ax_ratio, xlabel=r"Jet $p_{T}$ [GeV]", ylabel=ratio_label, ratio_ylim=ratio_ylim, all_ratios=all_ratios, min_margin=0.06)
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
@@ -195,10 +207,10 @@ def plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, 
     if pt_max is None and max_x_val > 60:
         pt60_path = output_path.with_name(f"{output_path.stem}_pt60{output_path.suffix}")
         plot_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, pt60_path,
-                  ratio_ylim=ratio_ylim, pt_max=60, save_pdf=save_pdf, styles=styles, method_label=method_label, ylabel=ylabel)
+                  ratio_ylim=ratio_ylim, pt_max=60, save_pdf=save_pdf, styles=styles, method_label=method_label, ylabel=ylabel, extra=extra)
 
 
-def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, output_path, ratio_ylim=None, save_pdf=False, styles=METHODS, method_label=None, eta_limit=None, ratio_eta_limit=None, ylabel=None):
+def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_event, output_path, ratio_ylim=None, save_pdf=False, styles=METHODS, method_label=None, eta_limit=None, ratio_eta_limit=None, ylabel=None, extra=()):
     hep.style.use("ATLAS")
 
     # Axis range and ratio range default to the eta acceptance for this R
@@ -208,7 +220,7 @@ def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_eve
         ratio_eta_limit = eta_limit
 
     curves = {}
-    for method in (den, num):
+    for method in (den, num, *extra):
         d = hists[method]
         bin_width = np.diff(d["edges"])
         scale = 1.0 / (d["n_events"] * bin_width) if per_event else 1.0
@@ -220,10 +232,12 @@ def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_eve
 
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
 
-    for method in (den, num):
+    # Extra curves (unsub) are drawn first so the compared curves stay on top
+    for method in (*extra, den, num):
         c = curves[method]
         meta = styles[method]
-        hep.histplot((c["values"], c["edges"]), ax=ax, histtype="step", color=meta["color"], linewidth=2, label=meta["label"])
+        hep.histplot((c["values"], c["edges"]), ax=ax, histtype="step", color=meta["color"], linewidth=2,
+                     linestyle=meta.get("linestyle", "-"), label=meta["label"])
 
     # Ratio: num / den
     d, n = curves[den], curves[num]
@@ -246,7 +260,7 @@ def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_eve
 
     y_max = max(np.max(c["values"]) for c in curves.values())
 
-    ax.set_ylim(bottom=0, top=y_max * 1.55)
+    ax.set_ylim(bottom=0, top=y_max * 1.75)
     ax.set_xlim(-eta_limit, eta_limit)
     ax.set_ylabel(ylabel if ylabel is not None else (r"$\frac{1}{N_{\mathrm{evt}}}\frac{dN}{d\eta}$" if per_event else "Counts"))
 
@@ -256,8 +270,8 @@ def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_eve
         ax.yaxis.set_major_formatter(formatter_y)
 
     add_header(ax, run_number, r_jet, lumi)
-    ax.text(0.95, 0.95, info_text(method_label), transform=ax.transAxes, ha="right", va="top", fontsize=13)
-    ax.legend(loc="upper left", frameon=False, fontsize=13)
+    ax.text(0.95, 0.95, info_text(method_label, pt_cut=ETA_PT_CUT), transform=ax.transAxes, ha="right", va="top", fontsize=15)
+    ax.legend(loc="upper left", frameon=False, fontsize=15)
 
     setup_ratio_panel(ax_ratio, xlabel=r"$\eta$", ylabel=ratio_label, ratio_ylim=ratio_ylim, all_ratios=all_ratios, min_margin=0.05)
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
@@ -268,22 +282,37 @@ def plot_eta_pair(run_number, r_jet, lumi, hists, den, num, ratio_label, per_eve
 
 def run_task(task):
     """Makes one comparison for one run, jet radius and variable. Returns 1 on success, 0 if skipped."""
-    kind, run, file_path, lumi, r_tag, r_jet, comparison, output_dir, ratio_ylim, pt_max, save_pdf = task
+    kind, run, file_path, lumi, r_tag, r_jet, comparison, output_dir, ratio_ylim, pt_max, save_pdf, unsub = task
     name, den, num, ratio_label, per_event = comparison
 
-    hists = load_hists(file_path, r_tag, kind)
-    if den not in hists or num not in hists:
-        print(f"Warning: Missing {den} or {num} for run {run} {r_tag} ({kind}), skipping")
+    hists = load_hists(file_path, r_tag, kind, with_unsub=unsub)
+    needed = (den, num, "unsub") if unsub else (den, num)
+    if any(m not in hists for m in needed):
+        print(f"Warning: Missing {', '.join(m for m in needed if m not in hists)} for run {run} {r_tag} ({kind}), skipping")
         return 0
 
+    # Eta with the unsubtracted overlay: normalize every curve to unit area over the plotted eta range
+    # (the unsubtracted yield is much larger, so only the shapes are comparable)
+    ylabel = None
+    if unsub and kind == "eta":
+        eta_limit = round(1.1 - r_jet, 1)
+        for h in hists.values():
+            centers = (h["edges"][:-1] + h["edges"][1:]) / 2.0
+            h["n_events"] = np.sum(h["values"][np.abs(centers) <= eta_limit])
+        per_event = True
+        ylabel = r"$\frac{1}{N_{\mathrm{jets}}}\frac{dN}{d\eta}$"
+
+    full_name = name + ("_unsub" if unsub else "")
     hist_tag = "hJetPtv3" if kind == "pt" else "h2JetEtav3"
-    out_png = output_dir / kind / name / r_tag / f"run_{run}_{hist_tag}_{r_tag}_{name}.png"
+    out_png = output_dir / kind / full_name / r_tag / f"run_{run}_{hist_tag}_{r_tag}_{full_name}.png"
+    styles = STYLES_WITH_UNSUB if unsub else METHODS
+    extra = ("unsub",) if unsub else ()
     if kind == "pt":
         plot_pair(run, r_jet, lumi, hists, den, num, ratio_label, per_event, out_png,
-                  ratio_ylim=ratio_ylim, pt_max=pt_max, save_pdf=save_pdf)
+                  ratio_ylim=ratio_ylim, pt_max=pt_max, save_pdf=save_pdf, styles=styles, extra=extra)
     else:
         plot_eta_pair(run, r_jet, lumi, hists, den, num, ratio_label, per_event, out_png,
-                      ratio_ylim=ratio_ylim, save_pdf=save_pdf)
+                      ratio_ylim=ratio_ylim, save_pdf=save_pdf, styles=styles, extra=extra, ylabel=ylabel)
     return 1
 
 
@@ -382,6 +411,11 @@ def main():
         help="Skip the R = 0.2 vs R = 0.3 comparisons"
     )
     parser.add_argument(
+        "--unsub",
+        action="store_true",
+        help="Additionally make the method comparisons with the unsubtracted jets overlaid (written to <comparison>_unsub folders; eta curves are normalized to unit area)"
+    )
+    parser.add_argument(
         "-j", "--jobs",
         type=int,
         default=min(8, os.cpu_count() or 1),
@@ -428,7 +462,8 @@ def main():
         for r_tag, r_jet in [("r02", 0.2), ("r03", 0.3)]:
             for kind in kinds:
                 for comparison in COMPARISONS:
-                    tasks.append((kind, run, file_path, lumis[run], r_tag, r_jet, comparison, args.output_dir, args.ratio_ylim, args.pt_max, args.save_pdf))
+                    for unsub in ((False, True) if args.unsub else (False,)):
+                        tasks.append((kind, run, file_path, lumis[run], r_tag, r_jet, comparison, args.output_dir, args.ratio_ylim, args.pt_max, args.save_pdf, unsub))
 
     r_tasks = []
     if not args.no_r_compare:
