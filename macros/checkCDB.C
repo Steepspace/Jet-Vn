@@ -45,7 +45,8 @@ void checkCDB(unsigned int runnumber, const std::string& dbtag = "newcdbtag")
       {"sEPD Template", "SEPD_TEMPLATE"},
       {"sEPD Calib", "SEPD_NMIP_CALIB"},
       {"sEPD Bad Tower Map", "SEPD_BadTowerMap"},
-      {"sEPD Event Plane", "SEPD_EventPlaneCalib"}
+      {"sEPD Event Plane", "SEPD_EventPlaneCalib"},
+      {"JES Calib Default", "JES_Calib_Default"},
       };
 
   for (const auto& [description, name] : cdb)
