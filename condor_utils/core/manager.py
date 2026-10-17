@@ -81,7 +81,75 @@ class CondorJobManager:
                 myinstall_path = Path(os.path.expandvars(os.path.expanduser(raw_install)))
                 self.myinstall = str(myinstall_path.resolve())
                 if not myinstall_path.is_dir():
-                    self.logger.warning(f"Install directory does not exist: {self.myinstall}")
+                    self.logger.critical(f'Install directory does not exist: {self.myinstall} (from --myinstall {raw_install})')
+                    sys.exit(1)
+                if not (myinstall_path / 'lib').is_dir():
+                    self.logger.critical(f'Install directory has no lib/: {self.myinstall}')
+                    sys.exit(1)
+                self.check_install_age()
+
+    def check_install_age(self):
+        """
+        Warns if the local install's newest library predates the resolved build, since a rolling tag
+        like 'new' may have moved on and the install's libraries may no longer match it.
+        """
+        if not self.build_dir:
+            return
+        build_info = self.build_dir / 'rebuild.info'
+        libs = list((Path(self.myinstall) / 'lib').glob('*.so*'))
+        if not build_info.is_file() or not libs:
+            return
+        install_time = max(l.stat().st_mtime for l in libs)
+        build_time = build_info.stat().st_mtime
+        if install_time < build_time:
+            fmt = lambda t: datetime.datetime.fromtimestamp(t).strftime('%Y-%m-%d %H:%M')
+            self.logger.warning(
+                f'Install {self.myinstall} (newest lib {fmt(install_time)}) is older than build '
+                f'{self.build} ({fmt(build_time)}). Consider rebuilding the install against {self.build}.'
+            )
+
+    def library_search_dirs(self):
+        """
+        Directories the worker's LD_LIBRARY_PATH will contain after sphenix_setup.sh / setup_local.sh.
+        The submit shell's LD_LIBRARY_PATH is deliberately not used, since it may include a different install.
+        """
+        dirs = []
+        if self.myinstall and self.myinstall != 'none':
+            dirs.append(Path(self.myinstall) / 'lib')
+        release = self.build_dir or (Path(os.environ['OFFLINE_MAIN']) if os.environ.get('OFFLINE_MAIN') else None)
+        if release:
+            dirs.extend([release / 'lib', release / 'lib64'])
+        for var in ['OPT_SPHENIX', 'OPT_UTILS']:
+            if os.environ.get(var):
+                dirs.extend([Path(os.environ[var]) / 'lib', Path(os.environ[var]) / 'lib64'])
+        if os.environ.get('ROOTSYS'):
+            dirs.append(Path(os.environ['ROOTSYS']) / 'lib')
+        return [d for d in dirs if d.is_dir()]
+
+    def check_macro_libraries(self, macro, search_dirs=None, visited=None):
+        """
+        Checks that every R__LOAD_LIBRARY in a ROOT macro (and in macros it #includes by quoted path)
+        resolves in the worker's library search dirs. Returns a list of (macro, library) that do not.
+        """
+        search_dirs = self.library_search_dirs() if search_dirs is None else search_dirs
+        visited = set() if visited is None else visited
+        macro = Path(macro).resolve()
+        if macro in visited or not macro.is_file():
+            return []
+        visited.add(macro)
+
+        text = re.sub(r'/\*.*?\*/', '', macro.read_text(encoding='utf-8', errors='replace'), flags=re.DOTALL)
+        text = re.sub(r'//[^\n]*', '', text)
+
+        missing = []
+        for lib in re.findall(r'R__LOAD_LIBRARY\(\s*"?([^\s")]+)"?\s*\)', text):
+            lib_path = Path(lib)
+            found = lib_path.is_file() if lib_path.is_absolute() else any((d / lib).exists() for d in search_dirs)
+            if not found:
+                missing.append((macro, lib))
+        for inc in re.findall(r'#include\s+"([^"]+)"', text):
+            missing.extend(self.check_macro_libraries(macro.parent / inc, search_dirs, visited))
+        return missing
 
     def add_file_to_check(self, path):
         if path:
@@ -100,6 +168,19 @@ class CondorJobManager:
             if not d.is_dir():
                 self.logger.critical(f'Directory: {d} does not exist!')
                 sys.exit(1)
+
+        # ROOT macros: every R__LOAD_LIBRARY must resolve on the worker
+        search_dirs = self.library_search_dirs()
+        visited = set()
+        missing = []
+        for f in self.files_to_check:
+            if f.suffix == '.C':
+                missing.extend(self.check_macro_libraries(f, search_dirs, visited))
+        if missing:
+            for macro, lib in missing:
+                self.logger.critical(f'{macro.name}: R__LOAD_LIBRARY({lib}) not found')
+            self.logger.critical(f'Searched: {", ".join(str(d) for d in search_dirs)}')
+            sys.exit(1)
 
     def get_best_submit_node(self):
         if not hasattr(self, '_ranked_nodes') or self._ranked_nodes is None:
@@ -257,8 +338,8 @@ class CondorJobManager:
         jobs_file.unlink(missing_ok=True)
 
         if not self.input_list or not self.input_list.is_file():
-            self.logger.warning("Input list is not set or does not exist.")
-            return []
+            self.logger.critical("Input list is not set or does not exist.")
+            sys.exit(1)
 
         input_files = [line.strip() for line in self.input_list.read_text(encoding='utf-8').splitlines() if line.strip()]
         total_runs = len(input_files)
@@ -312,8 +393,10 @@ class CondorJobManager:
             for run_jobs in executor.map(process_run, input_files):
                 all_job_paths.extend(run_jobs)
 
-        if all_job_paths:
-            jobs_file.write_text("\n".join(all_job_paths) + "\n", encoding='utf-8')
+        if not all_job_paths:
+            self.logger.critical(f"No jobs created from {self.input_list}: every run list was missing, unreadable, or empty.")
+            sys.exit(1)
+        jobs_file.write_text("\n".join(all_job_paths) + "\n", encoding='utf-8')
 
         self.logger.info(f"Total jobs created: {len(all_job_paths)} across {total_runs} runs.")
         return all_job_paths
