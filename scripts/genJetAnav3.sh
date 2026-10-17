@@ -26,6 +26,8 @@ do_mult=${7:-1}
 do_unsub=${8:-1}
 do_rcone=${9:-1}
 lead_jet_pt_threshold=${10:-100}
+sigma_cut=${11:-3.5}
+jes_z0_file=${12:-none}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -82,7 +84,7 @@ printenv
 mkdir -p "$run"
 
 echo "Starting Jet-Anav3 binary at $(date) on $(hostname)"
-$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$jet_pt_min" "$run" 0 "$do_iter" "$do_mult" "$do_unsub" "$do_rcone" "$lead_jet_pt_threshold"
+$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$jet_pt_min" "$run" 0 "$do_iter" "$do_mult" "$do_unsub" "$do_rcone" "$lead_jet_pt_threshold" "$sigma_cut" "$jes_z0_file"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then

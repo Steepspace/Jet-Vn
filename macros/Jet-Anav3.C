@@ -31,6 +31,7 @@
 // ROOT Includes
 // ====================================================================
 #include <TChain.h>
+#include <TF1.h>
 #include <TFile.h>
 #include <TH1.h>
 #include <TH2.h>
@@ -64,6 +65,7 @@ class JetAnalysisv3
   void run()
   {
     setup_calo_mbd_cut();
+    setup_jes_z0();
     setup_chain();
     init_hists();
     process_events();
@@ -94,6 +96,11 @@ class JetAnalysisv3
 
   void set_sigma_cut(double sigma) { m_sigma_cut = sigma; }
   double get_sigma_cut() const { return m_sigma_cut; }
+
+  // Legacy JES payload (JES_Calib_Default) whose eta-averaged JES_Calib_Func_R0X_Z0 recalibrates the raw jet pT.
+  // Empty or "none": use the stored pt_calib (eta-binned legacy JES).
+  void set_jes_z0_file(std::string file) { m_jes_z0_file = std::move(file); }
+  const std::string &get_jes_z0_file() const { return m_jes_z0_file; }
 
  private:
   static constexpr size_t m_bins_cent = 60;
@@ -315,6 +322,15 @@ class JetAnalysisv3
   double m_jet_eta_max_r02{0.9};
   double m_jet_eta_max_r03{0.8};
 
+  // Z0 JES recalibration (see set_jes_z0_file). The trees only keep jets with legacy (eta-binned)
+  // calibrated pT >= m_tree_jet_pt_min, so the Z0 pT cut is raised to where its sample is complete.
+  static constexpr double m_tree_jet_pt_min = 10.0; /*GeV, JetValidationv3 m_jet_pt_min_cut*/
+  std::string m_jes_z0_file;
+  std::unique_ptr<TF1> m_jes_z0_r02{nullptr};
+  std::unique_ptr<TF1> m_jes_z0_r03{nullptr};
+  double m_jet_pt_min_r02{10}; /*GeV*/
+  double m_jet_pt_min_r03{10}; /*GeV*/
+
   std::vector<HighPtEvent> m_high_pt_events;
   std::map<std::string, int> m_ctr;
 
@@ -342,6 +358,10 @@ class JetAnalysisv3
   void setup_chain();
 
   void setup_calo_mbd_cut();
+
+  void setup_jes_z0();
+  double jet_pt_min(double radius) const { return radius < 0.25 ? m_jet_pt_min_r02 : m_jet_pt_min_r03; }
+  double calib_pt(const JetData &jet_data, size_t idx, double radius) const;
 
   void init_hists();
 
@@ -621,6 +641,60 @@ void JetAnalysisv3::setup_calo_mbd_cut()
   m_has_calo_mbd_cut = true;
 
   std::cout << std::format("Successfully loaded h2TotalCaloE_MBD from {} and created ProfileX with 's' option (sigma cut: {:.2f})\n", m_calo_mbd_file, m_sigma_cut);
+}
+
+void JetAnalysisv3::setup_jes_z0()
+{
+  m_jet_pt_min_r02 = m_jet_pt_min;
+  m_jet_pt_min_r03 = m_jet_pt_min;
+
+  if (m_jes_z0_file.empty() || m_jes_z0_file == "none")
+  {
+    return;
+  }
+
+  std::cout << "Processing... setup_jes_z0" << std::endl;
+
+  std::unique_ptr<TFile> file(TFile::Open(m_jes_z0_file.c_str()));
+  if (!file || file->IsZombie())
+  {
+    throw std::runtime_error(std::format("Error: Could not open JES file: {}", m_jes_z0_file));
+  }
+
+  auto load = [&](int r_int, std::unique_ptr<TF1> &z0_func, double &pt_min)
+  {
+    std::string name = std::format("JES_Calib_Func_R0{}_Z0", r_int);
+    auto *z0 = file->Get<TF1>(name.c_str());
+    if (!z0)
+    {
+      throw std::runtime_error(std::format("Error: {} not found in {}", name, m_jes_z0_file));
+    }
+    z0_func.reset(static_cast<TF1 *>(z0->Clone()));
+
+    // the Z0 sample is complete above the Z0 pT of the highest raw pT kept by the tree cut among the legacy eta bins
+    double complete_pt = 0;
+    for (int ieta = 0; ieta < 4; ++ieta)
+    {
+      std::string eta_name = std::format("{}_Eta{}", name, ieta);
+      auto *f_eta = file->Get<TF1>(eta_name.c_str());
+      if (!f_eta)
+      {
+        throw std::runtime_error(std::format("Error: {} not found in {}", eta_name, m_jes_z0_file));
+      }
+      complete_pt = std::max(complete_pt, z0_func->Eval(f_eta->GetX(m_tree_jet_pt_min, 1, 50)));
+    }
+    pt_min = std::max(m_jet_pt_min, std::ceil(complete_pt * 100) / 100);
+    std::cout << std::format("JES Z0 R = 0.{}: {}, jet pT min: {:.2f} GeV\n", r_int, name, pt_min);
+  };
+
+  load(2, m_jes_z0_r02, m_jet_pt_min_r02);
+  load(3, m_jes_z0_r03, m_jet_pt_min_r03);
+}
+
+double JetAnalysisv3::calib_pt(const JetData &jet_data, size_t idx, double radius) const
+{
+  const TF1 *z0 = (radius < 0.25) ? m_jes_z0_r02.get() : m_jes_z0_r03.get();
+  return z0 ? z0->Eval(jet_data.pt->at(idx)) : jet_data.pt_calib->at(idx);
 }
 
 void JetAnalysisv3::init_hists()
@@ -1010,14 +1084,23 @@ void JetAnalysisv3::process_jets()
     int njets_v2 = 0;
     double max_pt_v2 = 0.0;
 
+    // the stored max_pt uses the legacy JES, so recompute the leading jet pT with Z0
+    const bool use_z0 = m_jes_z0_r02 != nullptr;
+    double max_pt = use_z0 ? 0.0 : jet_data.max_pt;
+
     for (size_t idx = 0; idx < jet_data.pt->size(); ++idx)
     {
       double energy = jet_data.e->at(idx);
-      double pt = jet_data.pt_calib->at(idx);
+      double pt = calib_pt(jet_data, idx, radius);
       double pt_raw = jet_data.pt->at(idx);
       double eta = jet_data.eta->at(idx);
 
-      if (pt < m_jet_pt_min || std::abs(eta) >= eta_max)
+      if (use_z0 && energy > 0)
+      {
+        max_pt = std::max(max_pt, pt);
+      }
+
+      if (pt < jet_pt_min(radius) || std::abs(eta) >= eta_max)
       {
         continue;
       }
@@ -1047,17 +1130,17 @@ void JetAnalysisv3::process_jets()
       }
     }
 
-    if (jet_data.max_pt >= m_lead_jet_pt_threshold)
+    if (max_pt >= m_lead_jet_pt_threshold)
     {
       std::string current_file = std::filesystem::path((m_chain && m_chain->GetFile()) ? m_chain->GetFile()->GetName() : m_input_file).filename().string();
-      m_high_pt_events.push_back({current_file, m_event_data.event, njets, m_event_data.centrality, m_event_data.zvtx, jet_data.max_pt, radius, sub_type});
+      m_high_pt_events.push_back({current_file, m_event_data.event, njets, m_event_data.centrality, m_event_data.zvtx, max_pt, radius, sub_type});
     }
 
-    if (jet_data.max_pt > 0)
+    if (max_pt > 0)
     {
       if (h.h2Njets_LeadJetPt)
       {
-        h.h2Njets_LeadJetPt->Fill(jet_data.max_pt, static_cast<double>(njets));
+        h.h2Njets_LeadJetPt->Fill(max_pt, static_cast<double>(njets));
       }
     }
 
@@ -1076,9 +1159,9 @@ void JetAnalysisv3::process_jets()
       double cent_high = m_cent_bins[icent + 1];
       if (cent >= cent_low && (cent < cent_high || (icent == m_num_cent_bins - 1 && cent <= cent_high)))
       {
-        if (jet_data.max_pt > 0 && h.h2Njets_LeadJetPt_cent[icent])
+        if (max_pt > 0 && h.h2Njets_LeadJetPt_cent[icent])
         {
-          h.h2Njets_LeadJetPt_cent[icent]->Fill(jet_data.max_pt, static_cast<double>(njets));
+          h.h2Njets_LeadJetPt_cent[icent]->Fill(max_pt, static_cast<double>(njets));
         }
         if (max_pt_v2 > 0 && h.h2Njets_LeadJetPtv2_cent[icent])
         {
@@ -1089,7 +1172,7 @@ void JetAnalysisv3::process_jets()
     }
   };
 
-  auto fill_jet_flow_fail_hists = [this](const JetData &jet_data, const AnalysisHists::JetHistSet &h, double eta_max)
+  auto fill_jet_flow_fail_hists = [this](const JetData &jet_data, const AnalysisHists::JetHistSet &h, double eta_max, double radius)
   {
     if (!jet_data.pt || !jet_data.pt_calib || !jet_data.e || !jet_data.eta)
     {
@@ -1098,11 +1181,11 @@ void JetAnalysisv3::process_jets()
     for (size_t idx = 0; idx < jet_data.pt->size(); ++idx)
     {
       double energy = jet_data.e->at(idx);
-      double pt = jet_data.pt_calib->at(idx);
+      double pt = calib_pt(jet_data, idx, radius);
       double pt_raw = jet_data.pt->at(idx);
       double eta = jet_data.eta->at(idx);
 
-      if (pt < m_jet_pt_min || std::abs(eta) >= eta_max)
+      if (pt < jet_pt_min(radius) || std::abs(eta) >= eta_max)
       {
         continue;
       }
@@ -1124,7 +1207,7 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.iter_r02, m_hists.iter_r02, m_jet_eta_max_r02);
+      fill_jet_flow_fail_hists(m_event_data.iter_r02, m_hists.iter_r02, m_jet_eta_max_r02, 0.2);
     }
 
     // Process r03 branches for iter (eta_max = 0.8)
@@ -1134,7 +1217,7 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.iter_r03, m_hists.iter_r03, m_jet_eta_max_r03);
+      fill_jet_flow_fail_hists(m_event_data.iter_r03, m_hists.iter_r03, m_jet_eta_max_r03, 0.3);
     }
   }
 
@@ -1147,7 +1230,7 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.mult_r02, m_hists.mult_r02, m_jet_eta_max_r02);
+      fill_jet_flow_fail_hists(m_event_data.mult_r02, m_hists.mult_r02, m_jet_eta_max_r02, 0.2);
     }
 
     // Process r03 branches for mult (eta_max = 0.8)
@@ -1157,7 +1240,7 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.mult_r03, m_hists.mult_r03, m_jet_eta_max_r03);
+      fill_jet_flow_fail_hists(m_event_data.mult_r03, m_hists.mult_r03, m_jet_eta_max_r03, 0.3);
     }
   }
 
@@ -1171,8 +1254,8 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.iternf_r02, m_hists.iternf_r02, m_jet_eta_max_r02);
-      fill_jet_flow_fail_hists(m_event_data.iternf_r03, m_hists.iternf_r03, m_jet_eta_max_r03);
+      fill_jet_flow_fail_hists(m_event_data.iternf_r02, m_hists.iternf_r02, m_jet_eta_max_r02, 0.2);
+      fill_jet_flow_fail_hists(m_event_data.iternf_r03, m_hists.iternf_r03, m_jet_eta_max_r03, 0.3);
     }
   }
 
@@ -1185,8 +1268,8 @@ void JetAnalysisv3::process_jets()
     }
     else
     {
-      fill_jet_flow_fail_hists(m_event_data.multnf_r02, m_hists.multnf_r02, m_jet_eta_max_r02);
-      fill_jet_flow_fail_hists(m_event_data.multnf_r03, m_hists.multnf_r03, m_jet_eta_max_r03);
+      fill_jet_flow_fail_hists(m_event_data.multnf_r02, m_hists.multnf_r02, m_jet_eta_max_r02, 0.2);
+      fill_jet_flow_fail_hists(m_event_data.multnf_r03, m_hists.multnf_r03, m_jet_eta_max_r03, 0.3);
     }
   }
 
@@ -1555,9 +1638,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 13)
+  if (argc < 3 || argc > 14)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut] [jes_z0_file]" << std::endl;
     return 1;
   }
 
@@ -1574,6 +1657,7 @@ int main(int argc, const char *const argv[])
   bool do_rcone = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
   double lead_jet_pt_threshold = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 100.0;
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
+  std::string jes_z0_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -1589,6 +1673,7 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Do RCone: {}\n", do_rcone);
   std::cout << std::format("Lead Jet pT Threshold: {} [GeV]\n", lead_jet_pt_threshold);
   std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
+  std::cout << std::format("JES Z0 File: {}\n", (jes_z0_file.empty() || jes_z0_file == "none") ? "none (stored eta-binned pt_calib)" : jes_z0_file);
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -1602,6 +1687,7 @@ int main(int argc, const char *const argv[])
     analysis.set_do_rcone(do_rcone);
     analysis.set_lead_jet_pt_threshold(lead_jet_pt_threshold);
     analysis.set_sigma_cut(sigma_cut);
+    analysis.set_jes_z0_file(jes_z0_file);
     analysis.run();
   }
   catch (const std::exception &e)

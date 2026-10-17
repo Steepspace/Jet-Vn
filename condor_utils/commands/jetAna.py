@@ -12,6 +12,8 @@ def run_jet_jobs(args, version):
         manager.add_file_to_check(args.f4a_qa_list)
     elif version == "jetAnav3":
         manager.add_file_to_check(args.calo_mbd_list)
+        if args.jes_z0_file:
+            manager.add_file_to_check(args.jes_z0_file)
     manager.add_file_to_check(args.jetAna_macro)
     manager.add_file_to_check(args.jetAna_bin)
 
@@ -49,6 +51,8 @@ def run_jet_jobs(args, version):
         init_log['Do Unsub'] = args.do_unsub
         init_log['Do RCone'] = args.do_rcone
         init_log['Lead Jet pT Threshold'] = f"{args.lead_jet_pt_threshold} GeV"
+        init_log['Sigma Cut'] = args.sigma_cut
+        init_log['JES Z0 File'] = Path(args.jes_z0_file).resolve() if args.jes_z0_file else "Not Provided (Using stored eta-binned pt_calib)"
 
     manager.log_initialization(init_log)
 
@@ -119,7 +123,7 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {jet_eta_max} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
     elif version == "jetAnav3":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold}"
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     else:
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output"
@@ -177,4 +181,6 @@ def setup_jetAna_subparsers(subparsers):
     jetAnav3.add_argument('--do-unsub', type=int, default=1, help='Do unsub. Default: 1')
     jetAnav3.add_argument('--do-rcone', type=int, default=0, help='Do rcone. Default: 0')
     jetAnav3.add_argument('--lead-jet-pt-threshold', type=float, default=100.0, help='Leading Jet pT Threshold for CSV saving. Default: 100 [GeV]')
+    jetAnav3.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
+    jetAnav3.add_argument('--jes-z0-file', type=str, default=None, help='Legacy JES payload (JES_Calib_Default); recalibrates the raw jet pT with its eta-averaged R0X_Z0 function instead of the stored eta-binned pt_calib. (Optional)')
     jetAnav3.set_defaults(func=jetAnav3_jobs)
