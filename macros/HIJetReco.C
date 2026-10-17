@@ -57,6 +57,7 @@ namespace Enable
   bool HIJETS_TOWER_NOFLOW = false;  ///< make iterative-sub tower jets w/o flow modulation (requires HIJETS_TOWER)
   bool HIJETS_TOWER_MULTSUB_NOFLOW = false;  ///< make multi-sub tower jets w/o flow modulation (requires HIJETS_TOWER_MULTSUB)
   bool HIJETS_TOWER_CALIB = true;    ///< apply jet calibration
+  bool HIJETS_TOWER_CALIB_EMFRAC = false;  ///< also apply the EMfrac JES (output "<jets>_calib_emfrac"), alongside the legacy one
   bool HIJETS_TRACK = false;  ///< make track jets
   bool HIJETS_PFLOW = false;  ///< make particle flow jets
 }  // namespace Enable
@@ -79,6 +80,9 @@ namespace HIJETS
 
   ///! sets direct path to eta-shape calibration file (optional)
   std::string eta_calib_direct_path = "";
+
+  ///! sets direct path to the EMfrac JES calibration file (optional, default: CDB JES_Calibration_EMfrac)
+  std::string emfrac_calib_direct_path = "";
 
   ///! do constituent subtraction
   bool do_CS = false;
@@ -238,6 +242,32 @@ void HIJetRecoCommon()
 }
 
 // ----------------------------------------------------------------------------
+//! Book the EMfrac JES calibration on a jet node, writing "<input>_calib_emfrac".
+//! Runs alongside the legacy calibration for side-by-side comparison.
+// ----------------------------------------------------------------------------
+void RegisterJetCalibEMfrac(const std::string &input_node, const float R)
+{
+  if (!Enable::HIJETS_TOWER_CALIB_EMFRAC)
+  {
+    return;
+  }
+
+  Fun4AllServer *se = Fun4AllServer::instance();
+
+  JetCalib *jetCalib = new JetCalib("JetCalibEMfrac_" + input_node);
+  jetCalib->set_InputNode(input_node);
+  jetCalib->set_OutputNode(input_node + "_calib_emfrac");
+  jetCalib->set_JetRadius(R);
+  jetCalib->set_UseEMfracCalib(true);
+  jetCalib->set_ApplyResidualCalib(true);
+  if (!HIJETS::emfrac_calib_direct_path.empty())
+  {
+    jetCalib->set_CalibFile(HIJETS::emfrac_calib_direct_path);
+  }
+  se->registerSubsystem(jetCalib);
+}
+
+// ----------------------------------------------------------------------------
 //! Make jets out of subtracted towers
 // ----------------------------------------------------------------------------
 void MakeHITowerJets()
@@ -341,6 +371,8 @@ void MakeHITowerJets()
       jetCalib->set_ApplyEtaDependentCalib(true);
       jetCalib->set_UseEMfracCalib(false);
       se->registerSubsystem(jetCalib);
+
+      RegisterJetCalibEMfrac(Form("%s_Tower_r%02d_Sub1", HIJETS::algo_prefix.c_str(), r_int), R);
     }
   }
 
@@ -460,6 +492,8 @@ void MakeHITowerJetsMultSub()
       jetCalib->set_ApplyEtaDependentCalib(true);
       jetCalib->set_UseEMfracCalib(false);
       se->registerSubsystem(jetCalib);
+
+      RegisterJetCalibEMfrac(Form("%s_Tower_r%02d_MultSub1", HIJETS::algo_prefix.c_str(), r_int), R);
     }
   }
 
@@ -539,6 +573,8 @@ void MakeHITowerJetsMultSubNoFlow()
       jetCalib->set_ApplyEtaDependentCalib(true);
       jetCalib->set_UseEMfracCalib(false);
       se->registerSubsystem(jetCalib);
+
+      RegisterJetCalibEMfrac(Form("%s_Tower_r%02d_MultNoFlowSub1", HIJETS::algo_prefix.c_str(), r_int), R);
     }
   }
 
@@ -629,6 +665,8 @@ void MakeHITowerJetsNoFlow()
       jetCalib->set_ApplyEtaDependentCalib(true);
       jetCalib->set_UseEMfracCalib(false);
       se->registerSubsystem(jetCalib);
+
+      RegisterJetCalibEMfrac(Form("%s_Tower_r%02d_NoFlowSub1", HIJETS::algo_prefix.c_str(), r_int), R);
     }
   }
 
@@ -677,6 +715,8 @@ void MakeHITowerJetsNoBkg()
       jetCalib->set_ApplyEtaDependentCalib(true);
       jetCalib->set_UseEMfracCalib(false);
       se->registerSubsystem(jetCalib);
+
+      RegisterJetCalibEMfrac(Form("%s_TowerInfo_r%02d", HIJETS::algo_prefix.c_str(), r_int), R);
     }
   }
 

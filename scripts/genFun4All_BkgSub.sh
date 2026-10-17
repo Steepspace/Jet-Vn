@@ -33,7 +33,8 @@ neg_energy_threshold=${14:--2.0}
 zs_calib_cemc=${15:-none}
 zs_calib_hcalin=${16:-none}
 zs_calib_hcalout=${17:-none}
-submitDir=${18}
+do_emfrac_calib=${18:-0}
+submitDir=${19}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -179,7 +180,7 @@ printenv
 mkdir -p "$run/hist" "$run/tree"
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\")"
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\", $do_emfrac_calib)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then

@@ -44,6 +44,8 @@ class JetValidationv3 : public SubsysReco
   void set_do_mult(bool b = true) { m_do_mult = b; }
   void set_do_mult_noflow(bool b = true) { m_do_mult_noflow = b; }
   void set_do_detailed(bool b = true) { m_do_detailed = b; }
+  // store EMfrac-calibrated pT (nodes "<calib node>_calib_emfrac") and per-jet calo fractions
+  void set_do_emfrac(bool b = true) { m_do_emfrac = b; }
   void set_do_r02(bool b = true) { m_do_r02 = b; }
   void set_do_r03(bool b = true) { m_do_r03 = b; }
   void set_jet_pt_min(double pt_min) { m_jet_pt_min_cut = pt_min; }
@@ -62,6 +64,7 @@ class JetValidationv3 : public SubsysReco
   bool get_do_mult() const { return m_do_mult; }
   bool get_do_mult_noflow() const { return m_do_mult_noflow; }
   bool get_do_detailed() const { return m_do_detailed; }
+  bool get_do_emfrac() const { return m_do_emfrac; }
   bool get_do_r02() const { return m_do_r02; }
   bool get_do_r03() const { return m_do_r03; }
   double get_jet_pt_min() const { return m_jet_pt_min_cut; }
@@ -79,6 +82,12 @@ class JetValidationv3 : public SubsysReco
     std::vector<double> phi;       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> eta;       // NOLINT(misc-non-private-member-variables-in-classes)
     double max_pt{0};              // NOLINT(misc-non-private-member-variables-in-classes)
+
+    // EMfrac JES comparison (filled only with m_do_emfrac)
+    std::vector<double> pt_calib_emfrac;  // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> emcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> ihcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> ohcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
 
     // Detailed tower constituent info (nested vectors: 1 vector per jet in the event)
     std::vector<std::vector<int>> emcal_tower_index;        // NOLINT(misc-non-private-member-variables-in-classes)
@@ -101,6 +110,11 @@ class JetValidationv3 : public SubsysReco
       phi.clear();
       eta.clear();
       max_pt = 0;
+
+      pt_calib_emfrac.clear();
+      emcal_frac.clear();
+      ihcal_frac.clear();
+      ohcal_frac.clear();
 
       emcal_tower_index.clear();
       emcal_tower_energy.clear();
@@ -188,12 +202,16 @@ class JetValidationv3 : public SubsysReco
 
   double m_jet_pt_min_cut{10};     // GeV
 
+  // EMfrac-calibrated jet node = legacy calib node name + this suffix
+  std::string m_emfrac_calib_suffix{"_emfrac"};
+
   bool m_do_unsub{true};
   bool m_do_iter{true};
   bool m_do_iter_noflow{false};
   bool m_do_mult{true};
   bool m_do_mult_noflow{false};
   bool m_do_detailed{false};
+  bool m_do_emfrac{false};
   bool m_do_r02{true};
   bool m_do_r03{true};
 

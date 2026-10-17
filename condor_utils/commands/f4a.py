@@ -142,6 +142,7 @@ def create_f4a_jobs(args):
         init_log['Do Neg Energy Threshold'] = bool(getattr(args, 'do_neg_energy_threshold', 1))
         init_log['Neg Energy Threshold'] = float(getattr(args, 'neg_energy_threshold', -2.0))
         init_log['ZS Calib List'] = zs_calib_list if zs_calib_list else "Not Provided (Using CDB)"
+        init_log['Do EMfrac Calib'] = bool(getattr(args, 'do_emfrac_calib', 0))
 
     manager.log_initialization(init_log)
 
@@ -186,7 +187,8 @@ def create_f4a_jobs(args):
         do_mult_val = getattr(args, 'do_mult', 0)
         do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
         neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-        bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
+        do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
+        bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
         queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
     else:
         bkgsub_args = ""
@@ -464,6 +466,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--do-mult', type=int, default=None, choices=[0, 1], help='Enable multiplicity subtraction (default: 1 if --eta-calib-path is given, else 0).')
     f4a.add_argument('--do-neg-energy-threshold', type=int, default=1, choices=[0, 1], help='Enable negative energy threshold rejection (default=1).')
     f4a.add_argument('--neg-energy-threshold', type=float, default=-2.0, help='Negative energy threshold cut in GeV (default=-2.0).')
+    f4a.add_argument('--do-emfrac-calib', type=int, default=0, choices=[0, 1], help='Also apply the EMfrac JES alongside the legacy one and store pt_calib_emfrac / calo fractions (default=0).')
     f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')

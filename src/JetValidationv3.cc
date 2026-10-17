@@ -3,6 +3,7 @@
 // -- c++
 #include <format>
 #include <iostream>
+#include <limits>
 
 // -- event
 #include <ffaobjects/EventHeader.h>
@@ -112,6 +113,14 @@ int JetValidationv3::Init([[maybe_unused]] PHCompositeNode *topNode)
     tree->Branch(("e_" + tag).c_str(), &jd.e);
     tree->Branch(("phi_" + tag).c_str(), &jd.phi);
     tree->Branch(("eta_" + tag).c_str(), &jd.eta);
+
+    if (m_do_emfrac)
+    {
+      tree->Branch(("pt_calib_emfrac_" + tag).c_str(), &jd.pt_calib_emfrac);
+      tree->Branch(("emcal_frac_" + tag).c_str(), &jd.emcal_frac);
+      tree->Branch(("ihcal_frac_" + tag).c_str(), &jd.ihcal_frac);
+      tree->Branch(("ohcal_frac_" + tag).c_str(), &jd.ohcal_frac);
+    }
 
     if (m_do_detailed)
     {
@@ -351,7 +360,13 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     }
   }
 
-  auto fill_jets = [&](JetContainer* jets, JetContainer* jets_calib, JetData& jd, double jet_radius,
+  // EMfrac-calibrated counterpart of a legacy calib node (nullptr unless m_do_emfrac)
+  auto get_emfrac_jets = [&](const std::string& calib_node) -> JetContainer*
+  {
+    return m_do_emfrac ? findNode::getClass<JetContainer>(topNode, calib_node + m_emfrac_calib_suffix) : nullptr;
+  };
+
+  auto fill_jets = [&](JetContainer* jets, JetContainer* jets_calib, JetContainer* jets_calib_emfrac, JetData& jd, double jet_radius,
                        TowerInfoContainer* cemc_towers, TowerInfoContainer* ihcal_towers, TowerInfoContainer* ohcal_towers,
                        const std::string& jet_label = "")
   {
@@ -383,7 +398,20 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
         phi += 2.0 * std::numbers::pi;
       }
 
-      bool pass_pt = (pt_calib >= m_jet_pt_min_cut);
+      // with the EMfrac comparison, keep jets passing either calibration so both
+      // populations are complete; the analysis must re-apply its own pT cut
+      double pt_calib_emfrac = std::numeric_limits<double>::quiet_NaN();
+      if (jets_calib_emfrac)
+      {
+        auto *jet_calib_emfrac = jets_calib_emfrac->get_jet(i);
+        if (jet_calib_emfrac)
+        {
+          pt_calib_emfrac = jet_calib_emfrac->get_pt();
+        }
+      }
+
+      bool pass_pt_legacy = (pt_calib >= m_jet_pt_min_cut);
+      bool pass_pt = pass_pt_legacy || (pt_calib_emfrac >= m_jet_pt_min_cut);
       bool pass_eta = !JetUtils::check_bad_jet_eta(eta, zvtx, jet_radius);
       bool pass_cuts = pass_pt && pass_eta;
 
@@ -421,7 +449,15 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
         jd.phi.push_back(phi);
         jd.eta.push_back(eta);
 
-        if (energy > 0)
+        if (m_do_emfrac)
+        {
+          jd.pt_calib_emfrac.push_back(pt_calib_emfrac);
+          jd.emcal_frac.push_back(jet->get_emcal_frac());
+          jd.ihcal_frac.push_back(jet->get_ihcal_frac());
+          jd.ohcal_frac.push_back(jet->get_ohcal_frac());
+        }
+
+        if (energy > 0 && pass_pt_legacy)
         {
           jd.max_pt = std::max(jd.max_pt, pt_calib);
         }
@@ -588,24 +624,26 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     {
       JetContainer *jets_iter_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iter_r02);
       JetContainer *jets_iter_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iter_calib_r02);
-      if (!jets_iter_r02 || !jets_iter_calib_r02)
+      JetContainer *jets_iter_calib_emfrac_r02 = get_emfrac_jets(m_recoJetName_iter_calib_r02);
+      if (!jets_iter_r02 || !jets_iter_calib_r02 || (m_do_emfrac && !jets_iter_calib_emfrac_r02))
       {
         std::cout << "Aborting Run: Iter R=0.2 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_iter_r02, jets_iter_calib_r02, m_data.iter_r02, 0.2, cemc_sub1, ihcal_sub1, ohcal_sub1, "Iter R=0.2");
+      fill_jets(jets_iter_r02, jets_iter_calib_r02, jets_iter_calib_emfrac_r02, m_data.iter_r02, 0.2, cemc_sub1, ihcal_sub1, ohcal_sub1, "Iter R=0.2");
     }
 
     if (m_do_r03)
     {
       JetContainer *jets_iter_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iter_r03);
       JetContainer *jets_iter_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iter_calib_r03);
-      if (!jets_iter_r03 || !jets_iter_calib_r03)
+      JetContainer *jets_iter_calib_emfrac_r03 = get_emfrac_jets(m_recoJetName_iter_calib_r03);
+      if (!jets_iter_r03 || !jets_iter_calib_r03 || (m_do_emfrac && !jets_iter_calib_emfrac_r03))
       {
         std::cout << "Aborting Run: Iter R=0.3 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_iter_r03, jets_iter_calib_r03, m_data.iter_r03, 0.3, cemc_sub1, ihcal_sub1, ohcal_sub1, "Iter R=0.3");
+      fill_jets(jets_iter_r03, jets_iter_calib_r03, jets_iter_calib_emfrac_r03, m_data.iter_r03, 0.3, cemc_sub1, ihcal_sub1, ohcal_sub1, "Iter R=0.3");
     }
   }
 
@@ -625,24 +663,26 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     {
       JetContainer *jets_iternf_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iternf_r02);
       JetContainer *jets_iternf_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iternf_calib_r02);
-      if (!jets_iternf_r02 || !jets_iternf_calib_r02)
+      JetContainer *jets_iternf_calib_emfrac_r02 = get_emfrac_jets(m_recoJetName_iternf_calib_r02);
+      if (!jets_iternf_r02 || !jets_iternf_calib_r02 || (m_do_emfrac && !jets_iternf_calib_emfrac_r02))
       {
         std::cout << "Aborting Run: Iter NoFlow R=0.2 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_iternf_r02, jets_iternf_calib_r02, m_data.iternf_r02, 0.2, cemc_iternf, ihcal_iternf, ohcal_iternf, "IterNF R=0.2");
+      fill_jets(jets_iternf_r02, jets_iternf_calib_r02, jets_iternf_calib_emfrac_r02, m_data.iternf_r02, 0.2, cemc_iternf, ihcal_iternf, ohcal_iternf, "IterNF R=0.2");
     }
 
     if (m_do_r03)
     {
       JetContainer *jets_iternf_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iternf_r03);
       JetContainer *jets_iternf_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_iternf_calib_r03);
-      if (!jets_iternf_r03 || !jets_iternf_calib_r03)
+      JetContainer *jets_iternf_calib_emfrac_r03 = get_emfrac_jets(m_recoJetName_iternf_calib_r03);
+      if (!jets_iternf_r03 || !jets_iternf_calib_r03 || (m_do_emfrac && !jets_iternf_calib_emfrac_r03))
       {
         std::cout << "Aborting Run: Iter NoFlow R=0.3 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_iternf_r03, jets_iternf_calib_r03, m_data.iternf_r03, 0.3, cemc_iternf, ihcal_iternf, ohcal_iternf, "IterNF R=0.3");
+      fill_jets(jets_iternf_r03, jets_iternf_calib_r03, jets_iternf_calib_emfrac_r03, m_data.iternf_r03, 0.3, cemc_iternf, ihcal_iternf, ohcal_iternf, "IterNF R=0.3");
     }
   }
 
@@ -662,24 +702,26 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     {
       JetContainer *jets_mult_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_mult_r02);
       JetContainer *jets_mult_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_mult_calib_r02);
-      if (!jets_mult_r02 || !jets_mult_calib_r02)
+      JetContainer *jets_mult_calib_emfrac_r02 = get_emfrac_jets(m_recoJetName_mult_calib_r02);
+      if (!jets_mult_r02 || !jets_mult_calib_r02 || (m_do_emfrac && !jets_mult_calib_emfrac_r02))
       {
         std::cout << "Aborting Run: Mult R=0.2 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_mult_r02, jets_mult_calib_r02, m_data.mult_r02, 0.2, cemc_mult, ihcal_mult, ohcal_mult, "Mult R=0.2");
+      fill_jets(jets_mult_r02, jets_mult_calib_r02, jets_mult_calib_emfrac_r02, m_data.mult_r02, 0.2, cemc_mult, ihcal_mult, ohcal_mult, "Mult R=0.2");
     }
 
     if (m_do_r03)
     {
       JetContainer *jets_mult_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_mult_r03);
       JetContainer *jets_mult_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_mult_calib_r03);
-      if (!jets_mult_r03 || !jets_mult_calib_r03)
+      JetContainer *jets_mult_calib_emfrac_r03 = get_emfrac_jets(m_recoJetName_mult_calib_r03);
+      if (!jets_mult_r03 || !jets_mult_calib_r03 || (m_do_emfrac && !jets_mult_calib_emfrac_r03))
       {
         std::cout << "Aborting Run: Mult R=0.3 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_mult_r03, jets_mult_calib_r03, m_data.mult_r03, 0.3, cemc_mult, ihcal_mult, ohcal_mult, "Mult R=0.3");
+      fill_jets(jets_mult_r03, jets_mult_calib_r03, jets_mult_calib_emfrac_r03, m_data.mult_r03, 0.3, cemc_mult, ihcal_mult, ohcal_mult, "Mult R=0.3");
     }
   }
 
@@ -699,24 +741,26 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     {
       JetContainer *jets_multnf_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_r02);
       JetContainer *jets_multnf_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_calib_r02);
-      if (!jets_multnf_r02 || !jets_multnf_calib_r02)
+      JetContainer *jets_multnf_calib_emfrac_r02 = get_emfrac_jets(m_recoJetName_multnf_calib_r02);
+      if (!jets_multnf_r02 || !jets_multnf_calib_r02 || (m_do_emfrac && !jets_multnf_calib_emfrac_r02))
       {
         std::cout << "Aborting Run: Mult NoFlow R=0.2 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_multnf_r02, jets_multnf_calib_r02, m_data.multnf_r02, 0.2, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.2");
+      fill_jets(jets_multnf_r02, jets_multnf_calib_r02, jets_multnf_calib_emfrac_r02, m_data.multnf_r02, 0.2, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.2");
     }
 
     if (m_do_r03)
     {
       JetContainer *jets_multnf_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_r03);
       JetContainer *jets_multnf_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_multnf_calib_r03);
-      if (!jets_multnf_r03 || !jets_multnf_calib_r03)
+      JetContainer *jets_multnf_calib_emfrac_r03 = get_emfrac_jets(m_recoJetName_multnf_calib_r03);
+      if (!jets_multnf_r03 || !jets_multnf_calib_r03 || (m_do_emfrac && !jets_multnf_calib_emfrac_r03))
       {
         std::cout << "Aborting Run: Mult NoFlow R=0.3 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_multnf_r03, jets_multnf_calib_r03, m_data.multnf_r03, 0.3, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.3");
+      fill_jets(jets_multnf_r03, jets_multnf_calib_r03, jets_multnf_calib_emfrac_r03, m_data.multnf_r03, 0.3, cemc_multnf, ihcal_multnf, ohcal_multnf, "MultNF R=0.3");
     }
   }
 
@@ -736,24 +780,26 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     {
       JetContainer *jets_unsub_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_unsub_r02);
       JetContainer *jets_unsub_calib_r02 = findNode::getClass<JetContainer>(topNode, m_recoJetName_unsub_calib_r02);
-      if (!jets_unsub_r02 || !jets_unsub_calib_r02)
+      JetContainer *jets_unsub_calib_emfrac_r02 = get_emfrac_jets(m_recoJetName_unsub_calib_r02);
+      if (!jets_unsub_r02 || !jets_unsub_calib_r02 || (m_do_emfrac && !jets_unsub_calib_emfrac_r02))
       {
         std::cout << "Aborting Run: Unsub R=0.2 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_unsub_r02, jets_unsub_calib_r02, m_data.unsub_r02, 0.2, cemc_unsub, ihcal_unsub, ohcal_unsub, "Unsub R=0.2");
+      fill_jets(jets_unsub_r02, jets_unsub_calib_r02, jets_unsub_calib_emfrac_r02, m_data.unsub_r02, 0.2, cemc_unsub, ihcal_unsub, ohcal_unsub, "Unsub R=0.2");
     }
 
     if (m_do_r03)
     {
       JetContainer *jets_unsub_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_unsub_r03);
       JetContainer *jets_unsub_calib_r03 = findNode::getClass<JetContainer>(topNode, m_recoJetName_unsub_calib_r03);
-      if (!jets_unsub_r03 || !jets_unsub_calib_r03)
+      JetContainer *jets_unsub_calib_emfrac_r03 = get_emfrac_jets(m_recoJetName_unsub_calib_r03);
+      if (!jets_unsub_r03 || !jets_unsub_calib_r03 || (m_do_emfrac && !jets_unsub_calib_emfrac_r03))
       {
         std::cout << "Aborting Run: Unsub R=0.3 Jets Info null" << std::endl;
         return Fun4AllReturnCodes::ABORTRUN;
       }
-      fill_jets(jets_unsub_r03, jets_unsub_calib_r03, m_data.unsub_r03, 0.3, cemc_unsub, ihcal_unsub, ohcal_unsub, "Unsub R=0.3");
+      fill_jets(jets_unsub_r03, jets_unsub_calib_r03, jets_unsub_calib_emfrac_r03, m_data.unsub_r03, 0.3, cemc_unsub, ihcal_unsub, ohcal_unsub, "Unsub R=0.3");
     }
   }
 

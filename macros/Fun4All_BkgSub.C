@@ -72,7 +72,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     float neg_energy_threshold = -2.0F,
                     const std::string &zs_calib_cemc = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
                     const std::string &zs_calib_hcalin = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalout = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
+                    const std::string &zs_calib_hcalout = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    bool do_emfrac_calib = false,
+                    const std::string &emfrac_calib_path = "")
 {
   bool is_single_dst = flist_dst_zdc.empty() || flist_dst_zdc == "none";
 
@@ -192,6 +194,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "zs_calib_cemc: " << zs_calib_cemc << std::endl;
   std::cout << "zs_calib_hcalin: " << zs_calib_hcalin << std::endl;
   std::cout << "zs_calib_hcalout: " << zs_calib_hcalout << std::endl;
+  std::cout << "do_emfrac_calib: " << do_emfrac_calib << std::endl;
+  std::cout << "emfrac_calib_path: " << (emfrac_calib_path.empty() ? "CDB" : emfrac_calib_path) << std::endl;
   std::cout << "########################" << std::endl;
 
   Fun4AllServer *se = Fun4AllServer::instance();
@@ -297,6 +301,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // with do_flow == 0 the default iterative/mult chains are already no-flow
   Enable::HIJETS_TOWER_NOFLOW = (do_flow != 0);
   Enable::HIJETS_TOWER_MULTSUB_NOFLOW = do_mult && (do_flow != 0);
+  // side-by-side EMfrac JES (legacy calib nodes are unchanged)
+  Enable::HIJETS_TOWER_CALIB_EMFRAC = do_emfrac_calib;
+  HIJETS::emfrac_calib_direct_path = emfrac_calib_path;
   HIJetReco();
 
   // Calo QA
@@ -321,6 +328,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   jet_validation->set_do_iter_noflow(Enable::HIJETS_TOWER_NOFLOW);
   jet_validation->set_do_mult_noflow(Enable::HIJETS_TOWER_MULTSUB_NOFLOW);
   jet_validation->set_do_detailed(do_detailed);
+  jet_validation->set_do_emfrac(do_emfrac_calib);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);
 
