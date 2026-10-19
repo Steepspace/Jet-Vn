@@ -38,25 +38,20 @@ def _init_cdb():
 
 CDB_TYPES = [
     ("Centrality", "Centrality"),
-    ("Centrality Default", "Centrality_default"),
     ("Centrality Scale", "CentralityScale"),
-    ("Centrality Scale Default", "CentralityScale_default"),
     ("Centrality Vertex Scale", "CentralityVertexScale"),
-    ("Centrality Vertex Scale Default", "CentralityVertexScale_default"),
     ("MBD QFIT", "MBD_QFIT"),
-    ("MBD QFIT Default", "MBD_QFIT_default"),
-    ("EMCal Calib Default", "CEMC_calib_ADC_to_ETower_default"),
     ("EMCal Calib", "CEMC_calib_ADC_to_ETower"),
     ("EMCal Bad Tower Map", "CEMC_BadTowerMap"),
     ("EMCal Frac Bad Chi2", "CEMC_hotTowers_fracBadChi2"),
     ("EMCal Mean Time", "CEMC_meanTime"),
-    ("EMCal ZS Cross Calib", "CEMC_ZSCrossCalib"),
+    ("EMCal ZS Cross Calib T0", "CEMC_ZSCrossCalibT0"),
     ("HCALIN Frac Bad Chi2", "HCALIN_hotTowers_fracBadChi2"),
     ("HCALIN Mean Time", "HCALIN_meanTime"),
-    ("HCALIN ZS Cross Calib", "HCALIN_ZSCrossCalib"),
+    ("HCALIN ZS Cross Calib T0", "HCALIN_ZSCrossCalibT0"),
     ("HCALOUT Frac Bad Chi2", "HCALOUT_hotTowers_fracBadChi2"),
     ("HCALOUT Mean Time", "HCALOUT_meanTime"),
-    ("HCALOUT ZS Cross Calib", "HCALOUT_ZSCrossCalib"),
+    ("HCALOUT ZS Cross Calib T0", "HCALOUT_ZSCrossCalibT0"),
     ("sEPD Calib", "SEPD_NMIP_CALIB"),
     ("sEPD Event Plane", "SEPD_EventPlaneCalib")
 ]
