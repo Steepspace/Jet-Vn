@@ -70,9 +70,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &output_dst = "",
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
-                    const std::string &zs_calib_cemc = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalin = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalout = "/sphenix/user/anarde/ZSCrossCalibGen/calibs_timefit/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
+                    const std::string &zs_calib_cemc = "",
+                    const std::string &zs_calib_hcalin = "",
+                    const std::string &zs_calib_hcalout = "",
                     bool do_emfrac_calib = false,
                     const std::string &emfrac_calib_path = "")
 {
@@ -255,25 +255,12 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   trig->Verbosity(1);
   se->registerSubsystem(trig);
 
-  // custom centrality calib
-  std::string cent_calib_dir = "/sphenix/user/anarde/sEPD-Study/centrality_calib";
-  std::string cent_divs = std::format("{}/divs/cdb_centrality_{}.root", cent_calib_dir, runnumber);
-  // DEFAULT use 68144 if needed
-  // std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_68144.root", cent_calib_dir);
-  std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_{}.root", cent_calib_dir, runnumber);
-  std::string cent_vtx = std::format("{}/vertexscales/cdb_centrality_vertex_scale_{}.root", cent_calib_dir, runnumber);
-
   // Minimum Bias Classifier
   MinimumBiasClassifier* mb = new MinimumBiasClassifier();
-  mb->setOverwriteScale(cent_scale);
-  mb->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(mb);
 
   // Centrality Reco
   CentralityReco* cent = new CentralityReco();
-  cent->setOverwriteDivs(cent_divs);
-  cent->setOverwriteScale(cent_scale);
-  cent->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(cent);
 
   bool do_detailed = !event_list.empty() || event_id != 0;
@@ -449,9 +436,9 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     const std::string &output_dst,
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
-                    const std::string &zs_calib_cemc = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/CEMC_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalin = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALIN_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root",
-                    const std::string &zs_calib_hcalout = "/gpfs/mnt/gpfs02/sphenix/user/anarde/ZSCrossCalibGen/calibs/HCALOUT_ZSCrossCalibT0_pro001_pcdb001_v001_68144.root")
+                    const std::string &zs_calib_cemc = "",
+                    const std::string &zs_calib_hcalin = "",
+                    const std::string &zs_calib_hcalout = "")
 {
   Fun4All_BkgSub(input_dst, /*flist_dst_zdc=*/"", /*flist_dst_sepd=*/"",
                  input_QVecCalib, output, output_tree, do_flow, nEvents, nSkip, event_id,

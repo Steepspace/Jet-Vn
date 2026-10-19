@@ -152,25 +152,12 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   trig->Verbosity(1);
   se->registerSubsystem(trig);
 
-  // custom centrality calib
-  std::string cent_calib_dir = "/sphenix/user/anarde/sEPD-Study/centrality_calib";
-  std::string cent_divs = std::format("{}/divs/cdb_centrality_{}.root", cent_calib_dir, runnumber);
-  // DEFAULT use 68144 if needed
-  // std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_68144.root", cent_calib_dir);
-  std::string cent_scale = std::format("{}/scales/cdb_centrality_scale_{}.root", cent_calib_dir, runnumber);
-  std::string cent_vtx = std::format("{}/vertexscales/cdb_centrality_vertex_scale_{}.root", cent_calib_dir, runnumber);
-
   // Minimum Bias Classifier
   MinimumBiasClassifier* mb = new MinimumBiasClassifier();
-  mb->setOverwriteScale(cent_scale);
-  mb->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(mb);
 
   // Centrality Reco
   CentralityReco* cent = new CentralityReco();
-  cent->setOverwriteDivs(cent_divs);
-  cent->setOverwriteScale(cent_scale);
-  cent->setOverwriteVtx(cent_vtx);
   se->registerSubsystem(cent);
 
   // Event QA
