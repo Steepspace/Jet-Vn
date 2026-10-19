@@ -7,6 +7,10 @@ run by run, for R = 0.2 and R = 0.3.
 Both Jet-Anav3 productions must come from the same trees. The Z0 jet pT cut is raised to where its
 sample is complete given the tree cut (see Z0_PT_MIN), so the shape comparison is the like-for-like one.
 
+The pT section compares the calibrated pT spectra (pT axis of h2JetEtav3) for all eta, inside and outside the
+legacy eta-bin edge, to see whether the JES switch matters only near the cut. The first bin (10-11 GeV) is not
+like-for-like: the Z0 sample has no jets below Z0_PT_MIN.
+
 The mechanism figure (one per R) explains the difference: the legacy JES is a different function of the
 raw pT in each of its 4 eta bins, so the raw pT needed to pass the calibrated-pT cut steps at the bin
 edges, while the Z0 JES needs the same raw pT everywhere. It reads the JES payload and a few trees for
@@ -26,8 +30,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplhep as hep
 
-from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors
-from plot_jet_noflow_compare import METHODS, parse_list_file, load_luminosity, load_hists, plot_eta_pair
+from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_panel
+from plot_jet_noflow_compare import METHODS, parse_list_file, load_luminosity, load_hists, plot_eta_pair, add_header, info_text
 
 # Z0 jet pT cut applied by Jet-Anav3 (printed as "JES Z0 R = 0.X ... jet pT min") for JES_Calib_Default_47289-53864_v6
 Z0_PT_MIN = {"r02": 10.19, "r03": 10.08}
@@ -44,6 +48,11 @@ JES_STYLES = {
     "z0": {"label": "Z0 JES", "color": "#ff7f00", "marker": "s"},
 }
 RATIO_LABEL = "Z0 / Default"
+
+# pT bins for the spectra (merged from the 1 GeV bins of h2JetEtav3, pT axis 10-80 GeV)
+PT_EDGES = np.concatenate([np.arange(10, 20, 1), np.arange(20, 30, 2), [30, 35, 40, 50, 60, 80]])
+PT_PLOT_MAX = 40  # few jets above this in one run
+REGION_COLORS = {"all": "black", "inside": "#377eb8", "outside": "#e41a1c"}
 
 
 def n_events(file_path, event_bin):
@@ -77,6 +86,139 @@ def run_task(task):
     out_png = output_dir / "eta" / name / method / r_tag / f"run_{run}_h2JetEtav3_{r_tag}_{method}_{name}.png"
     plot_eta_pair(run, r_jet, lumi, hists, "default", "z0", RATIO_LABEL, shape, out_png,
                   ratio_ylim=ratio_ylim, save_pdf=save_pdf, styles=styles, method_label=METHODS[method]["label"], ylabel=ylabel)
+    return 1
+
+
+def eta_regions(r_jet):
+    """Labels of all eta, inside and outside the legacy eta-bin edge, and the edge."""
+    edge = abs(legacy_eta_edges(r_jet)[0])
+    eta_max = round(1.1 - r_jet, 1)
+    labels = {"all": rf"$|\eta| < {eta_max:g}$", "inside": rf"$|\eta| < {edge:g}$", "outside": rf"${edge:g} \leq |\eta| < {eta_max:g}$"}
+    return labels, edge
+
+
+def load_pt_regions(file_path, r_tag, method, edge):
+    """pT spectra of h2JetEtav3 (rebinned to PT_EDGES) for all eta, inside and outside the legacy edge."""
+    name = f"h2JetEtav3_{r_tag}_{method}"
+    with uproot.open(file_path) as rf:
+        if name not in rf:
+            print(f"Warning: {name} not found in {file_path}")
+            return None
+        vals, pt_edges, eta_edges = rf[name].to_numpy()
+        variances = rf[name].variances()
+    idx = np.searchsorted(pt_edges, PT_EDGES[:-1])
+    if not np.allclose(pt_edges[idx], PT_EDGES[:-1]) or not np.isclose(pt_edges[-1], PT_EDGES[-1]):
+        raise ValueError(f"PT_EDGES do not match the pT axis of {name}")
+
+    abs_eta = np.abs(0.5 * (eta_edges[1:] + eta_edges[:-1]))
+    masks = {"all": np.ones_like(abs_eta, dtype=bool), "inside": abs_eta < edge, "outside": abs_eta >= edge}
+    out = {}
+    for region, mask in masks.items():
+        out[region] = {"values": np.add.reduceat(vals[:, mask].sum(axis=1), idx),
+                       "errors": np.sqrt(np.add.reduceat(variances[:, mask].sum(axis=1), idx))}
+    return out
+
+
+def pt_ratio(spectra, region):
+    """Z0 / default per pT bin (nan where either is empty). The errors treat the samples as independent, so are too large."""
+    d, z = spectra["default"][region], spectra["z0"][region]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.where((d["values"] > 0) & (z["values"] > 0), z["values"] / d["values"], np.nan)
+        err = calc_ratio_errors(ratio, z["errors"], d["errors"], d["values"])
+    return ratio, err
+
+
+def shade_incomplete_bin(ax, label=True):
+    """Marks the first pT bin, where the Z0 sample is incomplete (Z0 cut above 10 GeV)."""
+    ax.axvspan(PT_EDGES[0], PT_EDGES[1], color="gray", alpha=0.2, label="Z0 cut inside bin" if label else None)
+
+
+def plot_pt_region(run, r_jet, lumi, method, spectra, region, region_label, z0_cut, out_path, save_pdf):
+    """Default vs Z0 calibrated pT spectrum in one eta region, with the Z0 / default ratio."""
+    hep.style.use("ATLAS")
+    widths = np.diff(PT_EDGES)
+    centers = 0.5 * (PT_EDGES[1:] + PT_EDGES[:-1])
+
+    fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
+    positive = []
+    for key, meta in JES_STYLES.items():
+        d = spectra[key][region]
+        label = meta["label"] + (rf" ($p_{{T}} \geq {z0_cut:g}$ GeV)" if key == "z0" else "")
+        hep.histplot((d["values"] / widths, PT_EDGES), ax=ax, histtype="step", color=meta["color"], linewidth=2, label=label)
+        positive.append(d["values"][d["values"] > 0] / widths[d["values"] > 0])
+    positive = np.concatenate(positive)
+    shade_incomplete_bin(ax)
+
+    ratio, err = pt_ratio(spectra, region)
+    ok = np.isfinite(ratio)
+    ax_ratio.errorbar(centers[ok], ratio[ok], yerr=err[ok], xerr=widths[ok] / 2, fmt=JES_STYLES["z0"]["marker"],
+                      color=JES_STYLES["z0"]["color"], markersize=4, capsize=2, linewidth=1.0)
+    shade_incomplete_bin(ax_ratio, label=False)
+
+    ax.set_yscale("log")
+    ax.set_ylim(positive.min() * 1e-3, positive.max() * 1e2)  # room for the legend below the spectrum
+    ax.set_xlim(PT_EDGES[0], PT_PLOT_MAX)
+    ax.set_ylabel(r"$dN/dp_{T}$ [GeV$^{-1}$]")
+    add_header(ax, run, r_jet, lumi)
+    ax.text(0.95, 0.95, info_text(METHODS[method]["label"], pt_cut=region_label), transform=ax.transAxes, ha="right", va="top", fontsize=15)
+    ax.legend(loc="lower left", frameon=False, fontsize=15)
+
+    setup_ratio_panel(ax_ratio, xlabel=r"Calibrated jet $p_{T}$ [GeV]", ylabel=RATIO_LABEL, all_ratios=list(ratio[ok & (err < 0.25)]), min_margin=0.05)
+    plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_pt_ratio_regions(run, r_jet, lumi, method, spectra, labels, out_path, save_pdf):
+    """Z0 / default pT spectrum ratio for all eta, inside and outside the legacy edge on one panel."""
+    hep.style.use("ATLAS")
+    widths = np.diff(PT_EDGES)
+    centers = 0.5 * (PT_EDGES[1:] + PT_EDGES[:-1])
+    offsets = {"all": 0.0, "inside": -0.15, "outside": 0.15}  # keep the error bars apart
+
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    reliable = []
+    for region, label in labels.items():
+        ratio, err = pt_ratio(spectra, region)
+        ok = np.isfinite(ratio)
+        ax.errorbar(centers[ok] + offsets[region] * widths[ok], ratio[ok], yerr=err[ok], fmt="o", color=REGION_COLORS[region],
+                    markersize=5, capsize=2, linewidth=1.2, label=label)
+        reliable.append(ratio[ok & (err < 0.1)])
+    reliable = np.concatenate(reliable)
+    shade_incomplete_bin(ax)
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xlim(PT_EDGES[0], PT_PLOT_MAX)
+    lo, hi = min(reliable.min(), 1.0), max(reliable.max(), 1.0)
+    ax.set_ylim(lo - 0.1 * (hi - lo), hi + 0.45 * (hi - lo))
+    ax.set_xlabel(r"Calibrated jet $p_{T}$ [GeV]")
+    ax.set_ylabel(f"Jet counts {RATIO_LABEL}")
+    add_header(ax, run, r_jet, lumi)
+    ax.text(0.97, 0.96, METHODS[method]["label"], transform=ax.transAxes, ha="right", va="top", fontsize=16)
+    ax.legend(loc="upper left", frameon=False, fontsize=15, ncol=2)
+    fig.tight_layout()
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def run_pt_task(task):
+    """Makes the default vs Z0 pT spectrum comparison for one run, method and R. Returns 1 on success, 0 if skipped."""
+    run, default_file, z0_file, lumi, method, r_tag, r_jet, output_dir, save_pdf = task
+    labels, edge = eta_regions(r_jet)
+    spectra = {"default": load_pt_regions(default_file, r_tag, method, edge), "z0": load_pt_regions(z0_file, r_tag, method, edge)}
+    if any(s is None for s in spectra.values()):
+        print(f"Warning: Missing {method} {r_tag} for run {run}, skipping the pT comparison")
+        return 0
+
+    out_dir = output_dir / "pt" / "default_vs_z0" / method / r_tag
+    for region, label in labels.items():
+        out_png = out_dir / f"run_{run}_jet_pt_{r_tag}_{method}_default_vs_z0_{region}.png"
+        plot_pt_region(run, r_jet, lumi, method, spectra, region, label, Z0_PT_MIN[r_tag], out_png, save_pdf)
+    plot_pt_ratio_regions(run, r_jet, lumi, method, spectra, labels, out_dir / f"run_{run}_jet_pt_{r_tag}_{method}_ratio_regions.png", save_pdf)
+
+    for region in labels:
+        ratio, _ = pt_ratio(spectra, region)
+        print(f"Run {run} {method} {r_tag} {region:>7}: Z0/default per pT bin " + " ".join(
+            f"[{lo:g},{hi:g}):{r:.3f}" for lo, hi, r in zip(PT_EDGES[:-1], PT_EDGES[1:], ratio) if np.isfinite(r) and hi <= 30))
     return 1
 
 
@@ -339,15 +481,16 @@ def main():
         for method in args.methods:
             for r_tag, r_jet in [("r02", 0.2), ("r03", 0.3)]:
                 for shape in (True, False):
-                    tasks.append((run, default_file, z0_file, lumi, method, r_tag, r_jet, shape, args.output_dir, args.ratio_ylim, args.save_pdf))
+                    tasks.append((run_task, (run, default_file, z0_file, lumi, method, r_tag, r_jet, shape, args.output_dir, args.ratio_ylim, args.save_pdf)))
+                tasks.append((run_pt_task, (run, default_file, z0_file, lumi, method, r_tag, r_jet, args.output_dir, args.save_pdf)))
 
     n_jobs = max(1, min(args.jobs, len(tasks)))
     print(f"Generating {len(tasks)} comparisons for runs {', '.join(map(str, runs))} with {n_jobs} worker(s)")
     if n_jobs == 1:
-        success_count = sum(run_task(t) for t in tasks)
+        success_count = sum(fn(t) for fn, t in tasks)
     else:
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
-            success_count = sum(f.result() for f in [executor.submit(run_task, t) for t in tasks])
+            success_count = sum(f.result() for f in [executor.submit(fn, t) for fn, t in tasks])
 
     print(f"Successfully generated {success_count}/{len(tasks)} comparisons in {args.output_dir}")
 
