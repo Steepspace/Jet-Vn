@@ -36,6 +36,30 @@ def _init_cdb():
     """)
     _cdb_initialized = True
 
+def init_worker(dbtag, run, pl_type="Centrality"):
+    """
+    Creates the CDB client in each worker with C++ stdout silenced, so that
+    CDBUtils::setGlobalTag's "successfully changed global tag" message is not
+    printed once per job. A bad tag still shows up as failed lookups.
+    """
+    _init_cdb()
+    sys.stdout.flush()
+    saved_stdout = os.dup(1)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 1)
+    try:
+        _ROOT.get_sphenix_cdb_url(str(pl_type), int(run), str(dbtag))
+    except Exception:
+        pass
+    finally:
+        os.dup2(saved_stdout, 1)
+        os.close(devnull)
+        os.close(saved_stdout)
+
+def is_valid_url(url):
+    # Lookup errors come back as "DataBaseException: ..." (no payload) or "BaseException: ..." (bad tag)
+    return bool(url) and not url.split(":", 1)[0].endswith("Exception")
+
 CDB_TYPES = [
     ("Centrality", "Centrality"),
     ("Centrality Scale", "CentralityScale"),
@@ -63,7 +87,7 @@ def check_run(args):
     for desc, name in CDB_TYPES:
         try:
             url = str(_ROOT.get_sphenix_cdb_url(str(name), int(run_number), str(dbtag)))
-            has_calib = not url.startswith("DataBaseException")
+            has_calib = is_valid_url(url)
             results[name] = has_calib
         except Exception as e:
             results[name] = False
@@ -103,7 +127,7 @@ def main():
     tasks = [(run, args.dbtag) for run in runnumbers]
     run_calib_status = {}
 
-    with concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs, initializer=init_worker, initargs=(args.dbtag, runnumbers[0], CDB_TYPES[0][1])) as executor:
         for run_number, results in tqdm.tqdm(executor.map(check_run, tasks), total=total_runs):
             run_calib_status[run_number] = results
 
