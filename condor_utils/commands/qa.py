@@ -137,7 +137,7 @@ def setup_qa_subparsers(subparsers):
     event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     event_qa.set_defaults(
         dst_per_job=5,
-        memory=0.5,
+        memory=1,
         condor_script='scripts/genFun4All_EventQA.sh',
         func=create_event_qa_jobs
     )
