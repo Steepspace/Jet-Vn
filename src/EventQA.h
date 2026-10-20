@@ -5,6 +5,7 @@
 #include <fun4all/SubsysReco.h>
 
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -74,6 +75,10 @@ class EventQA : public SubsysReco
     unsigned int m_bins_cent{100};
     double m_cent_low{-0.5};
     double m_cent_high{99.5};
+
+    unsigned int m_bins_t0{200};
+    double m_t0_low{-10};
+    double m_t0_high{10};
   };
 
   HistConfig m_hist_config;
@@ -105,7 +110,8 @@ class EventQA : public SubsysReco
     BKG_HIGH,
     SIDE_HIT_LOW,
     ZDC_LOW,
-    MBD_HIGH
+    MBD_HIGH,
+    BUNCH_NONE
   };
 
   std::vector<std::string> m_eventType{"All", "Has Z", "|z| < 150 cm", "|z| < 10 cm", "MB Trig", "MB", "Cent"};
@@ -117,7 +123,7 @@ class EventQA : public SubsysReco
       "|z| < 10 cm & Trig 12",
       "|z| < 10 cm & Trig 14",
       "|z| < 10 cm & (Trig 12 | Trig 14)"};
-  std::vector<std::string> m_MinBias_Type{"MBD Background", "Hits < 2", "ZDC < 60 GeV", "MBD > 2100"};
+  std::vector<std::string> m_MinBias_Type{"MBD Background", "Hits < 2", "ZDC < 40 GeV", "MBD > 2100", "No Bunch Class"};
 
   std::unique_ptr<TriggerAnalyzer> m_triggerAnalyzer;
 
@@ -164,6 +170,7 @@ class EventQA : public SubsysReco
     int event{0};
     double zvtx{9999};
     double centrality{9999};
+    float t0{std::numeric_limits<float>::quiet_NaN()};  // MBD t0 - main-bunch offset [ns]
   };
 
   EventData m_data;
@@ -178,6 +185,7 @@ class EventQA : public SubsysReco
   TH1* hZVertex_Trig12_or_Trig14{nullptr};
   TH1* hZVertex_Trig12_or_Trig14_MB{nullptr};
   TH1* hLuminosity{nullptr};
+  TH1* hT0Corrected{nullptr};
   TH2* h2ZVertexCentrality{nullptr};
 
   // Trigger (paired by trigger bit: [relaxed (trigger-only), tight (trigger + MB)])

@@ -82,6 +82,10 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     }
     se->registerHisto(hLuminosity);
 
+    // MBD t0 relative to the main bunch (events passing MB, z-vertex and centrality cuts)
+    hT0Corrected = new TH1F("hT0Corrected", "Min Bias, |z| < 10 cm, Centrality Cut; t_{0} - t_{0}^{main} [ns]; Events", m_hist_config.m_bins_t0, m_hist_config.m_t0_low, m_hist_config.m_t0_high);
+    se->registerHisto(hT0Corrected);
+
     // 2D Vertex vs Centrality
     h2ZVertexCentrality = new TH2F("h2ZVertexCentrality", "Min Bias; Z [cm]; Centrality [%]", m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high, m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
     se->registerHisto(h2ZVertexCentrality);
@@ -141,6 +145,7 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       tree->Branch("event", &m_data.event);
       tree->Branch("zvtx", &m_data.zvtx);
       tree->Branch("centrality", &m_data.centrality);
+      tree->Branch("t0", &m_data.t0);
     }
   }
 
@@ -332,10 +337,13 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       PHParameters pdb_params("MinBiasParams");
       pdb_params.FillFrom(pdb);
 
+      m_data.t0 = m_mb_info->getT0Corrected();
+
       bool minbias_bkg_high = pdb_params.get_int_param("minbias_background_cut_fail");
       bool minbias_side_hit_low = pdb_params.get_int_param("minbias_two_hit_min_fail");
       bool minbias_zdc_low = pdb_params.get_int_param("minbias_zdc_energy_min_fail");
       bool minbias_mbd_high = pdb_params.get_int_param("minbias_mbd_total_energy_max_fail");
+      bool minbias_bunch_none = pdb_params.get_int_param("minbias_bunch_class_fail");
 
       if (Verbosity() > 0)
       {
@@ -351,6 +359,7 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
                   << " | side_hit_low: " << minbias_side_hit_low
                   << " | zdc_low: " << minbias_zdc_low
                   << " | mbd_high: " << minbias_mbd_high
+                  << " | bunch_none: " << minbias_bunch_none
                   << std::endl;
       }
 
@@ -371,6 +380,10 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
         if (minbias_mbd_high)
         {
           hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::MBD_HIGH));
+        }
+        if (minbias_bunch_none)
+        {
+          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::BUNCH_NONE));
         }
       }
 
@@ -560,6 +573,10 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
   if (m_do_hist)
   {
     hEvent->Fill(static_cast<std::uint8_t>(EventType::CENT));
+    if (hT0Corrected && std::isfinite(m_data.t0))
+    {
+      hT0Corrected->Fill(m_data.t0);
+    }
   }
 
   if (Verbosity() > 0)
@@ -598,6 +615,7 @@ int EventQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   m_data.event = 0;
   m_data.zvtx = 9999;
   m_data.centrality = 9999;
+  m_data.t0 = std::numeric_limits<float>::quiet_NaN();
 
   m_pass_MB = false;
   m_pass_Zvtx = false;
