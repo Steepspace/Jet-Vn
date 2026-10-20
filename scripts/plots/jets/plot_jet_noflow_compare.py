@@ -16,18 +16,18 @@ import mplhep as hep
 
 from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_panel
 
-# Subtraction method metadata (label, color, marker, hEvent bin with the flow pass count)
+# Subtraction method metadata (label, color, marker, flow failure histogram subtracted from the Good Calo-Cent count)
 # iternf / multnf are gated on the flow failure of iter / mult, so they share the event count
 METHODS = {
-    "iter": {"label": "Iterative", "color": "#984ea3", "marker": "o", "event_bin": 2},
-    "iternf": {"label": "Iterative No Flow", "color": "#e41a1c", "marker": "s", "event_bin": 2},
-    "mult": {"label": "Multiplicity", "color": "#377eb8", "marker": "^", "event_bin": 3},
-    "multnf": {"label": "Multiplicity No Flow", "color": "#ff7f00", "marker": "D", "event_bin": 3},
+    "iter": {"label": "Iterative", "color": "#984ea3", "marker": "o", "fail_hist": "hCaloV2Fail_iter"},
+    "iternf": {"label": "Iterative No Flow", "color": "#e41a1c", "marker": "s", "fail_hist": "hCaloV2Fail_iter"},
+    "mult": {"label": "Multiplicity", "color": "#377eb8", "marker": "^", "fail_hist": "hCaloV2Fail_mult"},
+    "multnf": {"label": "Multiplicity No Flow", "color": "#ff7f00", "marker": "D", "fail_hist": "hCaloV2Fail_mult"},
 }
 
 # Unsubtracted jets, overlaid with --unsub. They are not gated on flow failure, so they use the
-# "Good Calo-Cent" event count (hEvent bin 2) instead of a flow pass count
-UNSUB = {"label": "Unsubtracted", "color": "#7f7f7f", "marker": "x", "event_bin": 1, "linestyle": "--"}
+# "Good Calo-Cent" event count instead of a flow pass count
+UNSUB = {"label": "Unsubtracted", "color": "#7f7f7f", "marker": "x", "fail_hist": None, "linestyle": "--"}
 STYLES_WITH_UNSUB = {**METHODS, "unsub": UNSUB}
 
 # (name, denominator, numerator, ratio label, per-event normalization)
@@ -96,10 +96,14 @@ def add_header(ax, run_number, r_jet, lumi):
 
 
 def load_hists(file_path, r_tag, kind="pt", with_unsub=False):
-    """Loads hJetPtv3 (kind="pt") or the eta projection of h2JetEtav3 (kind="eta") for each method, with the flow pass event counts."""
+    """Loads hJetPtv3 (kind="pt") or the eta projection of h2JetEtav3 (kind="eta") for each method, with the event counts.
+
+    Event counts are restricted to the filled centrality range (0-60%), unlike hEvent which includes all centralities:
+    Good Calo-Cent = hCentrality - hCentralityCaloFail, flow pass = Good Calo-Cent - flow failure.
+    """
     data = {}
     with uproot.open(file_path) as rf:
-        n_events = rf["hEvent"].values()
+        good_calo_cent = rf["hCentrality"].values().sum() - rf["hCentralityCaloFail"].values().sum()
         for method, meta in (STYLES_WITH_UNSUB if with_unsub else METHODS).items():
             hist_name = f"hJetPtv3_{r_tag}_{method}" if kind == "pt" else f"h2JetEtav3_{r_tag}_{method}"
             if hist_name not in rf:
@@ -120,7 +124,7 @@ def load_hists(file_path, r_tag, kind="pt", with_unsub=False):
                 "values": vals,
                 "edges": edges,
                 "errors": errors,
-                "n_events": n_events[meta["event_bin"]],
+                "n_events": good_calo_cent - (rf[meta["fail_hist"]].values().sum() if meta["fail_hist"] else 0.0),
             }
     return data
 
