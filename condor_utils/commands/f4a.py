@@ -93,6 +93,9 @@ def parse_zs_calib_list(zs_list, logger=None):
     return zs_map
 
 def create_f4a_jobs(args):
+    if getattr(args, 'overlay', False):
+        return create_f4a_overlay_jobs(args)
+
     if "Fun4All_BkgSub" in args.f4a_macro:
         args.condor_script = 'scripts/genFun4All_BkgSub.sh'
 
@@ -197,6 +200,169 @@ def create_f4a_jobs(args):
     arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg=queue_arg)
+
+def overlay_run_segment(line):
+    """
+    (run, segment) of an overlay list line (DST_GLOBAL,DST_TRUTH_JET,DST_TRUTH_G4HIT,DST_CALO), taken from
+    the DST_CALO name (DST_CALO_Jet12-00000021-data-00068144-00000.root), leading zeros stripped.
+    """
+    parts = Path(line.split(',')[-1].strip()).stem.split('-')
+    if len(parts) < 5:
+        return None, None
+    return parts[3].lstrip('0'), str(int(parts[4]))
+
+def parse_data_zdc_sepd_list(data_list, logger=None):
+    """
+    Parses data lists (calofit,zdc,sepd per line, as used by Fun4All_BkgSub) into a mapping
+    (run, segment) -> (zdc, sepd). data_list is one such list or a list of such lists.
+    """
+    data_map = {}
+    lines = [l.strip() for l in Path(data_list).read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+    if lines and ',' not in lines[0]:
+        sub_lines = []
+        for sub_list in lines:
+            sub_lines.extend(l.strip() for l in Path(sub_list).read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#'))
+        lines = sub_lines
+
+    for line in lines:
+        cols = [c.strip() for c in line.split(',')]
+        if len(cols) != 3:
+            if logger:
+                logger.warning(f'Skipping data list line without 3 columns (calofit,zdc,sepd): {line}')
+            continue
+        match = re.search(r'-(\d+)-(\d+)\.root$', Path(cols[0]).name)
+        if not match:
+            if logger:
+                logger.warning(f'Could not parse run/segment from data list entry: {line}')
+            continue
+        data_map[(match.group(1).lstrip('0'), str(int(match.group(2))))] = (cols[1], cols[2])
+
+    if logger:
+        logger.info(f'Loaded ZDC/sEPD DSTs for {len(data_map)} segments from {Path(data_list).name}')
+
+    return data_map
+
+def create_f4a_overlay_jobs(args):
+    """
+    Data+MC overlay mode of Fun4All_BkgSub: one job per overlay list line (one OutDir, all its events).
+    The data-only DST_CALOFITTING next to the overlay DSTs is located by the condor script; the data
+    ZDC/sEPD DSTs of the same run and segment come from the data list (--data-list).
+    """
+    if "Fun4All_BkgSub" not in args.f4a_macro:
+        raise ValueError(f"--overlay is only supported by Fun4All_BkgSub, got {args.f4a_macro}")
+    if not getattr(args, 'data_list', None):
+        raise ValueError("--overlay needs --data-list (calofit,zdc,sepd lists of the data runs)")
+    args.condor_script = 'scripts/genFun4All_BkgSub_Overlay.sh'
+
+    manager = CondorJobManager(args, job_name="F4A Overlay")
+    manager.add_file_to_check(args.f4a_macro)
+    data_list = Path(args.data_list).resolve()
+    manager.add_file_to_check(data_list)
+    manager.add_file_to_check(args.calo_calib_macro)
+    manager.add_file_to_check(args.HIJetReco_macro)
+    manager.add_dir_to_check(args.src_dir)
+
+    calib_list = Path(args.calib).resolve() if args.calib else None
+    if calib_list:
+        manager.add_file_to_check(calib_list)
+
+    eta_calib = Path(args.eta_calib_path).resolve() if getattr(args, 'eta_calib_path', None) else None
+    if eta_calib:
+        manager.add_file_to_check(eta_calib)
+
+    zs_calib_list = Path(args.zs_calib).resolve() if getattr(args, 'zs_calib', None) else None
+    if zs_calib_list:
+        manager.add_file_to_check(zs_calib_list)
+
+    manager.validate_paths()
+
+    manager.log_initialization({
+        'Data List (ZDC/sEPD)': data_list,
+        'Calib List': calib_list if calib_list else "Not Provided (Using default)",
+        'Eta Calib': eta_calib if eta_calib else "Not Provided (Using default/empty)",
+        'ZS Calib List': zs_calib_list if zs_calib_list else "Not Provided (Using CDB)",
+        'Do RCone': bool(getattr(args, 'do_rcone', False)),
+        'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
+        'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
+        'Do EMfrac Calib': bool(getattr(args, 'do_emfrac_calib', 0)),
+        'Jet pT Min': f"{args.jet_pt_min} GeV",
+        'Truth Jet pT Min': f"{args.truth_jet_pt_min} GeV",
+        'Fun4All Macro': Path(args.f4a_macro).resolve(),
+        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
+        'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
+        'Source Directory': Path(args.src_dir).resolve()
+    })
+
+    manager.prepare_directories()
+
+    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, data_list]
+    if calib_list:
+        extra_files.append(calib_list)
+    if eta_calib:
+        extra_files.append(eta_calib)
+    if zs_calib_list:
+        extra_files.append(zs_calib_list)
+
+    manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
+
+    calib_map = parse_calib_list(calib_list, manager.logger)
+    zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
+    data_map = parse_data_zdc_sepd_list(data_list, manager.logger)
+
+    jobs_file = manager.output_dir / 'jobs.list'
+    jobs_file.unlink(missing_ok=True)
+
+    # -i is an overlay list, or a list of overlay lists (e.g. one per pT-hat sample)
+    overlay_lines = [l.strip() for l in manager.input_list.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+    if overlay_lines and ',' not in overlay_lines[0]:
+        sub_lines = []
+        for sub_list in overlay_lines:
+            sub_path = Path(sub_list)
+            if not sub_path.is_file():
+                manager.logger.warning(f"Overlay sub-list file not found: {sub_list}")
+                continue
+            lines = [l.strip() for l in sub_path.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+            manager.logger.info(f"Overlay list {sub_path.name}: {len(lines)} lines")
+            sub_lines.extend(lines)
+        overlay_lines = sub_lines
+
+    total_jobs = 0
+    missing_segments = set()
+    with open(jobs_file, mode='w', encoding='utf-8') as file_out:
+        for line in overlay_lines:
+
+            if len(line.split(',')) != 4:
+                manager.logger.warning(f"Skipping overlay line without 4 columns (global,truth_jet,g4hit,calo): {line}")
+                continue
+
+            run, segment = overlay_run_segment(line)
+            if (run, segment) not in data_map:
+                missing_segments.add(f'{run}-{segment}')
+                continue
+
+            zdc, sepd = data_map[(run, segment)]
+            calib = calib_map.get(run, 'default')
+            zs_entry = zs_map.get(run, {})
+            zs_columns = ",".join(zs_entry.get(det, 'none') for det in ZS_DETECTORS)
+            file_out.write(f'{line},{zdc},{sepd},{calib},{zs_columns}\n')
+            total_jobs += 1
+
+    if missing_segments:
+        manager.logger.warning(f"Skipped overlay lines without data ZDC/sEPD DSTs for {len(missing_segments)} run-segment(s): {', '.join(sorted(missing_segments))}")
+    manager.logger.info(f"Total jobs prepared: {total_jobs}")
+
+    eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
+    do_rcone_val = 1 if getattr(args, 'do_rcone', False) else 0
+    do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
+    neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
+    do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
+
+    arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst_global) $(input_dst_jet) $(input_dst_g4hit) $(input_dst_calo) $(input_dst_zdc) $(input_dst_sepd) $(input_calib) "
+                 f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {args.do_flow} {eta_calib_val} "
+                 f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
+                 f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output")
+    manager.write_submit_file(arguments=arguments)
+    manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_dst_zdc,input_dst_sepd,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list")
 
 def create_f4a_zdc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A ZDC")
@@ -467,6 +633,10 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--do-neg-energy-threshold', type=int, default=1, choices=[0, 1], help='Enable negative energy threshold rejection (default=1).')
     f4a.add_argument('--neg-energy-threshold', type=float, default=-2.0, help='Negative energy threshold cut in GeV (default=-2.0).')
     f4a.add_argument('--do-emfrac-calib', type=int, default=0, choices=[0, 1], help='Also apply the EMfrac JES alongside the legacy one and store pt_calib_emfrac / calo fractions (default=0).')
+    f4a.add_argument('--overlay', action='store_true', default=False, help='Data+MC overlay mode of Fun4All_BkgSub: -i is an overlay list (DST_GLOBAL,DST_TRUTH_JET,DST_TRUTH_G4HIT,DST_CALO per line), one job per line. Only the iterative jets (with and without flow) plus truth jets are stored. Needs --data-list.')
+    f4a.add_argument('--data-list', dest='data_list', type=str, default=None, help='Data list(s) with calofit,zdc,sepd per line (e.g. dst_calofitting_zdc_sepd-00068144.list, or a list of such lists), used with --overlay for the ZDC/sEPD DSTs of each segment.')
+    f4a.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut, used with --overlay. Default: 10 GeV.')
+    f4a.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut, used with --overlay. Default: 5 GeV.')
     f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')

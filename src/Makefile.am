@@ -22,6 +22,7 @@ pkginclude_HEADERS = \
   JetValidation.h \
   JetValidationv2.h \
   JetValidationv3.h \
+  TruthJetValidation.h \
   EventQA.h \
   GlobalQA.h \
   JetUtils.h \
@@ -45,6 +46,7 @@ libsEPDValidation_la_SOURCES = \
   JetValidation.cc \
   JetValidationv2.cc \
   JetValidationv3.cc \
+  TruthJetValidation.cc \
   EventQA.cc \
   GlobalQA.cc \
   JetUtils.cc \
@@ -68,6 +70,7 @@ libsEPDValidation_la_LIBADD = \
   -ljetbase_io \
   -ljetbackground_io \
   -lphparameter_io \
+  -lphhepmc_io \
   -lTreeFiller
 
 BUILT_SOURCES = testexternals.cc

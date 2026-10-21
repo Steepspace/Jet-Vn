@@ -28,6 +28,7 @@
 #include <fun4all/Fun4AllDstInputManager.h>
 #include <fun4all/Fun4AllDstOutputManager.h>
 #include <fun4all/Fun4AllInputManager.h>
+#include <fun4all/Fun4AllNoSyncDstInputManager.h>
 #include <fun4all/Fun4AllServer.h>
 #include <fun4all/Fun4AllBase.h>
 #include <fun4all/Fun4AllUtils.h>
@@ -42,6 +43,7 @@
 #include <sepdvalidation/CaloQA.h>
 #include <sepdvalidation/JetValidationv3.h>
 #include <sepdvalidation/RandomConeValidation.h>
+#include <sepdvalidation/TruthJetValidation.h>
 
 #include <treefiller/TreeFiller.h>
 
@@ -74,8 +76,17 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &zs_calib_hcalin = "",
                     const std::string &zs_calib_hcalout = "",
                     bool do_emfrac_calib = false,
-                    const std::string &emfrac_calib_path = "")
+                    const std::string &emfrac_calib_path = "",
+                    const std::string &overlay_dst_calo = "",
+                    const std::string &overlay_dst_truth_jet = "",
+                    float jet_pt_min = 10.0F,
+                    float truth_jet_pt_min = 5.0F)
 {
+  // data+MC overlay: flist_dst_calofit is the data-only DST_CALOFITTING of the overlay sample
+  // (event aligned with the overlay DSTs), flist_dst_zdc/sepd the data ZDC/sEPD DSTs of the same
+  // segment. The calo towers are swapped for the embedded MC+data towers of DST_CALO, everything
+  // else is reconstructed exactly as in data.
+  bool is_overlay = !overlay_dst_calo.empty() && overlay_dst_calo != "none";
   bool is_single_dst = flist_dst_zdc.empty() || flist_dst_zdc == "none";
 
   // Extract runnumber and segment from first file within list
@@ -134,6 +145,60 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     }
   }
 
+  if (is_overlay)
+  {
+    if (isFileList)
+    {
+      std::cout << "Error: overlay mode takes single files, not lists: " << flist_dst_calofit << std::endl;
+      return;
+    }
+    if (is_single_dst)
+    {
+      std::cout << "Error: overlay mode needs the data ZDC and sEPD DSTs of the segment" << std::endl;
+      return;
+    }
+    // the prepared DST_CALOFITTING holds the events of one data segment
+    for (const auto& path : {flist_dst_zdc, flist_dst_sepd})
+    {
+      int input_segment = Fun4AllUtils::GetRunSegment(path).second;
+      if (input_segment != segment)
+      {
+        std::cout << "Error: " << path << " segment " << input_segment
+                  << " does not match calofit segment " << segment << std::endl;
+        return;
+      }
+    }
+    if (overlay_dst_truth_jet.empty() || overlay_dst_truth_jet == "none")
+    {
+      std::cout << "Error: overlay mode needs the DST_TRUTH_JET input" << std::endl;
+      return;
+    }
+    // the flow and no flow iterative chains are only different with flow modulation
+    if (do_flow == 0)
+    {
+      std::cout << "Error: overlay mode needs do_flow != 0" << std::endl;
+      return;
+    }
+
+    const std::vector<std::pair<std::string, std::string>> overlay_inputs = {
+        {"calo", overlay_dst_calo},
+        {"truth jet", overlay_dst_truth_jet}};
+
+    for (const auto& [name, path] : overlay_inputs)
+    {
+      int input_run = Fun4AllUtils::GetRunSegment(path).first;
+      if (input_run != runnumber)
+      {
+        std::cout << "Error: overlay " << name << " input run " << input_run
+                  << " does not match calofit run " << runnumber << std::endl;
+        return;
+      }
+    }
+
+    // only the iterative jets (with and without flow modulation) are needed for the overlay
+    do_mult = false;
+  }
+
   // ZS cross calib T0 files must also match the run (the defaults are for run 68144)
   // "none" or empty: no direct URL, CaloTowerCalib falls back to the CDB
   const std::vector<std::pair<std::string, std::string>> zs_calibs = {
@@ -165,7 +230,16 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
 
   std::cout << "########################" << std::endl;
   std::cout << "Run Parameters" << std::endl;
-  if (is_single_dst)
+  if (is_overlay)
+  {
+    std::cout << "overlay mode" << std::endl;
+    std::cout << "input calofit (data): " << flist_dst_calofit << std::endl;
+    std::cout << "input zdc: " << flist_dst_zdc << std::endl;
+    std::cout << "input sepd: " << flist_dst_sepd << std::endl;
+    std::cout << "input calo (data+MC): " << overlay_dst_calo << std::endl;
+    std::cout << "input truth jet: " << overlay_dst_truth_jet << std::endl;
+  }
+  else if (is_single_dst)
   {
     std::cout << "input single DST: " << flist_dst_calofit << std::endl;
   }
@@ -196,6 +270,11 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "zs_calib_hcalout: " << zs_calib_hcalout << std::endl;
   std::cout << "do_emfrac_calib: " << do_emfrac_calib << std::endl;
   std::cout << "emfrac_calib_path: " << (emfrac_calib_path.empty() ? "CDB" : emfrac_calib_path) << std::endl;
+  std::cout << "jet_pt_min: " << jet_pt_min << std::endl;
+  if (is_overlay)
+  {
+    std::cout << "truth_jet_pt_min: " << truth_jet_pt_min << std::endl;
+  }
   std::cout << "########################" << std::endl;
 
   Fun4AllServer *se = Fun4AllServer::instance();
@@ -225,6 +304,18 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   }
   evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(evtSkip);
+
+  // Truth Jets (overlay only), on the MC top node: checks that each MC event matches the data
+  // event and counts the analyzed events for the luminosity, so it runs before any event selection
+  if (is_overlay)
+  {
+    TruthJetValidation* truth_jet_validation = new TruthJetValidation();
+    truth_jet_validation->set_jet_radii({0.2F, 0.3F});
+    truth_jet_validation->set_jet_pt_min(truth_jet_pt_min);
+    truth_jet_validation->set_data_topnode("TOP");
+    truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+    se->registerSubsystem(truth_jet_validation, "TOPMC");
+  }
 
   // Calibrate Towers
   CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
@@ -284,7 +375,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     HIJETS::eta_calib_direct_path = eta_calib_direct_path;
   }
   Enable::HIJETS_TOWER_MULTSUB = do_mult;
-  Enable::HIJETS_TOWER_NOBKG = true;
+  Enable::HIJETS_TOWER_NOBKG = !is_overlay;
   // with do_flow == 0 the default iterative/mult chains are already no-flow
   Enable::HIJETS_TOWER_NOFLOW = (do_flow != 0);
   Enable::HIJETS_TOWER_MULTSUB_NOFLOW = do_mult && (do_flow != 0);
@@ -311,11 +402,13 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
 
   // Jet Validation
   JetValidationv3* jet_validation = new JetValidationv3();
+  jet_validation->set_do_unsub(Enable::HIJETS_TOWER_NOBKG);
   jet_validation->set_do_mult(do_mult);
   jet_validation->set_do_iter_noflow(Enable::HIJETS_TOWER_NOFLOW);
   jet_validation->set_do_mult_noflow(Enable::HIJETS_TOWER_MULTSUB_NOFLOW);
   jet_validation->set_do_detailed(do_detailed);
   jet_validation->set_do_emfrac(do_emfrac_calib);
+  jet_validation->set_jet_pt_min(jet_pt_min);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);
 
@@ -362,7 +455,49 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     se->registerOutputManager(dst_out);
   }
 
-  if (is_single_dst)
+  if (is_overlay)
+  {
+    // Data side, synced as in data (run 68144): the prepared DST_CALOFITTING leads, the data
+    // ZDC/sEPD DSTs of the segment are synced to its events.
+    // From DST_CALOFITTING only the raw inputs of the data production are read (GL1 packet, raw MBD),
+    // as in the production DST_CALOFITTING. Not read: its data-only towers (same node paths as the
+    // embedded towers of DST_CALO) and its reco nodes (made with an older tag, e.g. MinimumBiasInfov1
+    // cannot hold the bunch class, so no t0 and no centrality).
+    Fun4AllInputManager* in_calofit = new Fun4AllDstInputManager("calofitting");
+    in_calofit->BranchSelect("*", 0);
+    in_calofit->BranchSelect("DST#Sync", 1);
+    in_calofit->BranchSelect("DST#EventHeader", 1);
+    in_calofit->BranchSelect("DST#PacketsKeep#14001", 1);
+    in_calofit->BranchSelect("DST#MBD#MbdRawContainer", 1);
+    in_calofit->AddFile(flist_dst_calofit);
+    se->registerInputManager(in_calofit);
+
+    const std::vector<std::pair<std::string, std::string>> data_files = {
+        {"zdc", flist_dst_zdc},
+        {"sepd", flist_dst_sepd}};
+
+    for (const auto& [name, filepath] : data_files)
+    {
+      Fun4AllInputManager* in = new Fun4AllDstInputManager(name);
+      in->AddFile(filepath);
+      se->registerInputManager(in);
+    }
+
+    // MC side: the overlay DSTs carry the MC run number (21) in their Sync object, so they cannot be
+    // synced to the data. Their entries are event aligned with DST_CALOFITTING, so they are read in
+    // file order. The embedded towers go to the data top node; the truth jets (with their own
+    // Sync/EventHeader) to the MC top node, where TruthJetValidation checks the alignment.
+    Fun4AllInputManager* in_calo = new Fun4AllNoSyncDstInputManager("calo");
+    in_calo->BranchSelect("DST#Sync", 0);
+    in_calo->BranchSelect("DST#EventHeader", 0);
+    in_calo->AddFile(overlay_dst_calo);
+    se->registerInputManager(in_calo);
+
+    Fun4AllInputManager* in_truthjet = new Fun4AllNoSyncDstInputManager("truthjet", "DST", "TOPMC");
+    in_truthjet->AddFile(overlay_dst_truth_jet);
+    se->registerInputManager(in_truthjet);
+  }
+  else if (is_single_dst)
   {
     Fun4AllInputManager* in = new Fun4AllDstInputManager("DSTin");
     if (isFileList)
@@ -438,11 +573,19 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     float neg_energy_threshold = -2.0F,
                     const std::string &zs_calib_cemc = "",
                     const std::string &zs_calib_hcalin = "",
-                    const std::string &zs_calib_hcalout = "")
+                    const std::string &zs_calib_hcalout = "",
+                    bool do_emfrac_calib = false,
+                    const std::string &emfrac_calib_path = "",
+                    const std::string &overlay_dst_calo = "",
+                    const std::string &overlay_dst_truth_jet = "",
+                    float jet_pt_min = 10.0F,
+                    float truth_jet_pt_min = 5.0F)
 {
   Fun4All_BkgSub(input_dst, /*flist_dst_zdc=*/"", /*flist_dst_sepd=*/"",
                  input_QVecCalib, output, output_tree, do_flow, nEvents, nSkip, event_id,
                  dbtag, eta_calib_direct_path, event_list, do_rcone, do_mult, output_dst,
                  do_neg_energy_threshold, neg_energy_threshold,
-                 zs_calib_cemc, zs_calib_hcalin, zs_calib_hcalout);
+                 zs_calib_cemc, zs_calib_hcalin, zs_calib_hcalout,
+                 do_emfrac_calib, emfrac_calib_path,
+                 overlay_dst_calo, overlay_dst_truth_jet, jet_pt_min, truth_jet_pt_min);
 }
