@@ -44,6 +44,12 @@ import subprocess
 import sys
 import time
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import condor_schedd_utils as csu
+except Exception:  # pragma: no cover
+    csu = None
+
 # Ensure stdout and stderr are line-buffered for real-time tailing when redirected via nohup
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
@@ -499,6 +505,55 @@ def inspect_log_file(
         return False, f"Read error: {e}", None
 
 
+CONDOR_EVENT_RE = re.compile(rb"^(\d{3}) \(\d+\.\d+\.\d+\) (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", re.MULTILINE)
+CONDOR_RETVAL_RE = re.compile(rb"return value (\d+)|signal (\d+)")
+
+
+def condor_log_for(stdout_path: str | Path, condor_log_dirs: list[Path]) -> Path | None:
+    """Maps stdout/job-<cluster>-<proc>.out to <dir>/job-<cluster>-<proc>.log in the first dir that has it.
+    Condor logs live in per-submit-host dirs (often /tmp), so several dirs may be searched."""
+    name = Path(stdout_path).stem + ".log"
+    for d in condor_log_dirs:
+        p = d / name
+        if p.is_file():
+            return p
+    return None
+
+
+def check_condor_termination(log_path: Path | None) -> tuple[str | None, int | None]:
+    """
+    Reads a condor user log and reports whether the job's LAST event is a terminal one
+    even though stdout never showed a finish message (e.g. job suspended/killed and then
+    reported as 'Normal termination (return value 0)').
+
+    Returns (description or None if not terminal/unknown, mtime_ns of the log for cache keys).
+    """
+    if log_path is None:
+        return None, None
+    try:
+        st = log_path.stat()
+        with open(log_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return None, None
+    events = CONDOR_EVENT_RE.findall(data)
+    if not events:
+        return None, st.st_mtime_ns
+    last_code, last_time = events[-1][0].decode(), events[-1][1].decode()
+    suspended = sum(1 for code, _ in events if code == b"010")
+    sus = f", suspended {suspended}x" if suspended else ""
+    if last_code == "005":
+        tail = data[data.rfind(b"\n005 ") if b"\n005 " in data else 0:][:400]
+        m = CONDOR_RETVAL_RE.search(tail)
+        if m and m.group(1) == b"0":
+            return f"Failed: condor terminated (exit 0) at {last_time} without 'Finished'{sus}", st.st_mtime_ns
+        what = f"exit {m.group(1).decode()}" if m and m.group(1) else (f"signal {m.group(2).decode()}" if m else "unknown status")
+        return f"Failed: condor terminated ({what}) at {last_time} without 'Finished'{sus}", st.st_mtime_ns
+    if last_code == "009":
+        return f"Failed: condor job aborted/removed at {last_time}", st.st_mtime_ns
+    return None, st.st_mtime_ns
+
+
 def generate_completion_report(
     target_dir: Path,
     start_time: datetime,
@@ -697,8 +752,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--notify-on-failure",
-        action="store_true",
-        help="Send email notification if all jobs finish running but some had errors",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Send email notification if all jobs stop running but some had errors (default: on)",
+    )
+    parser.add_argument(
+        "--condor-log-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory with condor event logs job-<cluster>-<proc>.log used to detect jobs that "
+        "terminated without a finish message. Repeatable (logs are per submit host). Also auto-tried: "
+        "<job_dir>/logs and the 'log =' dir of the .sub if it exists on this host",
+    )
+    parser.add_argument(
+        "--schedd-check-minutes",
+        type=float,
+        default=30.0,
+        help="Min. interval between condor_q/condor_history queries of all schedds for stalled jobs (default: 30)",
+    )
+    parser.add_argument(
+        "--stale-minutes",
+        type=float,
+        default=120.0,
+        help="Report unfinished jobs whose stdout has not changed for this long as 'stalled' (default: 120; 0 disables)",
     )
     parser.add_argument(
         "--test-email",
@@ -875,10 +952,45 @@ def main() -> int:
     hostname = socket.gethostname()
     threads = max(1, args.threads)
 
+    # Condor event logs: lets us notice jobs that ended (suspended/killed/evicted...) without 'Finished'
+    condor_log_dirs: list[Path] = [Path(d) for d in args.condor_log_dir]
+    job_root = target_dir.parent if target_dir.name in ("stdout", "error", "output") else target_dir
+    condor_log_dirs.append(job_root / "logs")
+    for sub in sorted(job_root.glob("*.sub")):
+        if sub.name.endswith("_resubmit.sub"):
+            continue
+        try:
+            m = re.search(r"^\s*log\s*=\s*(\S+)", sub.read_text(errors="ignore"), re.MULTILINE)
+        except OSError:
+            m = None
+        if m:
+            condor_log_dirs.append(Path(m.group(1)).parent)
+    condor_log_dirs = [d for i, d in enumerate(condor_log_dirs) if d.is_dir() and d not in condor_log_dirs[:i]]
+    if not args.quiet:
+        if condor_log_dirs:
+            print("[INFO] Condor event logs: " + ", ".join(str(d) for d in condor_log_dirs)
+                  + " (jobs terminated without 'Finished' are flagged; per-host logs may be partial)")
+        else:
+            print("[WARNING] No condor event logs found; dead jobs can only be spotted as 'stalled' "
+                  f"(stdout silent > {args.stale_minutes:g} min). Use --condor-log-dir.")
+    stalled_ids: set[str] = set()
+    schedd_state = {"last": 0.0}  # time of last schedd query
+    superseded: set[str] = set()                      # failed stdout files whose input was resubmitted (newer job exists)
+    input_cache: dict[str, str | None] = {}           # filename -> input list from 'Reading inputs from:' line
+    input_re = re.compile(rb"^Reading inputs from:\s*(\S+)", re.MULTILINE)
+
+    def read_input(fname: str) -> str | None:
+        try:
+            with open(os.path.join(str(target_dir), fname), "rb") as fh:
+                m = input_re.search(fh.read(65536))
+            return m.group(1).decode(errors="ignore") if m else None
+        except OSError:
+            return None
+
     # Cache across checks
     completed_files: dict[str, str] = {}              # filename -> matched line
     failed_files: dict[str, str] = {}                 # filename -> error desc
-    file_stat_cache: dict[str, tuple[int, int]] = {}  # filename -> (size, mtime_ns)
+    file_stat_cache: dict[str, tuple] = {}            # filename -> (size, mtime_ns, condor log mtime_ns)
 
     # Optimize pattern matching: check if pattern is simple suffix like '*.out'
     is_suffix_pattern = args.pattern.startswith("*.") and "*" not in args.pattern[2:] and "?" not in args.pattern
@@ -928,7 +1040,15 @@ def main() -> int:
                     except OSError:
                         continue
 
-                    current_stat = (size, mtime_ns)
+                    log_mtime = None
+                    if condor_log_dirs and name.endswith(".out"):
+                        lp = condor_log_for(name, condor_log_dirs)
+                        if lp is not None:
+                            try:
+                                log_mtime = lp.stat().st_mtime_ns
+                            except OSError:
+                                log_mtime = None
+                    current_stat = (size, mtime_ns, log_mtime)
                     prev_stat = file_stat_cache.get(name)
 
                     if prev_stat == current_stat:
@@ -963,7 +1083,7 @@ def main() -> int:
                             st = entry.stat()
                             size = st.st_size
                             mtime_ns = st.st_mtime_ns
-                            current_stat = (size, mtime_ns)
+                            current_stat = (size, mtime_ns, None)
                             if file_stat_cache.get(name) == current_stat:
                                 continue
                             if size == 0:
@@ -988,6 +1108,11 @@ def main() -> int:
                     size=fsize,
                     finish_token=finish_token,
                 )
+                if not is_done and not status.startswith("Failed:") and condor_log_dirs:
+                    # stdout shows no finish/error: has condor already declared the job over?
+                    term_msg, _ = check_condor_termination(condor_log_for(fpath, condor_log_dirs))
+                    if term_msg:
+                        status = term_msg
                 return fname, fstat, is_done, status, match_str
 
             if len(entries_to_inspect) == 1:
@@ -1006,7 +1131,49 @@ def main() -> int:
                 else:
                     failed_files.pop(fname, None)
 
-        total = max(matching_count, len(completed_files) + len(failed_files))
+        # A failed job is superseded once a NEWER stdout exists for the same input (i.e. you resubmitted it).
+        # Then it no longer counts as failed/expected, so the monitor can end with a clean success.
+        if failed_files:
+            oldest = min(file_stat_cache[f][1] for f in failed_files if f in file_stat_cache) if any(f in file_stat_cache for f in failed_files) else 0
+            todo = [n for n in failed_files if n not in input_cache]
+            todo += [n for n, st in file_stat_cache.items()
+                     if n not in failed_files and n not in input_cache and st[0] > 0 and st[1] > oldest]
+            if todo:
+                for n, inp in zip(todo, executor.map(read_input, todo)):
+                    input_cache[n] = inp
+            newest_by_input: dict[str, int] = {}
+            for n, inp in input_cache.items():
+                if inp and n not in failed_files and n in file_stat_cache:
+                    newest_by_input[inp] = max(newest_by_input.get(inp, 0), file_stat_cache[n][1])
+            for n in list(failed_files):
+                inp = input_cache.get(n)
+                if inp and n in file_stat_cache and newest_by_input.get(inp, 0) > file_stat_cache[n][1]:
+                    superseded.add(n)
+                    failed_files.pop(n)
+
+        # Unfinished jobs whose stdout has been silent for a long time (likely dead; no condor log needed)
+        stalled_ids.clear()
+        if args.stale_minutes > 0:
+            cutoff_ns = time.time_ns() - int(args.stale_minutes * 60e9)
+            for fname, fst in file_stat_cache.items():
+                if fname not in completed_files and fname not in failed_files and fname not in superseded and 0 < fst[1] < cutoff_ns and fst[0] > 0:
+                    stalled_ids.add(fname)
+
+        # Stalled jobs: ask the schedds (works from any submit host, unlike /tmp event logs) whether
+        # condor already considers them over. History is partial, so this only adds certainty.
+        if stalled_ids and csu is not None and csu.condor_available() and time.time() - schedd_state["last"] > args.schedd_check_minutes * 60:
+            schedd_state["last"] = time.time()
+            ads, _st = csu.query_job_ads([job_root])
+            for fname in sorted(stalled_ids):
+                m = re.match(r"job-(\d+)-(\d+)\.out$", fname)
+                ad = ads.get(f"{m.group(1)}.{m.group(2)}") if m else None
+                if ad and ad["status"] in (3, 4):
+                    what = "removed" if ad["status"] == 3 else (f"exit {ad['exit_code']}" if not ad["by_signal"] else f"signal {ad['signal']}")
+                    sus = f", suspended {ad['suspensions']}x" if ad["suspensions"] else ""
+                    failed_files[fname] = f"Failed: schedd says job {csu.STATUS_NAMES[ad['status']]} ({what}{sus}) on {ad['host']} but no 'Finished'"
+                    stalled_ids.discard(fname)
+
+        total = max(matching_count - len(superseded), len(completed_files) + len(failed_files))
         done = len(completed_files)
         errs = len(failed_files)
         in_prog = max(0, total - done - errs)
@@ -1035,7 +1202,11 @@ def main() -> int:
             if total_missing > 0:
                 print(f"  - Missing inputs: {total_missing}")
             print(f"In-progress jobs:   {in_prog}")
+            if stalled_ids:
+                print(f"  - Stalled (stdout silent > {args.stale_minutes:g} min): {len(stalled_ids)}  e.g. {sorted(stalled_ids)[:3]}")
             print(f"Failed jobs:        {len(failed_files)}")
+            if superseded:
+                print(f"Superseded (failed, then resubmitted): {len(superseded)}")
             print("=" * 70)
 
             if failed_files:
@@ -1194,6 +1365,11 @@ def main() -> int:
                 status_parts = [f"{done}/{total} finished ({pct:.1f}%){skim_str}"]
                 if in_prog > 0:
                     status_parts.append(f"{in_prog} in progress")
+                if superseded:
+                    status_parts.append(f"{len(superseded)} failed job(s) superseded by resubmission")
+                if stalled_ids:
+                    status_parts.append(f"{len(stalled_ids)} STALLED (no stdout update for >{args.stale_minutes:g} min; "
+                                        "check with find_incomplete_jobs.py)")
                 if fail_count > 0:
                     status_parts.append(f"{fail_count} failed")
                 if expected_jobs and accounted_total < expected_jobs:
