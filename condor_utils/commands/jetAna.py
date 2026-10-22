@@ -1,3 +1,4 @@
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -5,6 +6,22 @@ from pathlib import Path
 from condor_utils.core.helpers import chunk_list
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.cli import get_common_parser, add_build_args
+
+# Leading truth R=0.4 jet pT window [min, max) of each data+MC overlay pT-hat sample, max < 0: no upper edge.
+# Each window starts where the sample is complete: luminosity normalized, it agrees with the next lower sample
+# from there on. The generator trigger turn-on extends past the nominal threshold (run 68144 overlay):
+# Jet20 is 12% low at 20-21 GeV and 2.5% low up to 25 GeV, Jet30 / Jet40 are 7-8% low in their first GeV.
+OVERLAY_WINDOWS = {"Jet12": (12.0, 25.0), "Jet20": (25.0, 31.0), "Jet30": (31.0, 41.0), "Jet40": (41.0, -1.0)}
+
+def parse_window(text):
+    """Parses SAMPLE=MIN,MAX (e.g. Jet20=20,30 or Jet40=40,-1) into (sample, (min, max))."""
+    m = re.fullmatch(r'(\w+)=([^,]+),([^,]+)', text)
+    try:
+        if not m:
+            raise ValueError
+        return m.group(1), (float(m.group(2)), float(m.group(3)))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid window '{text}', expected SAMPLE=MIN,MAX (e.g. Jet20=20,30)") from None
 
 def run_jet_jobs(args, version):
     manager = CondorJobManager(args, job_name=version)
@@ -14,6 +31,8 @@ def run_jet_jobs(args, version):
         manager.add_file_to_check(args.calo_mbd_list)
         if args.jes_z0_file:
             manager.add_file_to_check(args.jes_z0_file)
+    elif version == "jetJES":
+        manager.add_file_to_check(args.calo_mbd_list)
     manager.add_file_to_check(args.jetAna_macro)
     manager.add_file_to_check(args.jetAna_bin)
 
@@ -53,6 +72,14 @@ def run_jet_jobs(args, version):
         init_log['Lead Jet pT Threshold'] = f"{args.lead_jet_pt_threshold} GeV"
         init_log['Sigma Cut'] = args.sigma_cut
         init_log['JES Z0 File'] = Path(args.jes_z0_file).resolve() if args.jes_z0_file else "Not Provided (Using stored eta-binned pt_calib)"
+    elif version == "jetJES":
+        # the jet pT is not cut on, the response is filled for every matched truth jet
+        del init_log['Jet pT Min']
+        init_log['Calo-MBD List'] = Path(args.calo_mbd_list).resolve()
+        windows = {**OVERLAY_WINDOWS, **dict(args.window or [])}
+        init_log['Lead Truth R=0.4 Jet pT Windows'] = ", ".join(
+            f"{sample}: [{lo}, {'inf' if hi < 0 else hi})" for sample, (lo, hi) in windows.items()) + " GeV"
+        init_log['Sigma Cut'] = args.sigma_cut
 
     manager.log_initialization(init_log)
 
@@ -77,10 +104,36 @@ def run_jet_jobs(args, version):
             run_trees[run_id] = []
         run_trees[run_id].append(str(tree_path))
 
+    # job groups: (run, chunk file tag, trees, extra jobs.list fields)
+    if version == "jetJES":
+        # the overlay pT-hat samples share the data run number: split each run by sample,
+        # every job gets the window of its sample and writes to its own sample directory
+        sample_trees = {}
+        for run_id, trees in run_trees.items():
+            for tree in trees:
+                m = re.search(r'/(Jet\d+)/', tree)
+                if not m:
+                    manager.logger.critical(f"No overlay sample (/JetNN/) in tree path: {tree}")
+                    sys.exit(1)
+                sample_trees.setdefault((run_id, m.group(1)), []).append(tree)
+
+        missing = sorted({sample for _, sample in sample_trees} - windows.keys())
+        if missing:
+            manager.logger.critical(f"No lead truth pT window for samples {missing}: add --window SAMPLE=MIN,MAX")
+            sys.exit(1)
+
+        groups = []
+        for (run_id, sample), trees in sorted(sample_trees.items()):
+            lo, hi = windows[sample]
+            manager.logger.info(f"Overlay Sample {sample} (run {run_id}): {len(trees)} trees, window [{lo}, {'inf' if hi < 0 else hi}) GeV")
+            groups.append((run_id, f"{sample}_{run_id}", trees, f",{lo},{hi},{sample}"))
+    else:
+        groups = [(run_id, run_id, trees, "") for run_id, trees in run_trees.items()]
+
     if version == "jetAna":
         run_paths = [Path(l.strip()) for l in Path(args.f4a_qa_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
         run_map = {p.stem: str(p) for p in run_paths}
-    elif version == "jetAnav3":
+    elif version in ("jetAnav3", "jetJES"):
         run_paths = [Path(l.strip()) for l in Path(args.calo_mbd_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
         run_map = {}
         for p in run_paths:
@@ -92,24 +145,24 @@ def run_jet_jobs(args, version):
     total_jobs = 0
 
     with open(jobs_list_file, mode='w', encoding='utf-8') as f_jobs:
-        for run_id, trees in run_trees.items():
+        for run_id, tag, trees, extra in groups:
             if version == "jetAna":
                 if run_id not in run_map:
                     manager.logger.warning(f"Run {run_id} found in input trees but not in QA list. Skipping.")
                     continue
                 qa_file = run_map[run_id]
-            elif version == "jetAnav3":
+            elif version in ("jetAnav3", "jetJES"):
                 qa_file = run_map.get(run_id) or run_map.get(run_id.lstrip('0'))
                 if not qa_file:
                     manager.logger.warning(f"Run {run_id} found in input trees but not in Calo-MBD list. Skipping.")
                     continue
 
             for i, chunk in enumerate(chunk_list(trees, files_per_job)):
-                chunk_file = files_dir / f'{run_id}_part_{i}.list'
+                chunk_file = files_dir / f'{tag}_part_{i}.list'
                 chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
 
-                if version in ("jetAna", "jetAnav3"):
-                    f_jobs.write(f"{chunk_file},{qa_file}\n")
+                if version in ("jetAna", "jetAnav3", "jetJES"):
+                    f_jobs.write(f"{chunk_file},{qa_file}{extra}\n")
                 else:
                     f_jobs.write(f"{chunk_file}\n")
                 total_jobs += 1
@@ -125,6 +178,9 @@ def run_jet_jobs(args, version):
     elif version == "jetAnav3":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
+    elif version == "jetJES":
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample)"
+        queue_arg = "input_tree_list,input_calo_mbd,lead_truth_pt_min,lead_truth_pt_max,sample from jobs.list"
     else:
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
@@ -141,6 +197,9 @@ def jetAnav2_jobs(args):
 
 def jetAnav3_jobs(args):
     run_jet_jobs(args, "jetAnav3")
+
+def jetJES_jobs(args):
+    run_jet_jobs(args, "jetJES")
 
 def add_common_args(parser, name_suffix):
     parser.add_argument('-i', '--input-list', type=str, required=True, help='List of TTrees to analyze.')
@@ -184,3 +243,12 @@ def setup_jetAna_subparsers(subparsers):
     jetAnav3.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
     jetAnav3.add_argument('--jes-z0-file', type=str, default=None, help='Legacy JES payload (JES_Calib_Default); recalibrates the raw jet pT with its eta-averaged R0X_Z0 function instead of the stored eta-binned pt_calib. (Optional)')
     jetAnav3.set_defaults(func=jetAnav3_jobs)
+
+    jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay JES, all pT-hat samples of the input list in one submission).')
+    add_common_args(jetJES, "JES")
+    add_build_args(jetJES)
+    jetJES.add_argument('-i2', '--calo-mbd-list', '--event-qa-list', dest='calo_mbd_list', type=str, required=True, help='List of Calo-MBD / Event QA files.')
+    windows_help = ", ".join(f"{s}={lo:g},{hi:g}" for s, (lo, hi) in OVERLAY_WINDOWS.items())
+    jetJES.add_argument('--window', type=parse_window, action='append', metavar='SAMPLE=MIN,MAX', help=f'Leading truth R=0.4 jet pT window [MIN, MAX) GeV of a pT-hat sample (MAX < 0: no upper edge), overrides or adds to the defaults: {windows_help}. Repeatable.')
+    jetJES.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
+    jetJES.set_defaults(func=jetJES_jobs)
