@@ -6,9 +6,17 @@
 #include <utility>
 #include <vector>
 
+class GlobalVertex;
+class GlobalVertexMap;
+
 class JetUtils
 {
  public:
+  // First vertex in the map backed by a measured (SVTX/MBD/CALO) or TRUTH vertex.
+  // Skips the z = 0 placeholder GlobalVertexReco adds by default (VTXTYPE ZERO);
+  // returns nullptr if there is none.
+  static GlobalVertex *get_event_vertex(GlobalVertexMap *vertexmap);
+
   static bool check_bad_jet_eta(double jet_eta, double zvtx, double jet_radius);
   static std::pair<double, double> get_valid_eta_range(
       double zvtx,

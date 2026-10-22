@@ -339,6 +339,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Official vertex storage
   GlobalVertexReco* gvertex = new GlobalVertexReco();
   gvertex->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  // MBD only: the default (UNDEFINED) also adds a z = 0 placeholder vertex every event
+  gvertex->setVertexType(GlobalVertex::VTXTYPE::MBD);
   se->registerSubsystem(gvertex);
 
   // Trigger Info Reco

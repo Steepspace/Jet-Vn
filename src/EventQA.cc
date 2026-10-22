@@ -1,4 +1,5 @@
 #include "EventQA.h"
+#include "JetUtils.h"
 
 #include <treefiller/TreeFiller.h>
 
@@ -191,18 +192,15 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  if (!vertexmap->empty())
+  GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap);
+  if (vtx)
   {
-    GlobalVertex *vtx = vertexmap->begin()->second;
-    if (vtx)
-    {
-      m_data.zvtx = vtx->get_z();
-      zvtx = m_data.zvtx;
+    m_data.zvtx = vtx->get_z();
+    zvtx = m_data.zvtx;
 
-      if (m_do_hist)
-      {
-        hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX));
-      }
+    if (m_do_hist)
+    {
+      hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX));
     }
   }
 

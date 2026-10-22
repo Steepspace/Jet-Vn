@@ -94,6 +94,8 @@ void Fun4All_CaloCheck(const std::string &fname,
   // Official vertex storage
   std::unique_ptr<GlobalVertexReco> gvertex = std::make_unique<GlobalVertexReco>();
   gvertex->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+  // MBD only: the default (UNDEFINED) also adds a z = 0 placeholder vertex every event
+  gvertex->setVertexType(GlobalVertex::VTXTYPE::MBD);
   se->registerSubsystem(gvertex.release());
 
   // Calibrate Towers

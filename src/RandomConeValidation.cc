@@ -1,4 +1,5 @@
 #include "RandomConeValidation.h"
+#include "JetUtils.h"
 
 #include <iostream>
 
@@ -152,13 +153,9 @@ int RandomConeValidation::process_event(PHCompositeNode *topNode)
   {
     std::cout << "RandomConeValidation: GlobalVertexMap null" << std::endl;
   }
-  else if (!vertexmap->empty())
+  else if (GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap))
   {
-    GlobalVertex *vtx = vertexmap->begin()->second;
-    if (vtx)
-    {
-      zvtx = vtx->get_z();
-    }
+    zvtx = vtx->get_z();
   }
 
   // Unsubtracted cones (randomly chosen eta, phi)

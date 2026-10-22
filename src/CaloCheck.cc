@@ -62,6 +62,7 @@
 //____________________________________________________________________________..
 
 #include "CaloCheck.h"
+#include "JetUtils.h"
 #include "geometry_constants.h"
 
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -172,9 +173,9 @@ int CaloCheck::process_event([[maybe_unused]] PHCompositeNode* topNode)
 
   double zvtx = -9999;
 
-  if (!vertexmap->empty())
+  GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap);
+  if (vtx)
   {
-    GlobalVertex *vtx = vertexmap->begin()->second;
     zvtx = vtx->get_z();
   }
 

@@ -117,9 +117,9 @@ int JetValidation::process_event_check(PHCompositeNode *topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
-  if (!vertexmap->empty())
+  GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap);
+  if (vtx)
   {
-    GlobalVertex *vtx = vertexmap->begin()->second;
     m_zvtx = vtx->get_z();
   }
 

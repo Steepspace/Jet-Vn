@@ -351,13 +351,9 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
   {
     std::cout << "JetValidationv3: GlobalVertexMap null" << std::endl;
   }
-  else if (!vertexmap->empty())
+  else if (GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap))
   {
-    GlobalVertex *vtx = vertexmap->begin()->second;
-    if (vtx)
-    {
-      zvtx = vtx->get_z();
-    }
+    zvtx = vtx->get_z();
   }
 
   // EMfrac-calibrated counterpart of a legacy calib node (nullptr unless m_do_emfrac)

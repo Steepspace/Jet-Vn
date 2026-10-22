@@ -1,6 +1,31 @@
 #include "JetUtils.h"
+
+#include <globalvertex/GlobalVertex.h>
+#include <globalvertex/GlobalVertexMap.h>
+
 #include <sstream>
 #include <cmath>
+
+GlobalVertex *JetUtils::get_event_vertex(GlobalVertexMap *vertexmap)
+{
+  if (!vertexmap)
+  {
+    return nullptr;
+  }
+
+  for (const auto &[id, vtx] : *vertexmap)
+  {
+    if (vtx && (vtx->count_vtxs(GlobalVertex::SVTX) ||
+                vtx->count_vtxs(GlobalVertex::MBD) ||
+                vtx->count_vtxs(GlobalVertex::CALO) ||
+                vtx->count_vtxs(GlobalVertex::TRUTH)))
+    {
+      return vtx;
+    }
+  }
+
+  return nullptr;
+}
 
 bool JetUtils::failsLoEmFracETCut(const double emFrac, const double ET)
 {

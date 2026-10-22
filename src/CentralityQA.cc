@@ -1,4 +1,5 @@
 #include "CentralityQA.h"
+#include "JetUtils.h"
 
 // -- Fun4All
 #include <fun4all/Fun4AllReturnCodes.h>
@@ -177,13 +178,13 @@ int CentralityQA::process_event_check(PHCompositeNode *topNode)
   {
     return Fun4AllReturnCodes::ABORTRUN;
   }
-  if (vertexmap->empty())
+  GlobalVertex *vtx = JetUtils::get_event_vertex(vertexmap);
+  if (!vtx)
   {
     ++m_ctr["events_no_vertex"];
     return Fun4AllReturnCodes::ABORTEVENT;
   }
 
-  GlobalVertex *vtx = vertexmap->begin()->second;
   m_zvtx = vtx->get_z();
 
   hEvent->Fill(static_cast<int>(EventType::ZVTX));
