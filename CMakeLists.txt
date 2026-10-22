@@ -152,6 +152,10 @@ target_link_libraries(Jet-Anav2 PRIVATE ${STANDALONE_MACRO_LIBS})
 add_executable(Jet-Anav3 macros/Jet-Anav3.C)
 target_link_libraries(Jet-Anav3 PRIVATE ${STANDALONE_MACRO_LIBS})
 
+# --- Jet JES (data+MC overlay) ---
+add_executable(Jet-JES macros/Jet-JES.C)
+target_link_libraries(Jet-JES PRIVATE ${STANDALONE_MACRO_LIBS})
+
 # --- Calo Ana ---
 add_executable(Calo-Ana macros/Calo-Ana.C)
 target_link_libraries(Calo-Ana PRIVATE ${STANDALONE_MACRO_LIBS})
