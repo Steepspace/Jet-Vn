@@ -9,6 +9,9 @@ Here they are weighted by 1 / IntegratedLumi_job (h_gen_integral of the Fun4All 
 The response pT_reco / pT_truth of matched jets is fitted with an iterative Gaussian in truth-pT bins:
 JES = Gaussian mean, JER = sigma / mean. Both the raw pT and the stored pt_calib (eta-binned legacy JES) are shown.
 Below --pt-trust-min the response is truncated by the tree cut (reco pt_calib >= 10 GeV).
+
+The eta plots compare the shape of dN/deta of all truth jets with all reco jets (raw and calibrated pT) above a pT cut,
+to see whether the step at the legacy JES eta-bin edge seen in data shows up in the calibrated MC jets but not in truth.
 """
 
 import argparse
@@ -54,6 +57,17 @@ OVERLAY_TEXT = "Data + PYTHIA8 Overlay (Jet12–40)"
 JES_YLABEL = r"$\langle p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}} \rangle$ (Gaussian $\mu$)"
 JER_YLABEL = r"$\sigma / \mu$ of $p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}}$"
 TRUTH_PT_LABEL = r"$p_{T}^{\mathrm{truth}}$ [GeV]"
+
+# eta distributions (h2TruthEta / h2RecoEta): truth jets, reco jets with raw pT and with pt_calib
+ETA_SERIES = {
+    "truth": {"label": "Truth", "color": "black", "marker": "o"},
+    "raw": {"label": CALIBS["raw"]["label"], "color": "#4daf4a", "marker": "s"},
+    "calib": {"label": CALIBS["calib"]["label"], "color": "#984ea3", "marker": "D"},
+}
+ETA_REBIN = 2  # 0.025 -> 0.05, keeps the legacy edges (0.45, 0.5) and the fiducial cuts (0.8, 0.9) on bin edges
+ETA_STEP_WIDTH = 0.1  # |eta| band on each side of the legacy edge for the step of reco / truth
+ETA_SIDES = {"neg": -1, "pos": 1}  # step at -edge and +edge
+ETA_COUNT_WIDTH = 0.05  # count ratio across the edge, as in data (tasks/jet-eta-step-jes-calib.md)
 
 
 def parse_sample_list(list_file):
@@ -551,6 +565,94 @@ def plot_cent_grid(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_
     plt.close(fig)
 
 
+def eta_hist_name(series, r_tag, ue):
+    return f"h2TruthEta_{r_tag}" if series == "truth" else f"h2RecoEta_{series}_{r_tag}_{ue}"
+
+
+def eta_projection(h2, pt_min):
+    """eta distribution of the TH2 (pT, eta) for pT >= pt_min, rebinned by ETA_REBIN."""
+    sl = pt_slice(h2["edges"][0], pt_min, h2["edges"][0][-1])
+    vals, variances, edges = h2["values"][sl].sum(axis=0), h2["variances"][sl].sum(axis=0), h2["edges"][1]
+    return vals.reshape(-1, ETA_REBIN).sum(axis=1), variances.reshape(-1, ETA_REBIN).sum(axis=1), edges[::ETA_REBIN]
+
+
+def eta_step(reco, truth, centers, edge, side):
+    """(reco / truth just outside eta = side * edge) / (reco / truth just inside), in bands of ETA_STEP_WIDTH, with its error."""
+    x = side * centers
+    outside = (x > edge) & (x < edge + ETA_STEP_WIDTH)
+    inside = (x < edge) & (x > edge - ETA_STEP_WIDTH)
+    sums = [(h[0][m].sum(), h[1][m].sum()) for h in (reco, truth) for m in (outside, inside)]
+    (ro, ro_var), (ri, ri_var), (to, to_var), (ti, ti_var) = sums
+    step = (ro / to) / (ri / ti)
+    return step, step * np.sqrt(ro_var / ro ** 2 + ri_var / ri ** 2 + to_var / to ** 2 + ti_var / ti ** 2)
+
+
+def eta_count_ratio(h, centers, edge):
+    """N(edge <= |eta| < edge + ETA_COUNT_WIDTH) / N(edge - ETA_COUNT_WIDTH <= |eta| < edge), both sides of eta = 0, with its error:
+    the step ratio quoted for data in tasks/jet-eta-step-jes-calib.md."""
+    vals, variances = h
+    outside = (np.abs(centers) > edge) & (np.abs(centers) < edge + ETA_COUNT_WIDTH)
+    inside = (np.abs(centers) < edge) & (np.abs(centers) > edge - ETA_COUNT_WIDTH)
+    o, o_var, i, i_var = vals[outside].sum(), variances[outside].sum(), vals[inside].sum(), variances[inside].sum()
+    return o / i, o / i * np.sqrt(o_var / o ** 2 + i_var / i ** 2)
+
+
+def plot_eta_dist(hists, r_tag, ue, run, pt_min, out_path, save_pdf):
+    """Shape of dN/deta of the truth, raw and calibrated reco jets with pT >= pt_min (0-60%), with reco / truth.
+    Returns {series: {"count_ratio": (ratio, error), side: (step of reco / truth, error)}}, without the steps for truth."""
+    hep.style.use("ATLAS")
+    r_jet = RADII[r_tag]
+    eta_max = round(1.1 - r_jet, 1)
+    edges_leg = legacy_eta_edges(r_jet)
+    fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
+
+    proj, shapes = {}, {}
+    for key, meta in ETA_SERIES.items():
+        vals, variances, edges = eta_projection(hists[eta_hist_name(key, r_tag, ue)], pt_min)
+        centers = 0.5 * (edges[1:] + edges[:-1])
+        fid = np.flatnonzero(np.abs(centers) < eta_max)
+        sl = slice(fid[0], fid[-1] + 1)
+        norm = vals[sl].sum() * np.diff(edges)[sl]
+        proj[key] = (vals[sl], variances[sl])
+        shapes[key] = {"values": vals[sl] / norm, "errors": np.sqrt(variances[sl]) / norm}
+        pt_label = r"p_{T}^{\mathrm{truth}}" if key == "truth" else rf"p_{{T}}^{{\mathrm{{reco, {key}}}}}"
+        hep.histplot((shapes[key]["values"], edges[sl.start:sl.stop + 1]), yerr=shapes[key]["errors"], ax=ax, histtype="errorbar",
+                     color=meta["color"], marker=meta["marker"], markersize=4, label=rf"{meta['label']}, ${pt_label} \geq {pt_min:g}$ GeV")
+    centers = centers[sl]
+    edge = abs(edges_leg[0])
+
+    steps = {key: {"count_ratio": eta_count_ratio(proj[key], centers, edge)} for key in ETA_SERIES}
+    ratios = []
+    for key in ("raw", "calib"):
+        num, den = shapes[key], shapes["truth"]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = num["values"] / den["values"]
+            err = calc_ratio_errors(ratio, num["errors"], den["errors"], den["values"])
+        ok = np.isfinite(ratio)
+        ax_ratio.errorbar(centers[ok], ratio[ok], yerr=err[ok], xerr=0.5 * np.diff(edges)[0], fmt=ETA_SERIES[key]["marker"],
+                          color=ETA_SERIES[key]["color"], markersize=4, capsize=2, linewidth=1.0)
+        ratios += list(ratio[ok & (err < 0.05)])
+        for side, sign in ETA_SIDES.items():
+            steps[key][side] = eta_step(proj[key], proj["truth"], centers, edge, sign)
+
+    for a in (ax, ax_ratio):
+        for x in edges_leg:
+            a.axvline(x, color="gray", linestyle="--", linewidth=1, label="Legacy JES $\\eta$-bin edges" if a is ax and x == edges_leg[0] else None)
+    ax.set_xlim(-eta_max, eta_max)
+    ax.set_ylim(0, max(s["values"].max() for s in shapes.values()) * 3.0)
+    ax.set_ylabel(r"$\frac{1}{N_{\mathrm{jets}}}\frac{dN}{d\eta}$")
+    add_header(ax, run, r_jet, None)
+    ax.legend(loc="upper left", frameon=False, fontsize=12)
+    info_box(ax, ue, extra=rf"All jets, $|\eta| < {eta_max:g}$", y=0.73, fontsize=12)
+    step_text = "; ".join(f"{key} " + ", ".join(f"{steps[key][side][0]:.3f} $\\pm$ {steps[key][side][1]:.3f}" for side in ETA_SIDES) for key in ("raw", "calib"))
+    ax_ratio.text(0.5, 0.05, rf"Step at $\eta = \mp{edge:g}$: {step_text}", transform=ax_ratio.transAxes, ha="center", va="bottom", fontsize=10)
+    setup_ratio_panel(ax_ratio, xlabel=r"$\eta$", ylabel="Reco / Truth", all_ratios=ratios, min_margin=0.05)
+    plt.subplots_adjust(left=0.15, right=0.96, bottom=0.10, top=0.94)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+    return steps
+
+
 def fit_group(hists, r_tag, ue, n_sigma):
     """Fits per pT bin for every calib x (mid, fwd, eta0-3 at 0-60%; mid, fwd per centrality class)."""
     selections = [(region, meta["eta_bins"], CENT_ALL) for region, meta in REGIONS.items()]
@@ -565,8 +667,8 @@ def fit_group(hists, r_tag, ue, n_sigma):
 
 
 def run_group(task):
-    """All JES plots of one jet radius and subtraction method. Returns the number of figures and the table rows."""
-    r_tag, ue, hists, run, pt_trust_min, n_sigma, output_dir, save_pdf = task
+    """All JES and eta plots of one jet radius and subtraction method. Returns the number of figures, the table rows and the eta steps."""
+    r_tag, ue, hists, run, pt_trust_min, n_sigma, eta_pt_mins, output_dir, save_pdf = task
     results = fit_group(hists, r_tag, ue, n_sigma)
     tag = f"{r_tag}_{ue}"
     n = 0
@@ -581,24 +683,35 @@ def run_group(task):
         plot_cent_grid(results, r_tag, ue, calib, run, pt_trust_min, output_dir / "jes_cent" / f"jes_cent_{tag}_{calib}.png", save_pdf)
         n += 5
 
+    steps = []
+    for pt_min in eta_pt_mins:
+        res = plot_eta_dist(hists, r_tag, ue, run, pt_min, output_dir / "eta" / f"eta_{tag}_pt{pt_min:g}.png", save_pdf)
+        for series, vals in res.items():
+            row = {"R": RADII[r_tag], "ue": ue, "pt_min": pt_min, "series": series}
+            for key in ("count_ratio", *ETA_SIDES):
+                row[key], row[f"{key}_err"] = vals.get(key, (np.nan, np.nan))
+            steps.append(row)
+        n += 1
+
     rows = []
     for (calib, region, cent), res in results.items():
         for (lo, hi), r in zip(zip(PT_BINS[:-1], PT_BINS[1:]), res):
             rows.append({"R": RADII[r_tag], "ue": ue, "calib": calib, "region": region, "cent": cent, "pt_lo": lo, "pt_hi": hi,
                          **{k: r[k] for k in ("mu", "mu_err", "sigma", "sigma_err", "mean", "mean_err", "n_eff")}})
-    return n, rows
+    return n, rows, steps
 
 
 def group_hists(stitched, r_tag, ue):
     """The stitched histograms one (R, method) group needs."""
     keep = (f"_{r_tag}_{ue}_", f"hTruth_{r_tag}_")
-    names = [k for k in stitched if any(s in k for s in keep) or k in (f"h2DeltaR_{r_tag}_{ue}", f"h2DeltaEta_{r_tag}_{ue}")]
+    exact = (f"h2DeltaR_{r_tag}_{ue}", f"h2DeltaEta_{r_tag}_{ue}", *(eta_hist_name(s, r_tag, ue) for s in ETA_SERIES))
+    names = [k for k in stitched if any(s in k for s in keep) or k in exact]
     return {k: stitched[k] for k in names}
 
 
 def main():
     parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay (Jet-JES outputs), mid-rapidity vs forward eta.")
-    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-21-26-windows-regen/test.list"),
+    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26/test.list"),
                         help="List of merged Jet-JES ROOT files, one per sample (JetNN in the path)")
     parser.add_argument("-g", "--gen-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list"),
                         help="List of the merged Fun4All overlay hist files with h_gen_integral, one per sample (JetNN in the path)")
@@ -607,6 +720,8 @@ def main():
     parser.add_argument("--methods", nargs="+", default=["iter", "iternf"], choices=["iter", "iternf"], help="Subtraction methods (default: iter iternf)")
     parser.add_argument("--pt-trust-min", type=float, default=20.0, help="Truth pT below which the response is truncated by the reco tree cut, shaded (default: 20 GeV)")
     parser.add_argument("--n-sigma", type=float, default=1.5, help="Gaussian fit range in sigma around the mean (default: 1.5)")
+    parser.add_argument("--eta-pt-mins", nargs="+", type=float, default=[10, 15, 20, 30],
+                        help="pT cuts of the eta distributions, on the 1 GeV grid (default: 10 15 20 30 GeV; 10 is the data cut)")
     parser.add_argument("--run", type=int, default=68144, help="Data run of the overlay, for the header (default: 68144)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1), help="Number of parallel worker processes")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF version of plots in addition to PNG")
@@ -644,7 +759,7 @@ def main():
 
     stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
-    tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, args.pt_trust_min, args.n_sigma, args.output_dir, args.save_pdf)
+    tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, args.pt_trust_min, args.n_sigma, args.eta_pt_mins, args.output_dir, args.save_pdf)
              for r_tag in RADII for ue in args.methods]
     n_jobs = max(1, min(args.jobs, len(tasks)))
     print(f"Generating JES plots for {len(tasks)} (R, method) groups with {n_jobs} worker(s)")
@@ -654,15 +769,28 @@ def main():
         with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
             outputs = list(executor.map(run_group, tasks))
 
-    rows = [row for _, group_rows in outputs for row in group_rows]
-    table_path = args.output_dir / "jes_table.csv"
-    table_path.parent.mkdir(parents=True, exist_ok=True)
-    with table_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Saved: {table_path}")
-    print(f"Generated {3 + len(RADII) + sum(n for n, _ in outputs)} plots in {args.output_dir}")
+    steps = [row for *_, group_steps in outputs for row in group_steps]
+    print(f"\nAt the legacy JES eta-bin edge: count ratio across it ({ETA_COUNT_WIDTH:g} wide |eta| bands, both sides), "
+          f"and step of reco / truth at -edge and +edge ({ETA_STEP_WIDTH:g} wide bands)")
+    columns = [(series, "count_ratio") for series in ETA_SERIES] + [(series, side) for series in ("raw", "calib") for side in ETA_SIDES]
+    print(f"{'R':<5}{'UE':<8}{'pT min':>8}" + "".join(f"{f'{series} {key}':>20}" for series, key in columns))
+    rows_by = {(s["R"], s["ue"], s["pt_min"], s["series"]): s for s in steps}
+    for (r, ue, pt_min) in dict.fromkeys(k[:3] for k in rows_by):
+        cells = [rows_by[(r, ue, pt_min, series)] for series, _ in columns]
+        values = [f"{c[key]:.3f} +- {c[f'{key}_err']:.3f}" for c, (_, key) in zip(cells, columns)]
+        print(f"{r:<5g}{ue:<8}{pt_min:>8g}" + "".join(f"{v:>20}" for v in values))
+    print()
+
+    rows = [row for _, group_rows, _ in outputs for row in group_rows]
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    for name, table in (("jes_table.csv", rows), ("eta_step_table.csv", steps)):
+        table_path = args.output_dir / name
+        with table_path.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=list(table[0]))
+            writer.writeheader()
+            writer.writerows(table)
+        print(f"Saved: {table_path}")
+    print(f"Generated {3 + len(RADII) + sum(n for n, *_ in outputs)} plots in {args.output_dir}")
 
 
 if __name__ == "__main__":
