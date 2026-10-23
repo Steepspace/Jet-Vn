@@ -7,20 +7,50 @@ from condor_utils.core.helpers import chunk_list
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.cli import get_common_parser, add_build_args
 
+def collect_run_files(input_path, logger):
+    """
+    ROOT files to merge, grouped by run: {run_name: [files]}.
+    A directory holds one subdirectory per run (files in it or in its hist/).
+    A list file holds one ROOT file per line; each file goes to its run directory,
+    the parent directory (or the one above it for hist/), as in directory mode.
+    """
+    runs = {}
+    if input_path.is_dir():
+        for run_dir in [d for d in input_path.iterdir() if d.is_dir()]:
+            root_files = list(run_dir.glob('*.root'))
+            if not root_files:
+                root_files = list(run_dir.glob('hist/*.root'))
+            if not root_files:
+                logger.warning(f"No root files found for run {run_dir.name}, skipping.")
+                continue
+            runs[run_dir.name] = root_files
+        return runs
+
+    lines = [l.strip() for l in input_path.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+    missing = [l for l in lines if not Path(l).is_file()]
+    if missing:
+        logger.critical(f"{len(missing)} file(s) in {input_path} do not exist, e.g. {missing[0]}")
+        sys.exit(1)
+    for line in lines:
+        rfile = Path(line)
+        run_dir = rfile.parent.parent if rfile.parent.name == 'hist' else rfile.parent
+        runs.setdefault(run_dir.name, []).append(rfile)
+    return runs
+
 def hadd_jobs(args):
     manager = CondorJobManager(args, job_name="hadd")
     manager.add_file_to_check(args.condor_script)
     manager.validate_paths()
 
-    input_dir = Path(args.input_dir).resolve()
-    if not input_dir.is_dir():
-        manager.logger.critical(f'Dir: {input_dir} does not exist!')
+    input_path = Path(args.input_dir).resolve()
+    if not input_path.exists():
+        manager.logger.critical(f'Input: {input_path} does not exist!')
         sys.exit(1)
 
     files_per_job = args.hadd_max
 
     manager.log_initialization({
-        'Input Dir': input_dir,
+        'Input': input_path,
         'Files Per Job': files_per_job,
     })
 
@@ -34,23 +64,14 @@ def hadd_jobs(args):
 
     manager.logger.info("Starting STAGE 1: Partial Merging")
 
-    run_dirs = [d for d in input_dir.iterdir() if d.is_dir()]
+    runs = collect_run_files(input_path, manager.logger)
     job_counter = 0
     stage1_jobs_list = manager.output_dir / 'jobs_stage1.list'
 
-    manager.logger.info(f'Run Dirs: {run_dirs}')
+    manager.logger.info(f'Runs: {", ".join(f"{run} ({len(files)} files)" for run, files in runs.items())}')
 
     with open(stage1_jobs_list, mode='w', encoding='utf-8') as f_list:
-        for run_dir in run_dirs:
-            run_name = run_dir.name
-            root_files = list(run_dir.glob('*.root'))
-            if not root_files:
-                root_files = list(run_dir.glob('hist/*.root'))
-
-            if not root_files:
-                manager.logger.warning(f"No root files found for run {run_name}, skipping.")
-                continue
-
+        for run_name, root_files in runs.items():
             if len(root_files) == 1:
                 dst = manager.output_dir / 'output' / f"{run_name}.root"
                 manager.logger.info(f"Run {run_name} has only 1 root file. Copying directly to final output.")
@@ -95,8 +116,7 @@ def hadd_jobs(args):
     stage2_counter = 0
 
     with open(stage2_jobs_list, mode='w', encoding='utf-8') as f_list:
-        for run_dir in run_dirs:
-            run_name = run_dir.name
+        for run_name in runs:
             partial_files = list((partial_dir / 'output').glob(f'partial-{run_name}-*.root'))
 
             if not partial_files:
@@ -129,7 +149,7 @@ def hadd_jobs(args):
 
 def setup_hadd_subparsers(subparsers):
     hadd_parser = subparsers.add_parser('hadd', help='hadd condor jobs.')
-    hadd_parser.add_argument('-i', '--input-dir', type=str, required=True, help='Directory of runs to combine output.')
+    hadd_parser.add_argument('-i', '--input-dir', type=str, required=True, help='Directory of runs to combine output, or a list file of ROOT files (one per line, grouped by their run directory).')
     hadd_parser.add_argument('-o', '--output-dir', type=str, default='scratch/test', help='Output Directory. Default: scratch/test')
     hadd_parser.add_argument('-n', '--hadd-max', type=int, default=10, help='Hadd Max at once. Default: 10')
     hadd_parser.add_argument('-s', '--memory', type=float, default=1.0, help='Memory (units of GB). Default: 1.0 GB.')
