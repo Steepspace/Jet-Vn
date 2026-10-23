@@ -24,7 +24,6 @@ import uproot
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import mplhep as hep
 from scipy.optimize import curve_fit, OptimizeWarning
 
@@ -254,12 +253,12 @@ def signed_eta_labels(r_jet):
     return [rf"$[{lo:g}, {hi:g})$" for lo, hi in zip(edges[:-1], edges[1:])]
 
 
-def draw_points(ax, results, key, err_key, color, marker, label, open_marker=False, offset=0.0):
+def draw_points(ax, results, key, err_key, color, marker, label, offset=0.0):
     x, xerr = pt_centers()
     y, yerr = field(results, key), field(results, err_key)
     ok = np.isfinite(y)
     ax.errorbar(x[ok] + offset, y[ok], yerr=yerr[ok], xerr=xerr[ok], fmt=marker, color=color, markersize=5, capsize=2, linewidth=1.0,
-                label=label, markerfacecolor="none" if open_marker else color)
+                label=label)
 
 
 def draw_ratio(ax_ratio, num, den, key, err_key, color, marker):
@@ -311,7 +310,7 @@ def plot_lead_truth_xsec(samples, weights, run, out_path, save_pdf):
     plt.close(fig)
 
 
-def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, out_path, save_pdf, text, r_jet=None, xlim=(0, 80), vlines=()):
+def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, out_path, save_pdf, text, r_jet=None, xlim=(0, 80), vlines=(), headroom=1e3):
     """Weighted contribution of each sample and the stitched sum of one TH1."""
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 7))
@@ -326,7 +325,7 @@ def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, out_path, sav
     for x in vlines:
         ax.axvline(x, ymax=0.75, color="gray", linestyle="--", linewidth=1)
     ax.set_yscale("log")
-    ax.set_ylim(top=ax.get_ylim()[1] * 1e3)  # room above the spectra for the legend and text
+    ax.set_ylim(top=ax.get_ylim()[1] * headroom)  # room above the spectra for the legend and text
     ax.set_xlim(*xlim)
     ax.set_xlabel(xlabel)
     ax.set_ylabel(rf"$d\sigma / dp_{{T}}$ [pb/GeV] ({ylabel_tag})")
@@ -468,7 +467,6 @@ def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, s
         if kind == "jes":
             series[region] = [{"y": r["mu"], "yerr": r["mu_err"]} for r in res]
             draw_points(ax, series[region], "y", "yerr", color, "o", labels[meta["key"]])
-            draw_points(ax, [{"y": r["mean"], "yerr": r["mean_err"]} for r in res], "y", "yerr", color, "o", None, open_marker=True, offset=0.4)
         else:
             series[region] = [dict(zip(("y", "yerr"), jer(r))) for r in res]
             draw_points(ax, series[region], "y", "yerr", color, "o", labels[meta["key"]])
@@ -486,10 +484,6 @@ def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, s
     add_header(ax, run, r_jet, None)
     info_box(ax, ue, calib, fontsize=12)
     handles, _ = ax.get_legend_handles_labels()
-    if kind == "jes":
-        handles = [*handles,
-                   Line2D([], [], marker="o", linestyle="none", color="gray", label=r"Gaussian $\mu$"),
-                   Line2D([], [], marker="o", linestyle="none", color="gray", markerfacecolor="none", label="Arithmetic mean")]
     legend_after_band(ax, pt_trust_min, handles=handles, fontsize=12)
     setup_ratio_panel(ax_ratio, xlabel=TRUTH_PT_LABEL, ylabel="Fwd / Mid", all_ratios=ratios, min_margin=0.03)
     plt.subplots_adjust(left=0.15, right=0.96, bottom=0.10, top=0.94)
@@ -604,9 +598,9 @@ def group_hists(stitched, r_tag, ue):
 
 def main():
     parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay (Jet-JES outputs), mid-rapidity vs forward eta.")
-    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-21-26/test.list"),
+    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-21-26-windows-regen/test.list"),
                         help="List of merged Jet-JES ROOT files, one per sample (JetNN in the path)")
-    parser.add_argument("-g", "--gen-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay/test.list"),
+    parser.add_argument("-g", "--gen-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list"),
                         help="List of the merged Fun4All overlay hist files with h_gen_integral, one per sample (JetNN in the path)")
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay"),
                         help="Directory to save the plots")
@@ -646,7 +640,7 @@ def main():
             hists[name] = add_hists(hists[k] for k in hists if k.startswith(f"hTruth_{r_tag}_eta"))
         eta_max = round(1.1 - r_jet, 1)
         plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
-                      f"Truth jets, $|\\eta| < {eta_max:g}$\nCentrality: 0–60%", r_jet=r_jet, xlim=(0, 80), vlines=windows)
+                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{COMMON_TEXT_INFO}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
 
     stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
