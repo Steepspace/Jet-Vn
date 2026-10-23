@@ -98,6 +98,9 @@ class JetJES
   // Matching radius: Delta R < m_match_radius_frac * R
   static constexpr double m_match_radius_frac = 0.75;
 
+  // Jet-Anav3 v3 selection: |calo v2| < m_calo_v2_max (iter, also for iternf) and reco jet energy > 0
+  static constexpr float m_calo_v2_max = 0.48F;
+
   template <typename T>
   using EtaCentArray = std::array<std::array<T *, m_num_cent_bins>, m_num_eta_bins>;
 
@@ -138,6 +141,7 @@ class JetJES
     std::vector<double> *pt_calib{nullptr};  // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> *phi{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> *eta{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *e{nullptr};         // NOLINT(misc-non-private-member-variables-in-classes)
   };
 
   struct EventData
@@ -156,11 +160,12 @@ class JetJES
     double mbd_charge_north{0.0};
 
     bool is_flow_failure_iter{false};
+    float calo_v2_iter{0};
 
     // leading truth R=0.4 jet pT, the pT-hat sample generator trigger variable
     double max_pt_truth_r04{0};
 
-    // [radius], truth jets have no pt_calib
+    // [radius], truth jets have no pt_calib and e is not read
     std::array<JetData, m_radii.size()> truth;
     // [ue][radius]
     std::array<std::array<JetData, m_radii.size()>, m_ue_list.size()> reco;
@@ -195,6 +200,7 @@ class JetJES
     CENT,
     CALO_MBD,
     FLOW_PASS_ITER,
+    CALO_V2,
     TRUTH_WINDOW
   };
 
@@ -264,6 +270,7 @@ void JetJES::setup_chain()
   set_branch("mbd_charge_south", &ed.mbd_charge_south);
   set_branch("mbd_charge_north", &ed.mbd_charge_north);
   set_branch("is_flow_failure_iter", &ed.is_flow_failure_iter);
+  set_branch("calo_v2_iter", &ed.calo_v2_iter);
   set_branch("max_pt_truth_r04", &ed.max_pt_truth_r04);
 
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
@@ -283,6 +290,7 @@ void JetJES::setup_chain()
       set_branch(std::format("pt_calib_{}_{}", ue, r), &reco.pt_calib);
       set_branch(std::format("phi_{}_{}", ue, r), &reco.phi);
       set_branch(std::format("eta_{}_{}", ue, r), &reco.eta);
+      set_branch(std::format("e_{}_{}", ue, r), &reco.e);
     }
   }
 
@@ -358,7 +366,7 @@ void JetJES::init_hists()
   double eta_low = -1.5;
   double eta_high = 1.5;
 
-  std::vector<std::string> event_labels = {"All", "Centrality 0-60%", "Good Calo-MBD", "Flow Pass Iter",
+  std::vector<std::string> event_labels = {"All", "Centrality 0-60%", "Good Calo-MBD", "Flow Pass Iter", std::format("|Calo v_{{2}}| < {}", m_calo_v2_max),
                                            std::format("Lead Truth R=0.4 p_{{T}} Window [{}, {})", m_lead_truth_pt_min,
                                                        m_lead_truth_pt_max < 0 ? "#infty" : std::format("{}", m_lead_truth_pt_max))};
 
@@ -567,19 +575,24 @@ void JetJES::process_jets(size_t icent)
       const JetData &reco = ed.reco[iue][ir];
       const ResponseHistSet &h = m_hists.resp[iue][ir];
 
-      if (!reco.pt || !reco.pt_calib || !reco.phi || !reco.eta)
+      if (!reco.pt || !reco.pt_calib || !reco.phi || !reco.eta || !reco.e)
       {
         continue;
       }
 
+      // one to one matching: closest reco jet not yet matched to a higher pT truth jet.
+      // Jets with E <= 0 are not analysis jets (Jet-Anav3 v2/v3), so they are marked used and never matched
+      m_reco_used.assign(reco.pt->size(), false);
       for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
       {
+        if (reco.e->at(jdx) <= 0)
+        {
+          m_reco_used[jdx] = true;
+          continue;
+        }
         h.h2RecoEta_raw->Fill(reco.pt->at(jdx), reco.eta->at(jdx));
         h.h2RecoEta_calib->Fill(reco.pt_calib->at(jdx), reco.eta->at(jdx));
       }
-
-      // one to one matching: closest reco jet not yet matched to a higher pT truth jet
-      m_reco_used.assign(reco.pt->size(), false);
 
       for (const auto &[idx, ieta] : m_truth_jets)
       {
@@ -672,6 +685,13 @@ void JetJES::process_events()
       continue;
     }
     m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::FLOW_PASS_ITER));
+
+    if (std::abs(ed.calo_v2_iter) >= m_calo_v2_max)
+    {
+      ++m_ctr["events_calo_v2_iter"];
+      continue;
+    }
+    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::CALO_V2));
     m_hists.hMaxPtTruthR04->Fill(ed.max_pt_truth_r04);
 
     // pT-hat sample window
