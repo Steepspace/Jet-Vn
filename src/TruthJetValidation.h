@@ -17,7 +17,8 @@ class TH1;
 // Truth <-> reco matching is left to the analysis.
 // Also stores the generator bookkeeping (PHGenIntegral) in the histogram h_gen_integral (hadd-able)
 // and, when the MC inputs live under their own top node, checks that every MC event is the one
-// embedded into the data event under the data top node.
+// embedded into the data event under the data top node. Data events with no MC event embedded
+// (dropped by the overlay production) are skipped: the MC inputs are pushed back by one event.
 class TruthJetValidation : public SubsysReco
 {
  public:
@@ -44,6 +45,8 @@ class TruthJetValidation : public SubsysReco
 
   // data top node to check the MC events against (empty: no check)
   void set_data_topnode(const std::string &name) { m_data_topnode = name; }
+  // no-sync MC input managers, pushed back to skip data events missing from the overlay (empty: abort instead)
+  void set_mc_input_managers(const std::vector<std::string> &names) { m_mc_input_managers = names; }
 
   void set_do_r02(bool b = true) { m_do_r02 = b; }
   void set_do_r03(bool b = true) { m_do_r03 = b; }
@@ -89,8 +92,10 @@ class TruthJetValidation : public SubsysReco
   double m_lumi_file{0};        // pb^-1
   double m_nprocessed_file{0};
   double m_nevents_job{0};
+  unsigned int m_nskipped_data{0};  // data events with no MC event embedded
 
   std::string m_data_topnode;
+  std::vector<std::string> m_mc_input_managers;
 
   std::string m_truthJetName_r02{"AntiKt_Truth_r02"};
   std::string m_truthJetName_r03{"AntiKt_Truth_r03"};

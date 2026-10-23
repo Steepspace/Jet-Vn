@@ -10,6 +10,7 @@
 #include <ffaobjects/EventHeader.h>
 
 // -- Fun4All
+#include <fun4all/Fun4AllInputManager.h>
 #include <fun4all/Fun4AllReturnCodes.h>
 #include <fun4all/Fun4AllServer.h>
 
@@ -171,12 +172,37 @@ int TruthJetValidation::process_event(PHCompositeNode *topNode)
   // the overlay MC inputs are read in file order: they must stay on the data event they were embedded into
   if (!m_data_topnode.empty())
   {
-    PHCompositeNode *dataTopNode = Fun4AllServer::instance()->topNode(m_data_topnode);
+    Fun4AllServer *se = Fun4AllServer::instance();
+    PHCompositeNode *dataTopNode = se->topNode(m_data_topnode);
     EventHeader *dataEventInfo = findNode::getClass<EventHeader>(dataTopNode, "EventHeader");
-    if (!eventInfo || !dataEventInfo || dataEventInfo->get_EvtSequence() != event_id)
+    int data_event_id = dataEventInfo ? dataEventInfo->get_EvtSequence() : -1;
+
+    // MC ahead of data: the overlay production dropped this data event (e.g. no vertex, nothing embedded).
+    // Skip it, and re-read the current MC event together with the next data event.
+    if (eventInfo && dataEventInfo && event_id > data_event_id && !m_mc_input_managers.empty())
+    {
+      for (const auto &name : m_mc_input_managers)
+      {
+        Fun4AllInputManager *in = se->getInputManager(name);
+        if (!in || in->PushBackEvents(1) != 0)
+        {
+          std::cout << "Aborting Run: could not push back MC input manager " << name << std::endl;
+          return Fun4AllReturnCodes::ABORTRUN;
+        }
+      }
+      ++m_nskipped_data;
+      if (Verbosity() > 0)
+      {
+        std::cout << "TruthJetValidation: data event " << data_event_id << " has no MC event (next MC event "
+                  << event_id << "), skipped" << std::endl;
+      }
+      return Fun4AllReturnCodes::ABORTEVENT;
+    }
+
+    if (!eventInfo || !dataEventInfo || data_event_id != event_id)
     {
       std::cout << "Aborting Run: MC event " << event_id << " does not match data event "
-                << (dataEventInfo ? dataEventInfo->get_EvtSequence() : -1) << std::endl;
+                << data_event_id << std::endl;
       return Fun4AllReturnCodes::ABORTRUN;
     }
   }
@@ -255,7 +281,8 @@ int TruthJetValidation::End([[maybe_unused]] PHCompositeNode *topNode)
   m_h_gen_integral->AddBinContent(kLumiJob, lumi_job);
 
   std::cout << "TruthJetValidation::End - events analyzed: " << m_nevents_job
-            << " | lumi: " << lumi_job << " pb^-1" << std::endl;
+            << " | lumi: " << lumi_job << " pb^-1"
+            << " | data events skipped (no MC): " << m_nskipped_data << std::endl;
 
   return Fun4AllReturnCodes::EVENT_OK;
 }

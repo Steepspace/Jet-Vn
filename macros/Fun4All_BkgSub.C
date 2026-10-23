@@ -313,6 +313,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     truth_jet_validation->set_jet_radii({0.2F, 0.3F});
     truth_jet_validation->set_jet_pt_min(truth_jet_pt_min);
     truth_jet_validation->set_data_topnode("TOP");
+    // data events dropped by the overlay production are skipped by pushing back the MC inputs
+    truth_jet_validation->set_mc_input_managers({"calo", "truthjet"});
     truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
     se->registerSubsystem(truth_jet_validation, "TOPMC");
   }
