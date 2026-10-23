@@ -108,6 +108,9 @@ class JetJES
     EtaCentArray<TH1> hTruthMatched{};
     TH2 *h2DeltaEta{nullptr};
     TH2 *h2DeltaR{nullptr};
+    // all reco jets, as h2JetEta in Jet-Anav3
+    TH2 *h2RecoEta_raw{nullptr};
+    TH2 *h2RecoEta_calib{nullptr};
   };
 
   struct AnalysisHists
@@ -121,6 +124,8 @@ class JetJES
 
     // [radius]
     std::array<EtaCentArray<TH1>, m_radii.size()> hTruth{};
+    // [radius], all truth jets
+    std::array<TH2 *, m_radii.size()> h2TruthEta{};
     // [ue][radius]
     std::array<std::array<ResponseHistSet, m_radii.size()>, m_ue_list.size()> resp{};
   };
@@ -344,6 +349,15 @@ void JetJES::init_hists()
   double dr_low = 0;
   double dr_high = 0.6;
 
+  // same eta bin width as h2JetEta in Jet-Anav3, wide enough for the truth jets (|eta| < 1.5)
+  int bins_pt_eta2D = 80;
+  double pt_eta2D_low = 0;
+  double pt_eta2D_high = 80;
+
+  int bins_eta = 120;
+  double eta_low = -1.5;
+  double eta_high = 1.5;
+
   std::vector<std::string> event_labels = {"All", "Centrality 0-60%", "Good Calo-MBD", "Flow Pass Iter",
                                            std::format("Lead Truth R=0.4 p_{{T}} Window [{}, {})", m_lead_truth_pt_min,
                                                        m_lead_truth_pt_max < 0 ? "#infty" : std::format("{}", m_lead_truth_pt_max))};
@@ -371,6 +385,10 @@ void JetJES::init_hists()
   {
     const RadiusConfig &rc = m_radii[ir];
     std::string_view r = rc.tag;
+
+    std::string truth_eta_name = std::format("h2TruthEta_{}", r);
+    m_hists2D[truth_eta_name] = std::make_unique<TH2F>(truth_eta_name.c_str(), std::format("R = {:.1f}, All Truth Jets; p_{{T}}^{{truth}} [GeV]; #eta^{{truth}}", rc.radius).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
+    m_hists.h2TruthEta[ir] = m_hists2D[truth_eta_name].get();
 
     for (size_t ieta = 0; ieta < m_num_eta_bins; ++ieta)
     {
@@ -418,6 +436,13 @@ void JetJES::init_hists()
       std::string dr_name = std::format("h2DeltaR_{}_{}", r, ue);
       m_hists2D[dr_name] = std::make_unique<TH2F>(dr_name.c_str(), std::format("R = {:.1f}, {}, Closest Reco Jet (before #DeltaR cut); p_{{T}}^{{truth}} [GeV]; #DeltaR", rc.radius, ue).c_str(), bins_pt, pt_low, pt_high, bins_dr, dr_low, dr_high);
       h.h2DeltaR = m_hists2D[dr_name].get();
+
+      for (const char *calib : {"raw", "calib"})
+      {
+        std::string reco_eta_name = std::format("h2RecoEta_{}_{}_{}", calib, r, ue);
+        m_hists2D[reco_eta_name] = std::make_unique<TH2F>(reco_eta_name.c_str(), std::format("R = {:.1f}, {}, All Reco Jets; p_{{T}}^{{reco, {}}} [GeV]; #eta^{{reco}}", rc.radius, ue, calib).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
+        (std::string_view(calib) == "raw" ? h.h2RecoEta_raw : h.h2RecoEta_calib) = m_hists2D[reco_eta_name].get();
+      }
     }
   }
 
@@ -523,6 +548,8 @@ void JetJES::process_jets(size_t icent)
     m_truth_jets.clear();
     for (size_t idx = 0; idx < truth.pt->size(); ++idx)
     {
+      m_hists.h2TruthEta[ir]->Fill(truth.pt->at(idx), truth.eta->at(idx));
+
       auto ieta = find_eta_bin(truth.eta->at(idx), rc);
       if (ieta)
       {
@@ -543,6 +570,12 @@ void JetJES::process_jets(size_t icent)
       if (!reco.pt || !reco.pt_calib || !reco.phi || !reco.eta)
       {
         continue;
+      }
+
+      for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
+      {
+        h.h2RecoEta_raw->Fill(reco.pt->at(jdx), reco.eta->at(jdx));
+        h.h2RecoEta_calib->Fill(reco.pt_calib->at(jdx), reco.eta->at(jdx));
       }
 
       // one to one matching: closest reco jet not yet matched to a higher pT truth jet
