@@ -10,7 +10,8 @@ The response pT_reco / pT_truth of matched jets is fitted with an iterative Gaus
 JES = Gaussian mean, JER = sigma / mean. Both the raw pT and the stored pt_calib (eta-binned legacy JES) are shown.
 Below --pt-trust-min the response is truncated by the tree cut (reco pt_calib >= 10 GeV).
 
-The eta plots compare the shape of dN/deta of all truth jets with all reco jets (raw and calibrated pT) above a pT cut,
+The eta plots compare the shape of dN/deta of all truth jets with all reco jets with E > 0 (raw and calibrated pT) above a pT cut,
+in events with |calo v2| < 0.48 (the Jet-Anav3 v3 selection, as in h2JetEtav3),
 to see whether the step at the legacy JES eta-bin edge seen in data shows up in the calibrated MC jets but not in truth.
 """
 
@@ -54,6 +55,9 @@ FIT_QA_BINS = [(20, 24), (32, 36), (46, 52)]
 MIN_N_EFF = 50  # minimum effective entries for a fit
 
 OVERLAY_TEXT = "Data + PYTHIA8 Overlay (Jet12–40)"
+# Jet-JES event selection (the Jet-Anav3 v3 one) and its reco jet cut
+SELECTION_TEXT = COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$"
+RECO_JET_TEXT = r"Reco jet $E > 0$"
 JES_YLABEL = r"$\langle p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}} \rangle$ (Gaussian $\mu$)"
 JER_YLABEL = r"$\sigma / \mu$ of $p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}}$"
 TRUTH_PT_LABEL = r"$p_{T}^{\mathrm{truth}}$ [GeV]"
@@ -257,7 +261,7 @@ def legend_after_band(ax, pt_trust_min, handles=None, **kwargs):
 
 
 def info_box(ax, ue, calib=None, extra=None, x=0.95, y=0.95, ha="right", fontsize=13):
-    lines = [METHODS[ue]["label"]] + ([CALIBS[calib]["label"]] if calib else []) + [OVERLAY_TEXT, COMMON_TEXT_INFO] + ([extra] if extra else [])
+    lines = [METHODS[ue]["label"]] + ([CALIBS[calib]["label"]] if calib else []) + [OVERLAY_TEXT, SELECTION_TEXT, RECO_JET_TEXT] + ([extra] if extra else [])
     ax.text(x, y, "\n".join(lines), transform=ax.transAxes, ha=ha, va="top", fontsize=fontsize)
 
 
@@ -388,7 +392,7 @@ def plot_matching_qa(hists, r_tag, ue, run, out_path, save_pdf, pt_min=20):
         ax.set_yscale("log")
         ax.set_xlabel(xlabel)
         ax.set_ylabel("Normalized")
-        ax.text(0.95, 0.95, f"{METHODS[ue]['label']}\n" + rf"$p_{{T}}^{{\mathrm{{truth}}}} \geq {pt_min}$ GeV", transform=ax.transAxes, ha="right", va="top", fontsize=13)
+        ax.text(0.95, 0.95, f"{METHODS[ue]['label']}\n" + rf"$p_{{T}}^{{\mathrm{{truth}}}} \geq {pt_min}$ GeV" + f"\n{RECO_JET_TEXT}", transform=ax.transAxes, ha="right", va="top", fontsize=13)
         add_header(ax, run, r_jet, None)
     plt.tight_layout()
     save_fig(fig, out_path, save_pdf)
@@ -711,7 +715,7 @@ def group_hists(stitched, r_tag, ue):
 
 def main():
     parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay (Jet-JES outputs), mid-rapidity vs forward eta.")
-    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26/test.list"),
+    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list"),
                         help="List of merged Jet-JES ROOT files, one per sample (JetNN in the path)")
     parser.add_argument("-g", "--gen-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list"),
                         help="List of the merged Fun4All overlay hist files with h_gen_integral, one per sample (JetNN in the path)")
@@ -755,7 +759,7 @@ def main():
             hists[name] = add_hists(hists[k] for k in hists if k.startswith(f"hTruth_{r_tag}_eta"))
         eta_max = round(1.1 - r_jet, 1)
         plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
-                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{COMMON_TEXT_INFO}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
+                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{SELECTION_TEXT}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
 
     stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
