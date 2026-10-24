@@ -184,6 +184,44 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
         plt.close(fig_ev)
 
 
+def plot_trigger_exclusive(data_list, output_path, z_max=60.0):
+    """
+    MB events with |z| < z_max summed over all runs, split into Trig 12 only, Trig 14 only and
+    both, each labelled with its share of the Trig 12 | Trig 14 sample.
+    """
+    hep.style.use("ATLAS")
+    data_list = [d for d in data_list if not np.isnan(d.get("n_trig_or", np.nan))]
+    if not data_list:
+        print("Warning: No runs with hZVertex_*_MB histograms; skipping trigger exclusive plot.")
+        return
+
+    n12 = sum(d["n_trig12_only"] for d in data_list)
+    n14 = sum(d["n_trig14_only"] for d in data_list)
+    n_or = sum(d["n_trig_or"] for d in data_list)
+    counts = [n12, n14, n_or - n12 - n14]
+    labels = ["Trig 12 only", "Trig 14 only", "Trig 12 & Trig 14"]
+    colors = ["royalblue", "darkorange", "forestgreen"]
+
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    bars = ax.bar(labels, counts, color=colors, alpha=0.8, width=0.6)
+    for bar, n in zip(bars, counts):
+        ax.text(bar.get_x() + bar.get_width() / 2, n, f"{n / n_or:.1%}\n({n:.3e})",
+                ha="center", va="bottom", fontsize=13)
+
+    ax.set_xlim(-0.6, len(counts) - 0.4)
+    ax.set_ylim(0, 1.2 * max(counts))
+    ax.set_ylabel("MB Events", fontsize=15)
+    ax.set_title(rf"MB, |z| < {z_max:g} cm, {len(data_list)} runs (Trig 12 | Trig 14 = {n_or:.3e})", fontsize=13)
+    ax.tick_params(axis="x", which="both", top=False, bottom=False, labelsize=14)
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+
+    fig.tight_layout()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+
+
 def _ratio_range(vals, cuts):
     """x-range for a central-ratio histogram: all values and both cuts, with a little margin."""
     lo, hi = min(min(vals), cuts[0]), max(max(vals), cuts[1])

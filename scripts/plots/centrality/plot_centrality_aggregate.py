@@ -28,6 +28,7 @@ from centrality_qa_metrics import extract_run_metrics, R1_CUTS, R1_5_CUTS
 from centrality_qa_plots import (
     plot_heatmap,
     plot_trends,
+    plot_trigger_exclusive,
     plot_metric_distributions,
     plot_ensemble_profile,
     plot_failure_example,
@@ -602,6 +603,8 @@ def main():
     submit(plot_trends, data_list=metrics_list,
            output_path=args.output_dir / "centrality_flatness_trends.png",
            test_runs=args.test_runs, max_class_dev=args.max_class_dev, flat_max=args.flat_max)
+    submit(plot_trigger_exclusive, data_list=metrics_list,
+           output_path=args.output_dir / "trigger_exclusive_events.png")
     submit(plot_heatmap, data_list=metrics_list,
            output_path=args.output_dir / "centrality_ratio_heatmap_all_runs.png",
            test_runs=args.test_runs)

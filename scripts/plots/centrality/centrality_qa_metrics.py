@@ -106,6 +106,27 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
     return None, None, ""
 
 
+def get_trigger_exclusive_counts(f, z_max=60.0):
+    """
+    Events passing the MB classifier with |z| < z_max that fired exactly one of the MBD triggers,
+    from the EventQA hZVertex_*_MB histograms: N(12 & !14) = N(12 | 14) - N(14) and vice versa.
+    Returns NaN counts if any of the histograms is missing.
+    """
+    counts = {}
+    for key in ("Trig12", "Trig14", "Trig12_or_Trig14"):
+        name = f"hZVertex_{key}_MB"
+        if name not in f:
+            return {"n_trig12_only": np.nan, "n_trig14_only": np.nan, "n_trig_or": np.nan}
+        values, edges = f[name].to_numpy()
+        in_range = (edges[:-1] >= -z_max) & (edges[1:] <= z_max)
+        counts[key] = float(np.sum(values[in_range], dtype=float))
+    return {
+        "n_trig12_only": counts["Trig12_or_Trig14"] - counts["Trig14"],
+        "n_trig14_only": counts["Trig12_or_Trig14"] - counts["Trig12"],
+        "n_trig_or": counts["Trig12_or_Trig14"],
+    }
+
+
 # The MBD centrality calibration fills 1%-wide bins centred at 1-92% (bin 0 is always empty);
 # a calibrated run populates every bin equally.
 N_CENT_CLASSES = 92
@@ -156,6 +177,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality",
             values, edges, _ = get_centrality_hist_data(f, hist_name=hist_name)
             if values is None:
                 return None, f"Histogram '{hist_name}' (or base 2D projection) not found in {path.name}"
+            trig_counts = get_trigger_exclusive_counts(f)
 
         values = np.asarray(values, dtype=float)
         total_events = float(np.sum(values))
@@ -185,6 +207,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality",
                 "bin_centers": bin_centers,
                 "edges": edges,
                 "status": "FLAG_LOW_STATS",
+                **trig_counts,
             }, None
 
         ratios = values / flat_ref
@@ -249,6 +272,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality",
             "bin_centers": bin_centers,
             "edges": edges,
             "status": status,
+            **trig_counts,
         }
         return metric_dict, None
 
