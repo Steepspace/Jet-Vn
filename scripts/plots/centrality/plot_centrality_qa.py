@@ -23,7 +23,7 @@ script_dir = Path(__file__).resolve().parent
 if str(script_dir) not in sys.path:
     sys.path.insert(0, str(script_dir))
 
-from centrality_qa_metrics import compute_centrality_average, get_centrality_hist_data
+from centrality_qa_metrics import flat_expectation, get_centrality_hist_data
 
 def clean_root_latex(text):
     if not text:
@@ -107,25 +107,6 @@ class EngScalarFormatter(ScalarFormatter):
         super()._set_order_of_magnitude()
         if self._orderOfMagnitude != 0:
             self._orderOfMagnitude = (self._orderOfMagnitude // 3) * 3
-
-def compute_centrality_average(values, edges, cent_min=10.0, cent_max=70.0):
-    """
-    Compute average y-value excluding outliers at the edges (e.g. low-centrality
-    turn-on / uncalibrated bins and high-centrality trigger roll-off / zeros).
-    """
-    bin_centers = 0.5 * (edges[:-1] + edges[1:])
-    mask = (bin_centers >= cent_min) & (bin_centers <= cent_max) & (values > 0)
-    if np.sum(mask) >= 3:
-        vals = values[mask]
-        med = np.median(vals)
-        good = np.abs(vals - med) < 0.3 * med
-        if np.any(good):
-            return float(np.mean(vals[good]))
-        return float(np.mean(vals))
-    pos_vals = values[values > 0]
-    if len(pos_vals) > 0:
-        return float(np.median(pos_vals))
-    return 0.0
 
 def get_ratio_ylim(ratio_vals, edges, xlim=None):
     """
@@ -223,7 +204,7 @@ def make_1d_plot(hist_or_tuple, run_number, output_path, xlabel=None, ylabel=Non
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def make_ratio_overlay_plot(hist_data_list, run_number, output_path, xlabel="Centrality [%]", ylabel="Ratio to Average", xlim=(-0.5, 10.5), hline=1.0):
+def make_ratio_overlay_plot(hist_data_list, run_number, output_path, xlabel="Centrality [%]", ylabel="Ratio to Flat", xlim=(-0.5, 10.5), hline=1.0):
     """
     Plots an overlay of multiple 1D histogram ratios on the same axes with proper legends.
     hist_data_list: list of tuples (ratio_vals, edges, label, color)
@@ -331,7 +312,7 @@ def make_zvertex_cent_slices_plot(hist2d, run_number, output_path, slices=(1, 2,
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat_min=10.0, cent_flat_max=70.0):
+def process_file(path, output_dir=None, logy=False, run_subdirs=False):
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -388,14 +369,12 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                         if cleaned_title:
                             base_labels.append(cleaned_title)
 
-                    # Compute flat average excluding edge outliers
-                    avg_val = compute_centrality_average(
-                        values, edges, cent_min=cent_flat_min, cent_max=cent_flat_max
-                    )
-                    avg_label = [f"Average: {avg_val:.2e}"] if avg_val > 0 else []
+                    # Flat expectation: events per 1% bin if the 1-80% range were perfectly flat
+                    flat_val, _, _ = flat_expectation(values, edges)
+                    flat_label = [f"Flat Expectation: {flat_val:.2e}"] if flat_val > 0 else []
 
-                    # Full 0-100% distribution with average line
-                    extra_labels = base_labels + [f"Total: {total_events:.2e}"] + avg_label
+                    # Full 0-100% distribution with flat expectation line
+                    extra_labels = base_labels + [f"Total: {total_events:.2e}"] + flat_label
                     output_path = dir_cent / f"run_{run_number}_{hist_name}.png"
                     make_1d_plot(
                         (values, edges),
@@ -406,13 +385,13 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                         extra_labels=extra_labels,
                         logy=logy,
                         xlim=(0, 100),
-                        hline=avg_val if avg_val > 0 else None,
+                        hline=flat_val if flat_val > 0 else None,
                     )
                     plots_made += 1
 
-                    # Full 0-100% ratio to average
-                    if avg_val > 0:
-                        ratio_vals = np.where(values > 0, values / avg_val, 0.0)
+                    # Full 0-100% ratio to flat expectation
+                    if flat_val > 0:
+                        ratio_vals = np.where(values > 0, values / flat_val, 0.0)
                         cent_ratios[hist_name] = (ratio_vals, edges, cleaned_title)
                         ylim_full_ratio = get_ratio_ylim(ratio_vals, edges, xlim=(0, 100))
                         output_path_ratio = dir_ratio / f"run_{run_number}_{hist_name}_ratio.png"
@@ -421,8 +400,8 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                             run_number,
                             output_path_ratio,
                             xlabel="Centrality [%]",
-                            ylabel="Ratio to Average",
-                            extra_labels=base_labels + avg_label,
+                            ylabel="Ratio to Flat",
+                            extra_labels=base_labels + flat_label,
                             logy=False,
                             xlim=(0, 100),
                             ylim=ylim_full_ratio,
@@ -430,10 +409,10 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                         )
                         plots_made += 1
 
-                    # Zoomed 0-10% centrality (first 11 bins: -0.5 to 10.5) with average line
+                    # Zoomed 0-10% centrality (first 11 bins: -0.5 to 10.5) with flat expectation line
                     mask_zoom = (edges[1:] > -0.5) & (edges[:-1] < 10.5)
                     total_events_zoom = np.sum(values[mask_zoom])
-                    extra_labels_zoom = base_labels + [f"Total: {total_events_zoom:.2e}"] + avg_label
+                    extra_labels_zoom = base_labels + [f"Total: {total_events_zoom:.2e}"] + flat_label
 
                     output_path_zoom = dir_cent_zoom / f"run_{run_number}_{hist_name}_zoom.png"
                     make_1d_plot(
@@ -445,12 +424,12 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                         extra_labels=extra_labels_zoom,
                         logy=logy,
                         xlim=(-0.5, 10.5),
-                        hline=avg_val if avg_val > 0 else None,
+                        hline=flat_val if flat_val > 0 else None,
                     )
                     plots_made += 1
 
-                    # Zoomed 0-10% ratio to average
-                    if avg_val > 0:
+                    # Zoomed 0-10% ratio to flat expectation
+                    if flat_val > 0:
                         ylim_zoom_ratio = get_ratio_ylim(ratio_vals, edges, xlim=(-0.5, 10.5))
                         output_path_zoom_ratio = dir_ratio_zoom / f"run_{run_number}_{hist_name}_zoom_ratio.png"
                         make_1d_plot(
@@ -458,8 +437,8 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                             run_number,
                             output_path_zoom_ratio,
                             xlabel="Centrality [%]",
-                            ylabel="Ratio to Average",
-                            extra_labels=base_labels + avg_label,
+                            ylabel="Ratio to Flat",
+                            extra_labels=base_labels + flat_label,
                             logy=False,
                             xlim=(-0.5, 10.5),
                             ylim=ylim_zoom_ratio,
@@ -487,7 +466,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     run_number,
                     output_path_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Ratio to Average",
+                    ylabel="Ratio to Flat",
                     xlim=(-0.5, 10.5),
                     hline=1.0,
                 )
@@ -515,7 +494,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     run_number,
                     output_path_trig_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Ratio to Average",
+                    ylabel="Ratio to Flat",
                     xlim=(-0.5, 10.5),
                     hline=1.0,
                 )
@@ -541,7 +520,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     run_number,
                     output_path_z_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Ratio to Average",
+                    ylabel="Ratio to Flat",
                     xlim=(-0.5, 10.5),
                     hline=1.0,
                 )
@@ -571,7 +550,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     run_number,
                     output_path_z_trig14_overlay,
                     xlabel="Centrality [%]",
-                    ylabel="Ratio to Average",
+                    ylabel="Ratio to Flat",
                     xlim=(-0.5, 10.5),
                     hline=1.0,
                 )
@@ -584,11 +563,9 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                     z_centers = 0.5 * (ex_zvtx[:-1] + ex_zvtx[1:])
                     mask_z60 = (np.abs(z_centers) > 10.0) & (np.abs(z_centers) < 60.0)
                     v_z60 = np.sum(v_2d[mask_z60, :], axis=0)
-                    avg_z60 = compute_centrality_average(
-                        v_z60, ey_cent, cent_min=cent_flat_min, cent_max=cent_flat_max
-                    )
-                    if avg_z60 > 0:
-                        r_z60 = np.where(v_z60 > 0, v_z60 / avg_z60, 0.0)
+                    flat_z60, _, _ = flat_expectation(v_z60, ey_cent)
+                    if flat_z60 > 0:
+                        r_z60 = np.where(v_z60 > 0, v_z60 / flat_z60, 0.0)
                         label_z60 = "10 cm < |z| < 60 cm and Trig 14"
                         output_path_4way = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_Z60_zoom_ratio.png"
                         make_ratio_overlay_plot(
@@ -601,7 +578,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False, cent_flat
                             run_number,
                             output_path_4way,
                             xlabel="Centrality [%]",
-                            ylabel="Ratio to Average",
+                            ylabel="Ratio to Flat",
                             xlim=(-0.5, 10.5),
                             hline=1.0,
                         )
@@ -656,8 +633,6 @@ def main():
     parser.add_argument("--logy", action="store_true", help="Use log scale for y-axis.")
     parser.add_argument("--run-subdirs", action="store_true", help="Save plots in run-numbered subdirectories.")
     parser.add_argument("-j", "--workers", type=int, default=None, help="Number of parallel worker processes (default: min(os.cpu_count(), 32)).")
-    parser.add_argument("--cent-flat-min", type=float, default=10.0, help="Minimum centrality [%] for computing flat average (default: 10.0).")
-    parser.add_argument("--cent-flat-max", type=float, default=70.0, help="Maximum centrality [%] for computing flat average (default: 70.0).")
     parser.add_argument("files", nargs="*", type=Path, help="List of ROOT file paths.")
     args = parser.parse_args()
 
@@ -692,8 +667,6 @@ def main():
         output_dir=args.output_dir,
         logy=args.logy,
         run_subdirs=args.run_subdirs,
-        cent_flat_min=args.cent_flat_min,
-        cent_flat_max=args.cent_flat_max,
     )
 
     max_workers = args.workers if args.workers is not None else min(os.cpu_count() or 4, 32)

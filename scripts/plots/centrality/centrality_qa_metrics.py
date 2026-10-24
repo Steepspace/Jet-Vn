@@ -5,24 +5,19 @@ import numpy as np
 import uproot
 
 
-def compute_centrality_average(values, edges, cent_min=10.0, cent_max=70.0):
+def flat_expectation(values, edges, flat_max=80.0):
     """
-    Compute average y-value excluding outliers at the edges (e.g. low-centrality
-    turn-on / uncalibrated bins and high-centrality trigger roll-off / zeros).
+    Events per 1% bin expected if bins 1..flat_max were perfectly flat: the 1-flat_max event count
+    divided by the number of those bins. Bin 0 is always empty and is excluded.
+    Returns (flat_ref, n_flat, n_bins); flat_ref is 0 when the range holds no events.
     """
+    values = np.asarray(values, dtype=float)
     bin_centers = 0.5 * (edges[:-1] + edges[1:])
-    mask = (bin_centers >= cent_min) & (bin_centers <= cent_max) & (values > 0)
-    if np.sum(mask) >= 3:
-        vals = values[mask]
-        med = np.median(vals)
-        good = np.abs(vals - med) < 0.3 * med
-        if np.any(good):
-            return float(np.mean(vals[good]))
-        return float(np.mean(vals))
-    pos_vals = values[values > 0]
-    if len(pos_vals) > 0:
-        return float(np.median(pos_vals))
-    return 0.0
+    in_range = (bin_centers > 0.5) & (bin_centers < flat_max + 0.5)
+    n_bins = int(np.sum(in_range))
+    n_flat = float(np.sum(values[in_range]))
+    flat_ref = n_flat / n_bins if n_bins > 0 and n_flat > 0 else 0.0
+    return flat_ref, n_flat, n_bins
 
 
 def get_centrality_hist_data(f, hist_name="hCentrality"):
@@ -167,10 +162,7 @@ def extract_run_metrics(file_path, hist_name="hCentrality",
         bin_centers = 0.5 * (edges[:-1] + edges[1:])
 
         # Bin k is centred at k%; bins 1..flat_max make up the flatness range
-        class_mask = (bin_centers > 0.5) & (bin_centers < flat_max + 0.5)
-        n_classes = int(np.sum(class_mask))
-        class_counts = values[class_mask]
-        n_flat = float(np.sum(class_counts))
+        flat_ref, n_flat, n_classes = flat_expectation(values, edges, flat_max)
 
         if n_flat <= 0 or n_classes < 2:
             return {
@@ -195,7 +187,6 @@ def extract_run_metrics(file_path, hist_name="hCentrality",
                 "status": "FLAG_LOW_STATS",
             }, None
 
-        flat_ref = n_flat / n_classes
         ratios = values / flat_ref
 
         # 1. Coarse-class populations over 0-flat_max: mean ratio to flat in each wide class
