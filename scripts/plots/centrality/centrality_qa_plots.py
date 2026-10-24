@@ -258,9 +258,11 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.5, r1_cuts
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    devs = [d["class_dev_max"] for d in data_list if not np.isnan(d["class_dev_max"])]
-    r1s = [d["ratio_1"] for d in data_list if not np.isnan(d["ratio_1"])]
-    r15s = [d["ratio_1_5"] for d in data_list if not np.isnan(d["ratio_1_5"])]
+    # Low-statistics runs skip the shape checks, so they are left out of the shape metrics to match the flag counts
+    judged = [d for d in data_list if "FLAG_LOW_STATS" not in d["status"]]
+    devs = [d["class_dev_max"] for d in judged if not np.isnan(d["class_dev_max"])]
+    r1s = [d["ratio_1"] for d in judged if not np.isnan(d["ratio_1"])]
+    r15s = [d["ratio_1_5"] for d in judged if not np.isnan(d["ratio_1_5"])]
     nevts = [d["total_events"] for d in data_list if d["total_events"] > 0]
 
     evts_box_text = ""
@@ -497,8 +499,10 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
     line_styles = [{"color": "#800080", "ls": "-.", "lw": 2.0}, {"color": "#d95f02", "ls": ":", "lw": 2.4},
                    {"color": "#1b9e77", "ls": "--", "lw": 2.0}, {"color": "#e7298a", "ls": "-", "lw": 2.0}]
 
-    def collect(key):
-        return [float(d[key]) for d in metrics_list if not np.isnan(d.get(key, np.nan))]
+    def collect(key, include_low_stats=False):
+        # Low-statistics runs skip the shape checks, so by default they are left out to match the flag counts
+        return [float(d[key]) for d in metrics_list
+                if not np.isnan(d.get(key, np.nan)) and (include_low_stats or "FLAG_LOW_STATS" not in d.get("status", ""))]
 
     def make_plot(data, color, key, line_fmt, cuts, xlabel, header, x_range=None, n_ticks=18, is_log_x=False, min_val=None):
         fig, ax = plt.subplots(figsize=(9, 6.5))
@@ -550,7 +554,7 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
                   x_range=_ratio_range(vals, cuts), n_ticks=15)
 
     elif failure_mode == "FLAG_LOW_STATS":
-        nevts = collect("total_events")
+        nevts = collect("total_events", include_low_stats=True)
         make_plot(nevts, "coral", "total_events", "Example Run {} (Events = {:.2e})",
                   [(min_events, "crimson", f"Min Events ({min_events:.0e})")], "Total Events per Run", None,
                   is_log_x=True, min_val=1.0)
