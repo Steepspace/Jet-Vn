@@ -111,14 +111,39 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
     return None, None, ""
 
 
-def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, cent_flat_max=70.0,
-                        max_rms_pct=4.5, max_dev_pct_cut=8.0,
-                        max_slope_per_10pct=2.5, min_central_ratio=0.80,
-                        max_central_ratio=1.20, max_central_spike=1.30,
-                        syst_floor=0.02):
+# The MBD centrality calibration defines 1%-wide classes covering 0-92%;
+# a calibrated run populates every class equally.
+N_CENT_CLASSES = 92
+
+# Width [%] of the coarse centrality classes the calibration check averages over
+COARSE_CLASS_WIDTH = 20.0
+
+# Default local-defect cut [%]: max deviation of a 1% class from its 5-class running mean.
+# Raised per run to 5 sigma_stat so low-count runs are not flagged on noise.
+LOCAL_DEV_CUT_PCT = 3.5
+
+
+def extract_run_metrics(file_path, hist_name="hCentrality",
+                        flat_max=80.0, max_class_dev=3.0, max_local_dev_pct=LOCAL_DEV_CUT_PCT,
+                        min_events=1e5, min_central_bin=0.60, min_central_ratio=0.80,
+                        max_central_ratio=1.20, max_central_spike=1.30):
     """
     Fast extraction of scalar flatness and QA metrics from a single ROOT file.
     Does not render any plots.
+
+    All ratios are relative to the flat expectation N(0-flat_max) / n_classes, i.e. the
+    count every 1% class would hold if the run were perfectly calibrated.
+
+    The primary calibration metric averages those ratios over coarse COARSE_CLASS_WIDTH-wide
+    classes (0-20%, 20-40%, ...): class_dev_max is how far, in %, the worst coarse class is
+    from holding its expected share of events.
+
+    Status flags (a run can carry more than one):
+      FLAG_LOW_STATS    too few events in 0-flat_max to judge (includes empty histograms)
+      FLAG_CALIB_SHIFT  broad miscalibration: class_dev_max > max_class_dev
+      FLAG_LOCAL_DEFECT narrow structure the coarse classes average away: a single-class
+                        hole/spike or an anomalous 0-1% / 0-5% edge. defect_score is the
+                        largest of these metrics in units of its own cut (> 1 fails).
     """
     path = Path(file_path)
     if not path.exists():
@@ -139,25 +164,32 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
             if values is None:
                 return None, f"Histogram '{hist_name}' (or base 2D projection) not found in {path.name}"
 
+        values = np.asarray(values, dtype=float)
         total_events = float(np.sum(values))
         bin_centers = 0.5 * (edges[:-1] + edges[1:])
 
-        # Plateau average
-        plateau_avg = compute_centrality_average(values, edges, cent_min=cent_flat_min, cent_max=cent_flat_max)
+        # Bin k (center k) holds the (k-1)-k% class
+        class_mask = (bin_centers > 0.5) & (bin_centers < flat_max + 0.5)
+        n_classes = int(np.sum(class_mask))
+        class_counts = values[class_mask]
+        n_flat = float(np.sum(class_counts))
 
-        flags = []
-
-        if plateau_avg <= 0 or total_events == 0:
+        if n_flat <= 0 or n_classes < 2:
             return {
                 "run_number": run_number,
                 "file_path": str(path),
                 "hist_name": hist_name,
                 "total_events": total_events,
-                "plateau_avg": 0.0,
-                "rms_plat_pct": np.nan,
-                "max_dev_pct": np.nan,
-                "chi2_ndf": np.nan,
-                "slope_per_10pct": np.nan,
+                "flat_events": n_flat,
+                "flat_ref": 0.0,
+                "class_dev_max": np.nan,
+                "class_dev_signed": np.nan,
+                "worst_class": "",
+                "coarse_edges": np.array([]),
+                "coarse_ratios": np.array([]),
+                "local_dev_pct": np.nan,
+                "local_dev_cut_pct": np.nan,
+                "defect_score": np.nan,
                 "ratio_1": np.nan,
                 "ratio_1_5": np.nan,
                 "ratio_80": np.nan,
@@ -165,81 +197,64 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
                 "ratios": np.zeros(len(values)),
                 "bin_centers": bin_centers,
                 "edges": edges,
-                "status": "FLAG_EMPTY_OR_ZERO",
+                "status": "FLAG_LOW_STATS",
             }, None
 
-        # Normalized ratio array across all bins
-        ratios = np.where(values > 0, values / plateau_avg, 0.0)
+        flat_ref = n_flat / n_classes
+        ratios = values / flat_ref
+        sigma_stat = 1.0 / np.sqrt(flat_ref)
 
-        # 1. Plateau Metrics (cent_flat_min to cent_flat_max)
-        plateau_mask = (bin_centers >= cent_flat_min) & (bin_centers <= cent_flat_max)
-        n_plateau_bins = int(np.sum(plateau_mask))
+        # 1. Coarse-class populations over 0-flat_max: mean ratio to flat in each wide class
+        coarse_edges = np.append(np.arange(0.0, flat_max, COARSE_CLASS_WIDTH), flat_max)
+        coarse_ratios = np.array([
+            np.mean(ratios[(bin_centers > lo + 0.5) & (bin_centers < hi + 0.5)])
+            for lo, hi in zip(coarse_edges[:-1], coarse_edges[1:])
+        ])
+        class_dev = (coarse_ratios - 1.0) * 100.0
+        i_worst = int(np.argmax(np.abs(class_dev)))
+        class_dev_max = float(np.abs(class_dev[i_worst]))
+        class_dev_signed = float(class_dev[i_worst])
+        worst_class = f"{coarse_edges[i_worst]:.0f}-{coarse_edges[i_worst + 1]:.0f}%"
 
-        if n_plateau_bins > 1:
-            vals_plat = values[plateau_mask]
-            ratios_plat = ratios[plateau_mask]
-            dev_plat = ratios_plat - 1.0
+        # 2. Local defects: deviation from a 5-class running mean. Starts at the 3-4% class so the
+        #    0-1% class (covered by the central checks) does not leak into the running mean, and
+        #    stops two classes short of flat_max where the running mean runs off the range.
+        class_ratios = ratios[class_mask]
+        running = np.convolve(class_ratios, np.ones(5) / 5.0, mode="same")
+        local_dev = np.abs(class_ratios - running)[3:-2]
+        local_dev_pct = float(np.max(local_dev)) * 100.0 if len(local_dev) > 0 else np.nan
+        local_dev_cut_pct = max(max_local_dev_pct, 5.0 * sigma_stat * 100.0)
 
-            # Statistics-independent RMS flatness across plateau (%)
-            rms_plat_pct = float(np.sqrt(np.mean(dev_plat ** 2))) * 100.0
+        # 3. 0-1% class (bin center 1) and 0-5% classes (bin centers 1-5)
+        ratio_1 = float(ratios[np.argmin(np.abs(bin_centers - 1.0))])
+        cent15_mask = (bin_centers > 0.5) & (bin_centers < 5.5)
+        ratio_1_5 = float(np.mean(ratios[cent15_mask])) if np.any(cent15_mask) else np.nan
 
-            # Peak maximum relative deviation (%)
-            max_dev_pct = float(np.max(np.abs(dev_plat))) * 100.0
+        # 4. Peripheral ratio (75-85% window), informational only
+        cent80_mask = (bin_centers >= 75.0) & (bin_centers <= 85.0)
+        ratio_80 = float(np.mean(ratios[cent80_mask])) if np.any(cent80_mask) else np.nan
 
-            # Linear slope across plateau (% variation per 10% centrality)
-            x_plat = bin_centers[plateau_mask]
-            poly = np.polyfit(x_plat, ratios_plat, deg=1)
-            raw_slope = float(poly[0])
-            slope_per_10pct = raw_slope * 10.0 * 100.0
+        # 5. Narrow-structure score: each check in units of its own cut, so > 1 fails
+        defect_terms = [
+            (ratio_1 - 1.0) / (max_central_spike - 1.0),
+            (1.0 - ratio_1) / (1.0 - min_central_bin),
+            (ratio_1_5 - 1.0) / (max_central_ratio - 1.0),
+            (1.0 - ratio_1_5) / (1.0 - min_central_ratio),
+        ]
+        if not np.isnan(local_dev_pct):
+            defect_terms.append(local_dev_pct / local_dev_cut_pct)
+        defect_score = float(max(defect_terms))
 
-            # Statistics-aware chi2 with systematic floor (f_syst = 0.02)
-            var_plat = np.where(vals_plat > 0, vals_plat, 1.0) + (syst_floor * plateau_avg) ** 2
-            chi2 = float(np.sum(((vals_plat - plateau_avg) ** 2) / var_plat))
-            chi2_ndf = chi2 / (n_plateau_bins - 1)
+        # 6. Evaluate Outlier Rules
+        flags = []
+        if n_flat < min_events:
+            # Too few events for the shape metrics to mean anything
+            flags.append("FLAG_LOW_STATS")
         else:
-            rms_plat_pct = np.nan
-            max_dev_pct = np.nan
-            slope_per_10pct = np.nan
-            chi2_ndf = np.nan
-
-        # 2. 1% Centrality Bin (Bin 1: edges 0.5 to 1.5, center 1.0)
-        # Note: Bin 0 [-0.5, 0.5] represents 0% centrality, but is currently empty in all runs
-        if len(ratios) > 1 and values[1] > 0:
-            ratio_1 = float(ratios[1])
-        else:
-            ratio_1 = 0.0
-
-        # 3. 1-5% Centrality Bins (Bins 1 to 5: edges 0.5 to 5.5, centers 1.0 to 5.0)
-        # Avoids the empty 0% centrality bin (Bin 0)
-        cent15_mask = (bin_centers >= 0.5) & (bin_centers <= 5.5) & (values > 0)
-        if np.any(cent15_mask):
-            ratio_1_5 = float(np.mean(ratios[cent15_mask]))
-        else:
-            ratio_1_5 = 0.0
-
-        # 4. Peripheral Ratio (near 80% Centrality: 75-85% window)
-        cent80_mask = (bin_centers >= 75.0) & (bin_centers <= 85.0) & (values > 0)
-        if np.any(cent80_mask):
-            ratio_80 = float(np.mean(ratios[cent80_mask]))
-        else:
-            ratio_80 = 0.0
-
-        # 5. Evaluate Outlier Rules
-        if not np.isnan(rms_plat_pct) and rms_plat_pct > max_rms_pct:
-            flags.append("FLAG_NON_FLAT")
-        elif not np.isnan(max_dev_pct) and max_dev_pct > max_dev_pct_cut:
-            flags.append("FLAG_NON_FLAT")
-
-        if not np.isnan(slope_per_10pct) and abs(slope_per_10pct) > max_slope_per_10pct:
-            flags.append("FLAG_SLOPE_DRIFT")
-
-        # Central anomaly: either sharp spike at 1% or broader peak/drop in 1-5%
-        if not np.isnan(ratio_1) and ratio_1 > max_central_spike:
-            flags.append("FLAG_CENTRAL_SPIKE")
-        elif not np.isnan(ratio_1_5) and ratio_1_5 > max_central_ratio:
-            flags.append("FLAG_CENTRAL_SPIKE")
-        elif not np.isnan(ratio_1_5) and ratio_1_5 < min_central_ratio:
-            flags.append("FLAG_CENTRAL_DROP")
+            if class_dev_max > max_class_dev:
+                flags.append("FLAG_CALIB_SHIFT")
+            if defect_score > 1.0:
+                flags.append("FLAG_LOCAL_DEFECT")
 
         status = ";".join(flags) if flags else "GOOD"
 
@@ -248,11 +263,16 @@ def extract_run_metrics(file_path, hist_name="hCentrality", cent_flat_min=10.0, 
             "file_path": str(path),
             "hist_name": hist_name,
             "total_events": total_events,
-            "plateau_avg": plateau_avg,
-            "rms_plat_pct": rms_plat_pct,
-            "max_dev_pct": max_dev_pct,
-            "chi2_ndf": chi2_ndf,
-            "slope_per_10pct": slope_per_10pct,
+            "flat_events": n_flat,
+            "flat_ref": flat_ref,
+            "class_dev_max": class_dev_max,
+            "class_dev_signed": class_dev_signed,
+            "worst_class": worst_class,
+            "coarse_edges": coarse_edges,
+            "coarse_ratios": coarse_ratios,
+            "local_dev_pct": local_dev_pct,
+            "local_dev_cut_pct": local_dev_cut_pct,
+            "defect_score": defect_score,
             "ratio_1": ratio_1,
             "ratio_1_5": ratio_1_5,
             "ratio_80": ratio_80,

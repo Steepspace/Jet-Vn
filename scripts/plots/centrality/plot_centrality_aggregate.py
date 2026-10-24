@@ -3,9 +3,10 @@
 import os
 import sys
 import csv
+import pickle
+import hashlib
 import argparse
 import functools
-import traceback
 from pathlib import Path
 import concurrent.futures
 
@@ -22,7 +23,8 @@ try:
 except ImportError:
     plot_centrality_qa = None
 
-from centrality_qa_metrics import compute_centrality_average, extract_run_metrics
+import centrality_qa_metrics
+from centrality_qa_metrics import extract_run_metrics
 from centrality_qa_plots import (
     plot_heatmap,
     plot_trends,
@@ -32,8 +34,86 @@ from centrality_qa_plots import (
     plot_top_flat_example,
     plot_user_example,
     plot_failure_mode_metric_distribution,
-    plot_centrality_1d_diagnostic
 )
+
+
+def failure_mode_descriptions(args):
+    """(flag, description) for every failure mode, in summary-table order."""
+    return [
+        ("FLAG_CALIB_SHIFT",  f"A 20% Class Off Flat by > {args.max_class_dev}% (0-{args.flat_max:.0f}%)"),
+        ("FLAG_LOCAL_DEFECT", "Class Hole/Spike or 0-1%/0-5% Edge (score > 1)"),
+        ("FLAG_LOW_STATS",    f"< {args.min_events:.0e} Events in 0-{args.flat_max:.0f}% (incl. empty)"),
+    ]
+
+
+def _run_now(fn, **kwargs):
+    """Default plot submitter: render immediately in this process."""
+    return fn(**kwargs)
+
+
+def _file_stamp(path):
+    st = path.stat()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def extract_metrics_cached(files, extract_kwargs, cache_path=None, max_workers=8):
+    """
+    Extract per-run metrics in parallel, reusing entries from a pickle cache for input
+    files whose modification time and size are unchanged. The whole cache is ignored if
+    the extraction settings or centrality_qa_metrics.py itself have changed.
+    Returns (metrics_list, errors).
+    """
+    settings = (sorted(extract_kwargs.items()),
+                hashlib.sha1(Path(centrality_qa_metrics.__file__).read_bytes()).hexdigest())
+    entries = {}
+    if cache_path is not None and cache_path.exists():
+        try:
+            with cache_path.open("rb") as f:
+                cache = pickle.load(f)
+            if cache.get("settings") == settings:
+                entries = cache["entries"]
+            else:
+                print("Metric settings or code changed since the cache was written; re-extracting all runs.")
+        except Exception as e:
+            print(f"Warning: could not read metrics cache {cache_path}: {e}")
+
+    results = {}
+    todo = []
+    for p in files:
+        key = str(p)
+        try:
+            stamp = _file_stamp(p)
+        except OSError:
+            stamp = None
+        hit = entries.get(key)
+        if stamp is not None and hit is not None and hit["stamp"] == stamp:
+            results[key] = (hit["metric"], None)
+        else:
+            todo.append((p, stamp))
+
+    if cache_path is not None:
+        print(f"Metrics cache: {len(results)} run(s) reused, {len(todo)} to extract ({cache_path})")
+
+    if todo:
+        extract_func = functools.partial(extract_run_metrics, **extract_kwargs)
+        todo_paths = [p for p, _ in todo]
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            extracted = list(tqdm.tqdm(executor.map(extract_func, todo_paths), total=len(todo_paths)))
+        for (p, stamp), (m, err) in zip(todo, extracted):
+            results[str(p)] = (m, err)
+            if m is not None and stamp is not None:
+                entries[str(p)] = {"stamp": stamp, "metric": m}
+
+        if cache_path is not None:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = cache_path.with_name(cache_path.name + ".tmp")
+            with tmp_path.open("wb") as f:
+                pickle.dump({"settings": settings, "entries": entries}, f, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, cache_path)
+
+    metrics_list = [m for m, _ in results.values() if m is not None]
+    errors = [err for _, err in results.values() if err]
+    return metrics_list, errors
 
 
 def write_summary_reports(data_list, output_dir):
@@ -50,17 +130,21 @@ def write_summary_reports(data_list, output_dir):
     fieldnames = [
         "run_number",
         "total_events",
-        "plateau_avg",
-        "rms_plat_pct",
-        "max_dev_pct",
-        "slope_per_10pct",
+        "flat_events",
+        "flat_ref",
+        "class_dev_max",
+        "class_dev_signed",
+        "worst_class",
+        "defect_score",
+        "local_dev_pct",
+        "local_dev_cut_pct",
         "ratio_1",
         "ratio_1_5",
         "ratio_80",
-        "chi2_ndf",
         "status",
         "file_path",
     ]
+    float_fields = fieldnames[2:-2]
 
     with open(csv_path, "w", newline="") as f_csv, \
          open(flagged_list_path, "w") as f_bad, \
@@ -72,7 +156,7 @@ def write_summary_reports(data_list, output_dir):
         for d in data_list:
             row = {k: d[k] for k in fieldnames}
             # Format floats for clean CSV presentation
-            for k in ["plateau_avg", "rms_plat_pct", "max_dev_pct", "slope_per_10pct", "ratio_1", "ratio_1_5", "ratio_80", "chi2_ndf"]:
+            for k in float_fields:
                 if isinstance(row[k], float) and not np.isnan(row[k]):
                     row[k] = f"{row[k]:.4f}"
             writer.writerow(row)
@@ -87,132 +171,135 @@ def write_summary_reports(data_list, output_dir):
     print(f"Good runs list written to: {good_list_path}")
 
 
+def _metric_or(d, key, default):
+    v = d.get(key, default)
+    return default if v is None or np.isnan(v) else v
+
+
+def _select_by_severity(matching_runs, used_runs, n, sort_key, reverse):
+    """Most severe runs first, preferring runs not already used as examples for another mode."""
+    return sorted(
+        matching_runs,
+        key=lambda d: (d["run_number"] in used_runs, -sort_key(d) if reverse else sort_key(d))
+    )[:n]
+
+
+def _select_typical_shift(matching_runs, n, bin_width=0.25):
+    """
+    Runs at the peak of the worst-class deviation distribution, spread across the run range,
+    so the examples show what a typical miscalibrated run looks like rather than the worst.
+    """
+    devs = np.array([d["class_dev_max"] for d in matching_runs])
+    bins = np.arange(devs.min(), devs.max() + bin_width, bin_width)
+    if len(bins) < 2:
+        return matching_runs[:n]
+    counts, edges = np.histogram(devs, bins=bins)
+    peak = 0.5 * (edges[np.argmax(counts)] + edges[np.argmax(counts) + 1])
+
+    near_peak = sorted((d for d in matching_runs if abs(d["class_dev_max"] - peak) <= bin_width),
+                       key=lambda d: d["run_number"])
+    if len(near_peak) <= n:
+        return near_peak
+    picks = np.linspace(0, len(near_peak) - 1, n + 2)[1:-1].round().astype(int)
+    return [near_peak[i] for i in picks]
+
+
 def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mode=3,
-                                   cent_flat_min=10.0, cent_flat_max=70.0,
-                                   max_rms_pct=4.5, max_dev_pct=8.0,
-                                   max_slope_per_10pct=2.5, max_central_spike=1.30,
-                                   min_central_ratio=0.80):
+                                   flat_max=80.0, max_class_dev=3.0, min_events=1e5, submit=_run_now):
     """
     For each failure mode, select up to `example_runs_per_mode` representative runs
     and generate their 1D centrality distribution + ratio diagnostic plots.
     Also generates a version of the relevant centrality metric distribution plot
     with vertical lines showing where the example runs fall.
-    Saves plots into output_dir / "failure_examples" / <FAILURE_MODE> /
-    Returns a dict mapping failure_mode -> list of example run numbers.
+    Saves plots into output_dir / "failure_examples" / <FAILURE_MODE> /, plus
+    failure_examples / FLAG_CALIB_SHIFT / typical / for runs at the peak of the deviation distribution.
+    Plots are handed to `submit(fn, **kwargs)`, which renders them immediately by default.
+    Returns a dict mapping example label -> {"runs": [...], "dir": <relative dir>}.
     """
     output_dir = Path(output_dir)
     examples_dir = output_dir / "failure_examples"
+    n = example_runs_per_mode
 
-    # Configure failure modes with prioritization and domain-specific filtering:
-    # 1. FLAG_SLOPE_DRIFT: extreme linear tilts across plateau
-    # 2. FLAG_NON_FLAT: non-linear plateau structure (troughs, humps, ripples) excluding slope drift runs
-    # 3. FLAG_CENTRAL_DROP: severe central drop (< 0.80)
-    # 4. FLAG_CENTRAL_SPIKE: severe central spike (> 1.30)
-    # 5. FLAG_EMPTY_OR_ZERO: zero events or zero plateau
-    failure_modes_config = [
+    def has_flag(d, mode):
+        return mode in d.get("status", "").split(";")
+
+    # LOCAL_DEFECT and LOW_STATS prefer runs failing only that mode, falling back to any run with the flag
+    example_sets = [
         {
-            "mode": "FLAG_SLOPE_DRIFT",
-            "description": "Plateau Slope Drift (|slope| > 2.5%/10% cent)",
-            "filter_fn": lambda d: "FLAG_SLOPE_DRIFT" in d.get("status", "").split(";"),
-            "sort_key": lambda d: abs(d.get("slope_per_10pct", 0.0)) if not np.isnan(d.get("slope_per_10pct", 0.0)) else 0.0,
-            "reverse": True,
+            "label": "FLAG_CALIB_SHIFT (worst)",
+            "mode": "FLAG_CALIB_SHIFT",
+            "subdir": "FLAG_CALIB_SHIFT",
+            "candidates": lambda: [d for d in metrics_list if has_flag(d, "FLAG_CALIB_SHIFT")],
+            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: _metric_or(d, "class_dev_max", 0.0), True),
         },
         {
-            "mode": "FLAG_NON_FLAT",
-            "description": "Non-Flat Plateau (RMS > 4.5% or MaxDev > 8.0%)",
-            # Prioritize pure non-flat runs not caught by any of the other three failure modes
-            "filter_fn": lambda d: d.get("status") == "FLAG_NON_FLAT",
-            "sort_key": lambda d: d.get("rms_plat_pct", 0.0) if not np.isnan(d.get("rms_plat_pct", 0.0)) else 0.0,
-            "reverse": True,
+            "label": "FLAG_CALIB_SHIFT (typical)",
+            "mode": "FLAG_CALIB_SHIFT",
+            "subdir": "FLAG_CALIB_SHIFT/typical",
+            "candidates": lambda: [d for d in metrics_list if d.get("status") == "FLAG_CALIB_SHIFT"],
+            "select": lambda runs, used: _select_typical_shift(runs, n),
         },
         {
-            "mode": "FLAG_CENTRAL_DROP",
-            "description": "Central Drop (R_1-5% < 0.80)",
-            # Prioritize pure central drop runs not caught by any other failure mode
-            "filter_fn": lambda d: d.get("status") == "FLAG_CENTRAL_DROP",
-            "sort_key": lambda d: d.get("ratio_1_5", 1.0) if not np.isnan(d.get("ratio_1_5", 1.0)) else 1.0,
-            "reverse": False,
+            "label": "FLAG_LOCAL_DEFECT",
+            "mode": "FLAG_LOCAL_DEFECT",
+            "subdir": "FLAG_LOCAL_DEFECT",
+            "candidates": lambda: ([d for d in metrics_list if d.get("status") == "FLAG_LOCAL_DEFECT"]
+                                   or [d for d in metrics_list if has_flag(d, "FLAG_LOCAL_DEFECT")]),
+            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: _metric_or(d, "defect_score", 0.0), True),
         },
         {
-            "mode": "FLAG_CENTRAL_SPIKE",
-            "description": "Central Spike (R_1% > 1.30 or R_1-5% > 1.20)",
-            # Prioritize pure central spike runs not caught by any other failure mode
-            "filter_fn": lambda d: d.get("status") == "FLAG_CENTRAL_SPIKE",
-            "sort_key": lambda d: max(
-                d.get("ratio_1", 0.0) if not np.isnan(d.get("ratio_1", 0.0)) else 0.0,
-                d.get("ratio_1_5", 0.0) if not np.isnan(d.get("ratio_1_5", 0.0)) else 0.0,
-            ),
-            "reverse": True,
-        },
-        {
-            "mode": "FLAG_EMPTY_OR_ZERO",
-            "description": "Empty Histogram or Zero Plateau",
-            "filter_fn": lambda d: d.get("status") == "FLAG_EMPTY_OR_ZERO",
-            "sort_key": lambda d: d.get("total_events", 0.0),
-            "reverse": False,
+            "label": "FLAG_LOW_STATS",
+            "mode": "FLAG_LOW_STATS",
+            "subdir": "FLAG_LOW_STATS",
+            "candidates": lambda: [d for d in metrics_list if has_flag(d, "FLAG_LOW_STATS")],
+            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: d.get("total_events", 0.0), False),
         },
     ]
 
     examples_map = {}
     used_runs = set()
 
-    for cfg in failure_modes_config:
-        mode = cfg["mode"]
-        filter_fn = cfg.get("filter_fn", lambda d: mode in d.get("status", "").split(";"))
-        matching_runs = [d for d in metrics_list if filter_fn(d)]
-        if not matching_runs:
-            # Fallback if domain filter yielded no runs
-            matching_runs = [d for d in metrics_list if mode in d.get("status", "").split(";")]
-
-        if not matching_runs:
-            examples_map[mode] = []
+    for ex in example_sets:
+        rel_dir = f"failure_examples/{ex['subdir']}/"
+        matching_runs = ex["candidates"]()
+        selected = ex["select"](matching_runs, used_runs) if matching_runs else []
+        examples_map[ex["label"]] = {"runs": [d["run_number"] for d in selected], "dir": rel_dir}
+        if not selected:
             continue
+        used_runs.update(d["run_number"] for d in selected)
 
-        # Prefer runs not already used as examples for another failure mode
-        sorted_runs = sorted(
-            matching_runs,
-            key=lambda d: (d["run_number"] in used_runs, -cfg["sort_key"](d) if cfg["reverse"] else cfg["sort_key"](d))
-        )
-        selected = sorted_runs[:example_runs_per_mode]
-        examples_map[mode] = [d["run_number"] for d in selected]
-        for d in selected:
-            used_runs.add(d["run_number"])
-
-        mode_dir = examples_dir / mode
+        mode_dir = examples_dir / ex["subdir"]
         mode_dir.mkdir(parents=True, exist_ok=True)
 
         for d in selected:
-            plot_path = mode_dir / f"run_{d['run_number']}_centrality.png"
-            plot_failure_example(
+            submit(
+                plot_failure_example,
                 metric=d,
-                failure_mode=mode,
-                output_path=plot_path,
-                cent_flat_min=cent_flat_min,
-                cent_flat_max=cent_flat_max,
+                failure_mode=ex["mode"],
+                output_path=mode_dir / f"run_{d['run_number']}_centrality.png",
+                flat_max=flat_max,
+                max_class_dev=max_class_dev,
             )
 
         # Generate the relevant metric distribution with vertical lines for the example runs
-        dist_plot_path = mode_dir / "centrality_metric_distributions.png"
-        plot_failure_mode_metric_distribution(
+        submit(
+            plot_failure_mode_metric_distribution,
             metrics_list=metrics_list,
-            failure_mode=mode,
+            failure_mode=ex["mode"],
             example_runs=[d["run_number"] for d in selected],
-            output_path=dist_plot_path,
-            max_rms_pct=max_rms_pct,
-            max_dev_pct=max_dev_pct,
-            max_slope_per_10pct=max_slope_per_10pct,
-            max_central_spike=max_central_spike,
-            min_central_ratio=min_central_ratio,
+            output_path=mode_dir / "centrality_metric_distributions.png",
+            max_class_dev=max_class_dev,
+            min_events=min_events,
         )
 
     return examples_map
 
 
 def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
-                               cent_flat_min=10.0, cent_flat_max=70.0):
+                               flat_max=80.0, max_class_dev=3.0, submit=_run_now):
     """
     Select up to `n_examples` representative runs with the best / flattest centrality distributions
-    (status == 'GOOD', ranked by lowest plateau RMS non-flatness) and generate their 1D
+    (status == 'GOOD', ranked by lowest worst-class deviation) and generate their 1D
     centrality distribution + ratio diagnostic plots.
     Saves plots into output_dir / "top_flat_examples" /
     Returns a list of the selected run numbers.
@@ -220,22 +307,17 @@ def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
     output_dir = Path(output_dir)
     top_flat_dir = output_dir / "top_flat_examples"
 
-    # Filter for GOOD runs first, or fallback to runs with valid plateau if none GOOD
+    # Filter for GOOD runs first, or fallback to any run with a valid class deviation if none GOOD
     good_runs = [d for d in metrics_list if d.get("status") == "GOOD"]
     candidates = good_runs if good_runs else [
-        d for d in metrics_list
-        if d.get("plateau_avg", 0) > 0 and not np.isnan(d.get("rms_plat_pct", np.nan))
+        d for d in metrics_list if not np.isnan(d.get("class_dev_max", np.nan))
     ]
 
     if not candidates:
         print("Warning: No valid candidate runs found for top flat examples.")
         return []
 
-    # Sort by lowest RMS non-flatness (flattest plateau)
-    sorted_runs = sorted(
-        candidates,
-        key=lambda d: d.get("rms_plat_pct", 999.0) if not np.isnan(d.get("rms_plat_pct", 999.0)) else 999.0
-    )
+    sorted_runs = sorted(candidates, key=lambda d: _metric_or(d, "class_dev_max", 999.0))
     selected = sorted_runs[:n_examples]
     top_flat_dir.mkdir(parents=True, exist_ok=True)
 
@@ -244,22 +326,22 @@ def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
         run_num = d["run_number"]
         selected_runs.append(run_num)
         plot_path = top_flat_dir / f"run_{run_num}_centrality.png"
-        plot_top_flat_example(
+        submit(
+            plot_top_flat_example,
             metric=d,
             rank=rank,
             output_path=plot_path,
-            cent_flat_min=cent_flat_min,
-            cent_flat_max=cent_flat_max,
+            flat_max=flat_max,
+            max_class_dev=max_class_dev,
         )
 
     return selected_runs
 
 
 def generate_user_examples(metrics_list, output_dir, example_runs,
-                           cent_flat_min=10.0, cent_flat_max=70.0):
+                           flat_max=80.0, max_class_dev=3.0, submit=_run_now):
     """
-    Generate 2-panel 1D centrality diagnostic example plots (Events + Ratio to Plateau)
-    for specific run numbers requested by the user.
+    Generate 1D centrality diagnostic example plots for specific run numbers requested by the user.
     Saves plots into output_dir / "user_examples" / run_<run>_centrality.png
     Returns a list of run numbers that were successfully plotted.
     """
@@ -282,22 +364,23 @@ def generate_user_examples(metrics_list, output_dir, example_runs,
             continue
         d = run_dict[r]
         plot_path = user_examples_dir / f"run_{r}_centrality.png"
-        plot_user_example(
+        submit(
+            plot_user_example,
             metric=d,
             output_path=plot_path,
-            cent_flat_min=cent_flat_min,
-            cent_flat_max=cent_flat_max,
+            flat_max=flat_max,
+            max_class_dev=max_class_dev,
             title_suffix="User Specified",
         )
         plotted_runs.append(r)
 
     if plotted_runs:
-        print(f"User-specified example plots generated for {len(plotted_runs)} run(s) in {user_examples_dir.resolve()}")
+        print(f"User-specified example plots queued for {len(plotted_runs)} run(s) in {user_examples_dir.resolve()}")
 
     return plotted_runs
 
 
-def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None, top_flat_runs=None, user_example_runs=None):
+def print_failure_summary_table(metrics_list, failure_modes_info, output_dir=None, examples_map=None, top_flat_runs=None, user_example_runs=None):
     """
     Print an ASCII summary table of runs per failure mode to stdout
     and save it to centrality_qa_summary_table.txt in output_dir.
@@ -305,14 +388,6 @@ def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None
     total_runs = len(metrics_list)
     good_runs = sum(1 for d in metrics_list if d.get("status") == "GOOD")
     flagged_runs = total_runs - good_runs
-
-    failure_modes_info = [
-        ("FLAG_CENTRAL_SPIKE", "Central Spike (R_1% > 1.30 / R_1-5% > 1.20)"),
-        ("FLAG_CENTRAL_DROP",  "Central Drop (R_1-5% < 0.80)"),
-        ("FLAG_NON_FLAT",      "Non-Flat Plateau (RMS > 4.5% / MaxDev > 8%)"),
-        ("FLAG_SLOPE_DRIFT",   "Plateau Slope Drift (|slope| > 2.5%/10% cent)"),
-        ("FLAG_EMPTY_OR_ZERO", "Empty Histogram or Zero Plateau Events"),
-    ]
 
     mode_counts = {}
     mode_unique_counts = {}
@@ -350,13 +425,12 @@ def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None
     if examples_map:
         lines.append("-" * table_width)
         lines.append("EXAMPLE RUNS GENERATED PER FAILURE MODE (in failure_examples/):")
-        for mode, _ in failure_modes_info:
-            ex_runs = examples_map.get(mode, [])
-            if ex_runs:
-                runs_str = ", ".join(str(r) for r in ex_runs)
-                lines.append(f"  {mode:<22} -> Runs: [{runs_str}]  (dir: failure_examples/{mode}/)")
+        for label, ex in examples_map.items():
+            if ex["runs"]:
+                runs_str = ", ".join(str(r) for r in ex["runs"])
+                lines.append(f"  {label:<28} -> Runs: [{runs_str}]  (dir: {ex['dir']})")
             else:
-                lines.append(f"  {mode:<22} -> None flagged")
+                lines.append(f"  {label:<28} -> None flagged")
 
     if top_flat_runs:
         lines.append("-" * table_width)
@@ -364,10 +438,9 @@ def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None
         run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
         for rank, r in enumerate(top_flat_runs, start=1):
             d = run_dict.get(r, {})
-            rms_val = f"{d.get('rms_plat_pct', np.nan):.2f}%" if not np.isnan(d.get('rms_plat_pct', np.nan)) else "N/A"
-            slope_val = f"{d.get('slope_per_10pct', np.nan):+.2f}%" if not np.isnan(d.get('slope_per_10pct', np.nan)) else "N/A"
+            dev_val = f"{d.get('class_dev_max', np.nan):.1f}%" if not np.isnan(d.get('class_dev_max', np.nan)) else "N/A"
             evts_val = f"{float(d.get('total_events', 0)):.2e}" if d.get('total_events') is not None else "N/A"
-            lines.append(f"  Rank #{rank}: Run {r:<8} (Plateau RMS: {rms_val}, Slope: {slope_val}, Evts: {evts_val})  -> top_flat_examples/run_{r}_centrality.png")
+            lines.append(f"  Rank #{rank}: Run {r:<8} (Worst 20% Class: {dev_val}, Evts: {evts_val})  -> top_flat_examples/run_{r}_centrality.png")
 
     if user_example_runs:
         lines.append("-" * table_width)
@@ -376,10 +449,9 @@ def print_failure_summary_table(metrics_list, output_dir=None, examples_map=None
         for r in user_example_runs:
             d = run_dict.get(r, {})
             status_val = d.get("status", "UNKNOWN")
-            rms_val = f"{d.get('rms_plat_pct', np.nan):.2f}%" if not np.isnan(d.get('rms_plat_pct', np.nan)) else "N/A"
-            slope_val = f"{d.get('slope_per_10pct', np.nan):+.2f}%" if not np.isnan(d.get('slope_per_10pct', np.nan)) else "N/A"
+            dev_val = f"{d.get('class_dev_max', np.nan):.1f}%" if not np.isnan(d.get('class_dev_max', np.nan)) else "N/A"
             evts_val = f"{float(d.get('total_events', 0)):.2e}" if d.get('total_events') is not None else "N/A"
-            lines.append(f"  Run {r:<8} (Status: {status_val}, Plateau RMS: {rms_val}, Slope: {slope_val}, Evts: {evts_val})  -> user_examples/run_{r}_centrality.png")
+            lines.append(f"  Run {r:<8} (Status: {status_val}, Worst 20% Class: {dev_val}, Evts: {evts_val})  -> user_examples/run_{r}_centrality.png")
 
     lines.append("=" * table_width)
 
@@ -404,43 +476,27 @@ def main():
                         help="Directory to save aggregate plots, reports, and detailed test QA (default: centrality_aggregate_qa).")
     parser.add_argument("--hist-name", type=str, default="hCentrality",
                         help="Name of centrality histogram to analyze (e.g. hCentrality, hCentralityZ150, hCentrality_Trig14, or 2D projection; default: hCentrality).")
-    parser.add_argument("--test-runs", nargs="*", type=int, default=[68144, 72020, 76020],
-                        help="Run numbers to generate detailed per-run QA plots for (default: 68144 72020 76020).")
-    parser.add_argument("--no-test-plots", action="store_true",
-                        help="Disable generating detailed per-run plots for the test runs.")
-    parser.add_argument("--plot-outliers", action="store_true",
-                        help="Generate detailed per-run QA plots for all flagged outlier runs as well.")
     parser.add_argument("-j", "--workers", type=int, default=None,
                         help="Number of parallel worker processes (default: min(cpu_count(), 32)).")
-    parser.add_argument("--cent-flat-min", type=float, default=10.0,
-                        help="Minimum centrality [%%] for flat plateau (default: 10.0).")
-    parser.add_argument("--cent-flat-max", type=float, default=70.0,
-                        help="Maximum centrality [%%] for flat plateau (default: 70.0).")
-    parser.add_argument("--max-rms", type=float, default=4.5,
-                        help="Maximum plateau RMS non-flatness [%%] threshold before flagging NON_FLAT (default: 4.5).")
-    parser.add_argument("--max-dev", type=float, default=8.0,
-                        help="Maximum single-bin deviation [%%] threshold on plateau (default: 8.0).")
-    parser.add_argument("--max-slope", type=float, default=2.5,
-                        help="Maximum slope tolerance in %% per 10%% centrality (default: 2.5).")
-    parser.add_argument("--max-central-spike", type=float, default=1.30,
-                        help="Maximum allowed ratio in 1%% centrality bin (R_1%%) before flagging CENTRAL_SPIKE (default: 1.30).")
-    parser.add_argument("--min-central-ratio", type=float, default=0.80,
-                        help="Minimum allowed ratio in 1-5%% centrality (R_1-5%%) before flagging CENTRAL_DROP (default: 0.80).")
-    parser.add_argument("--max-central-ratio", type=float, default=1.20,
-                        help="Maximum allowed ratio in 1-5%% centrality (R_1-5%%) before flagging CENTRAL_SPIKE (default: 1.20).")
-    parser.add_argument("--syst-floor", type=float, default=0.02,
-                        help="Systematic fractional uncertainty floor for chi2 computation (default: 0.02).")
-    parser.add_argument("--example-runs-per-mode", type=int, default=3,
-                        help="Number of representative example run plots to generate for each failure mode (default: 3).")
-    parser.add_argument("--no-failure-examples", action="store_true",
-                        help="Disable generating failure mode example plots.")
-    parser.add_argument("--top-flat-examples", type=int, default=3,
-                        help="Number of representative example run plots to generate for top flattest runs (default: 3).")
-    parser.add_argument("--no-top-flat-examples", action="store_true",
-                        help="Disable generating top flat example plots.")
-    parser.add_argument("--example-runs", "--user-example-runs", "--user-runs",
-                        nargs="*", default=None,
-                        help="Specific run number(s) specified by user to generate 2-panel 1D centrality diagnostic example plots for.")
+    parser.add_argument("--flat-max", type=float, default=80.0,
+                        help="Upper edge [%%] of the centrality range required to be flat (default: 80).")
+    parser.add_argument("--max-class-dev", type=float, default=3.0,
+                        help="Maximum deviation [%%] of any 20%%-wide centrality class from its expected "
+                             "event count before flagging CALIB_SHIFT (default: 3.0).")
+    parser.add_argument("--min-events", type=float, default=1e5,
+                        help="Minimum events in the flatness range; runs below are flagged LOW_STATS (default: 1e5).")
+    parser.add_argument("--n-examples", type=int, default=3,
+                        help="Example run plots per failure mode and for the flattest runs; 0 disables them (default: 3).")
+    parser.add_argument("--example-runs", nargs="*", default=None,
+                        help="Extra run number(s) to make 1D centrality diagnostic plots for.")
+    parser.add_argument("--test-runs", nargs="*", type=int, default=[68144, 72020, 76020],
+                        help="Runs to mark on the trend/heatmap plots and make detailed per-run QA plots for; "
+                             "pass the flag with no runs to disable (default: 68144 72020 76020).")
+    parser.add_argument("--cache-file", type=Path, default=None,
+                        help="Pickle cache of per-run metrics; unchanged input files are not re-read "
+                             "(default: <output-dir>/centrality_metrics_cache.pkl).")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Re-extract every run without reading or writing the metrics cache.")
     parser.add_argument("files", nargs="*", type=Path, help="Positional list of ROOT file paths.")
     args = parser.parse_args()
 
@@ -472,41 +528,28 @@ def main():
     print(f"Centrality Run Aggregate QA")
     print(f"Input files:        {len(files_to_process)}")
     print(f"Histogram:          {args.hist_name}")
-    print(f"Plateau Range:      [{args.cent_flat_min}%, {args.cent_flat_max}%]")
-    print(f"Max Plateau RMS:    {args.max_rms}%")
-    print(f"Max Plateau Slope:  {args.max_slope}% per 10% cent")
-    print(f"Central Spike Cut:  R(1%) > {args.max_central_spike}")
+    print(f"Flatness Range:     [0%, {args.flat_max}%]")
+    print(f"Max Class Dev:      {args.max_class_dev}% (20%-wide classes)")
+    print(f"Min Events:         {args.min_events:.0e}")
     print(f"Test runs:          {args.test_runs}")
     print(f"Output dir:         {args.output_dir.resolve()}")
     print(f"Worker count:       {max_workers}")
     print(f"============================================================")
 
-    # 1. Parallel Extraction of Metrics
-    extract_func = functools.partial(
-        extract_run_metrics,
-        hist_name=args.hist_name,
-        cent_flat_min=args.cent_flat_min,
-        cent_flat_max=args.cent_flat_max,
-        max_rms_pct=args.max_rms,
-        max_dev_pct_cut=args.max_dev,
-        max_slope_per_10pct=args.max_slope,
-        min_central_ratio=args.min_central_ratio,
-        max_central_ratio=args.max_central_ratio,
-        max_central_spike=args.max_central_spike,
-        syst_floor=args.syst_floor,
-    )
-
+    # 1. Parallel Extraction of Metrics (cached)
+    cache_path = None if args.no_cache else (args.cache_file or args.output_dir / "centrality_metrics_cache.pkl")
     print("Extracting flatness metrics across all runs...")
-    metrics_list = []
-    errors = []
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        results = list(tqdm.tqdm(executor.map(extract_func, files_to_process), total=len(files_to_process)))
-
-    for m, err in results:
-        if m is not None:
-            metrics_list.append(m)
-        if err:
-            errors.append(err)
+    metrics_list, errors = extract_metrics_cached(
+        files_to_process,
+        extract_kwargs=dict(
+            hist_name=args.hist_name,
+            flat_max=args.flat_max,
+            max_class_dev=args.max_class_dev,
+            min_events=args.min_events,
+        ),
+        cache_path=cache_path,
+        max_workers=max_workers,
+    )
 
     if not metrics_list:
         print("Error: No valid histogram data could be extracted from any of the input files.")
@@ -526,78 +569,67 @@ def main():
     if errors:
         print(f"Encountered {len(errors)} warnings/errors during extraction.")
 
-    # 2. Generate Aggregate Plots
-    print("Generating Run Aggregate plots...")
-    plot_heatmap(
-        metrics_list,
-        args.output_dir / "centrality_ratio_heatmap_all_runs.png",
-        test_runs=args.test_runs,
-    )
-    plot_trends(
-        metrics_list,
-        args.output_dir / "centrality_flatness_trends.png",
-        test_runs=args.test_runs,
-        max_rms_pct=args.max_rms,
-        max_slope_per_10pct=args.max_slope,
-        max_central_spike=args.max_central_spike,
-        min_central_ratio=args.min_central_ratio,
-    )
-    plot_metric_distributions(
-        metrics_list,
-        args.output_dir / "centrality_metric_distributions.png",
-        max_rms_pct=args.max_rms,
-        max_slope_per_10pct=args.max_slope,
-        max_central_spike=args.max_central_spike,
-        min_central_ratio=args.min_central_ratio,
-    )
-    plot_ensemble_profile(
-        metrics_list,
-        args.output_dir / "centrality_ensemble_profile.png",
-        subtitle=f"All Processed Runs (N = {n_total})",
-    )
+    # 2. Render every plot in one worker pool. Jobs are queued longest first so the slow
+    #    detailed per-run QA overlaps with the aggregate and example plots.
+    pool = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+    futures = {}
+
+    def submit(fn, **kwargs):
+        futures[pool.submit(fn, **kwargs)] = fn.__name__
+
+    runs_to_detail = set(args.test_runs or [])
+    detail_output_dir = args.output_dir / "detailed_qa"
+    if runs_to_detail and plot_centrality_qa is not None:
+        run_to_path = {d["run_number"]: Path(d["file_path"]) for d in metrics_list}
+        for r in sorted(runs_to_detail):
+            if r in run_to_path:
+                submit(plot_centrality_qa.process_file, path=run_to_path[r],
+                       output_dir=detail_output_dir, logy=False, run_subdirs=True)
+    elif runs_to_detail and plot_centrality_qa is None:
+        print("Warning: Could not import plot_centrality_qa.py; skipping detailed per-run plots.")
+
+    submit(plot_metric_distributions, data_list=metrics_list,
+           output_path=args.output_dir / "centrality_metric_distributions.png",
+           max_class_dev=args.max_class_dev)
+    submit(plot_trends, data_list=metrics_list,
+           output_path=args.output_dir / "centrality_flatness_trends.png",
+           test_runs=args.test_runs, max_class_dev=args.max_class_dev, flat_max=args.flat_max)
+    submit(plot_heatmap, data_list=metrics_list,
+           output_path=args.output_dir / "centrality_ratio_heatmap_all_runs.png",
+           test_runs=args.test_runs)
+    submit(plot_ensemble_profile, data_list=metrics_list,
+           output_path=args.output_dir / "centrality_ensemble_profile.png",
+           subtitle=f"All Processed Runs (N = {n_total})")
     good_metrics = [d for d in metrics_list if d.get("status") == "GOOD"]
     if good_metrics:
-        plot_ensemble_profile(
-            good_metrics,
-            args.output_dir / "centrality_ensemble_profile_good_runs.png",
-            subtitle=f"Good Runs (Passed All QA, N = {len(good_metrics)})",
-        )
+        submit(plot_ensemble_profile, data_list=good_metrics,
+               output_path=args.output_dir / "centrality_ensemble_profile_good_runs.png",
+               subtitle=f"Good Runs (Passed All QA, N = {len(good_metrics)})")
     else:
         print("Warning: No runs passed all QA checks. Skipping centrality_ensemble_profile_good_runs.png.")
 
-    # 3. Write Reports
-    write_summary_reports(metrics_list, args.output_dir)
-
-    # 4. Generate Example 1D Centrality Plots for Each Failure Mode
+    # 3. Example 1D Centrality Plots for Each Failure Mode, the Flattest Runs, and User Runs
     examples_map = None
-    if not args.no_failure_examples:
-        print(f"Generating example 1D centrality plots for each failure mode (up to {args.example_runs_per_mode} per mode)...")
+    top_flat_runs = []
+    if args.n_examples > 0:
         examples_map = generate_failure_mode_examples(
             metrics_list,
             args.output_dir,
-            example_runs_per_mode=args.example_runs_per_mode,
-            cent_flat_min=args.cent_flat_min,
-            cent_flat_max=args.cent_flat_max,
-            max_rms_pct=args.max_rms,
-            max_dev_pct=args.max_dev,
-            max_slope_per_10pct=args.max_slope,
-            max_central_spike=args.max_central_spike,
-            min_central_ratio=args.min_central_ratio,
+            example_runs_per_mode=args.n_examples,
+            flat_max=args.flat_max,
+            max_class_dev=args.max_class_dev,
+            min_events=args.min_events,
+            submit=submit,
         )
-
-    # 4b. Generate Example 1D Centrality Plots for Top Flat Runs
-    top_flat_runs = []
-    if not args.no_top_flat_examples and args.top_flat_examples > 0:
-        print(f"Generating example 1D centrality plots for top {args.top_flat_examples} flattest runs...")
         top_flat_runs = generate_top_flat_examples(
             metrics_list,
             args.output_dir,
-            n_examples=args.top_flat_examples,
-            cent_flat_min=args.cent_flat_min,
-            cent_flat_max=args.cent_flat_max,
+            n_examples=args.n_examples,
+            flat_max=args.flat_max,
+            max_class_dev=args.max_class_dev,
+            submit=submit,
         )
 
-    # 4c. Generate Example 1D Centrality Plots for User-Specified Runs
     user_example_runs = []
     if args.example_runs:
         user_runs_to_plot = []
@@ -608,54 +640,43 @@ def main():
                 except ValueError:
                     print(f"Warning: Could not parse '{part}' as a run number.")
         if user_runs_to_plot:
-            print(f"Generating example 1D centrality plots for {len(user_runs_to_plot)} user-specified run(s)...")
             user_example_runs = generate_user_examples(
                 metrics_list,
                 args.output_dir,
                 example_runs=user_runs_to_plot,
-                cent_flat_min=args.cent_flat_min,
-                cent_flat_max=args.cent_flat_max,
+                flat_max=args.flat_max,
+                max_class_dev=args.max_class_dev,
+                submit=submit,
             )
 
-    # 5. Selective Detailed Plotting
-    runs_to_detail = set()
-    if not args.no_test_plots and args.test_runs:
-        runs_to_detail.update(args.test_runs)
+    # 4. Write Reports while the plots render
+    write_summary_reports(metrics_list, args.output_dir)
 
-    if args.plot_outliers:
-        flagged_runs = [d["run_number"] for d in metrics_list if d["status"] != "GOOD"]
-        runs_to_detail.update(flagged_runs)
+    # 5. Wait for all plots
+    print(f"Rendering {len(futures)} plot job(s) on {max_workers} worker(s)...")
+    plot_errors = []
+    for fut in tqdm.tqdm(concurrent.futures.as_completed(futures), total=len(futures)):
+        try:
+            result = fut.result()
+        except Exception as e:
+            plot_errors.append(f"{futures[fut]}: {e!r}")
+            continue
+        # plot_centrality_qa.process_file reports problems through its return value
+        if futures[fut] == "process_file" and result is not None:
+            plot_errors.append(f"process_file: {result}")
+    pool.shutdown()
 
+    if plot_errors:
+        print(f"{len(plot_errors)} plot job(s) reported errors:")
+        for err in plot_errors[:5]:
+            print(f"  {err}")
     if runs_to_detail and plot_centrality_qa is not None:
-        # Find file paths corresponding to selected runs
-        run_to_path = {d["run_number"]: Path(d["file_path"]) for d in metrics_list}
-        target_files = [run_to_path[r] for r in runs_to_detail if r in run_to_path]
-
-        if target_files:
-            print(f"Generating detailed per-run QA plots for {len(target_files)} selected run(s)...")
-            detail_output_dir = args.output_dir / "detailed_qa"
-            detail_func = functools.partial(
-                plot_centrality_qa.process_file,
-                output_dir=detail_output_dir,
-                logy=False,
-                run_subdirs=True,
-                cent_flat_min=args.cent_flat_min,
-                cent_flat_max=args.cent_flat_max,
-            )
-
-            with concurrent.futures.ProcessPoolExecutor(max_workers=min(len(target_files), max_workers)) as executor:
-                detail_results = list(tqdm.tqdm(executor.map(detail_func, target_files), total=len(target_files)))
-
-            detail_errs = [e for e in detail_results if e is not None]
-            if detail_errs:
-                print(f"Detailed plotting had {len(detail_errs)} warning(s)/error(s).")
-            print(f"Detailed QA plots saved in: {detail_output_dir.resolve()}")
-    elif runs_to_detail and plot_centrality_qa is None:
-        print("Warning: Could not import plot_centrality_qa.py; skipping detailed per-run plots.")
+        print(f"Detailed QA plots saved in: {detail_output_dir.resolve()}")
 
     # 6. Print and Save Summary Table
     print_failure_summary_table(
         metrics_list,
+        failure_mode_descriptions(args),
         output_dir=args.output_dir,
         examples_map=examples_map,
         top_flat_runs=top_flat_runs,
