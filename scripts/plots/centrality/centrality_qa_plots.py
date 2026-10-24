@@ -5,7 +5,8 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplhep as hep
-from centrality_qa_metrics import N_CENT_CLASSES, LOCAL_DEV_CUT_PCT
+from matplotlib.ticker import MaxNLocator, MultipleLocator
+from centrality_qa_metrics import N_CENT_CLASSES, R1_CUTS, R1_5_CUTS
 
 def plot_heatmap(data_list, output_path, test_runs=None):
     hep.style.use("ATLAS")
@@ -57,6 +58,29 @@ def plot_heatmap(data_list, output_path, test_runs=None):
     plt.close(fig)
 
 
+def _snap_axis(ax, lo, hi, n_ticks=8):
+    """
+    Set the x-axis to 'nice' major ticks covering [lo, hi] and return histogram bin edges with
+    two bins per major tick, so every bin edge sits on a major or minor tick.
+    """
+    ticks = MaxNLocator(nbins=n_ticks, steps=[1, 2, 5, 10]).tick_values(lo, hi)
+    step = float(ticks[1] - ticks[0])
+    width = step / 2.0
+    lo_s = np.floor(lo / step + 1e-9) * step
+    hi_s = np.ceil(hi / step - 1e-9) * step
+    ax.xaxis.set_major_locator(MultipleLocator(step))
+    ax.xaxis.set_minor_locator(MultipleLocator(width))
+    ax.set_xlim(lo_s, hi_s)
+    return np.round(np.arange(lo_s, hi_s + width / 2.0, width), 10)
+
+
+def _log_tick_bins(lo, hi):
+    """Bin edges at 1-9 x 10^k, i.e. on the major and minor ticks of a log axis covering [lo, hi]."""
+    k_lo, k_hi = int(np.floor(np.log10(max(lo, 1.0)))), int(np.ceil(np.log10(max(hi, 1.0))))
+    edges = np.array([m * 10.0 ** k for k in range(k_lo, k_hi) for m in range(1, 10)] + [10.0 ** k_hi])
+    return edges
+
+
 def _draw_class_dev_scatter(ax, runs, devs, is_good, is_outlier, is_test, max_class_dev, s_good=30, s_bad=45):
     ax.scatter(runs[is_good], devs[is_good], color="forestgreen", s=s_good, alpha=0.7, label="Good Runs", edgecolors="none")
     ax.scatter(runs[is_outlier], devs[is_outlier], color="crimson", s=s_bad, alpha=0.85, marker="^", label="Flagged Runs")
@@ -69,14 +93,16 @@ def _draw_class_dev_scatter(ax, runs, devs, is_good, is_outlier, is_test, max_cl
     ax.set_ylim(bottom=0.0)
     ax.grid(True, linestyle="--", alpha=0.4)
 
-def _draw_ratios_scatter(ax, runs, r1s, r15s, r80s, max_central_spike, min_central_ratio):
-    ax.scatter(runs, r1s, color="crimson", s=35, alpha=0.65, marker="^", label=r"$R_{0-1\%}$")
-    ax.scatter(runs, r15s, color="royalblue", s=30, alpha=0.6, marker="o", label=r"$R_{0-5\%}$")
+def _draw_ratios_scatter(ax, runs, r1s, r15s, r80s, r1_cuts, r1_5_cuts):
+    # Each central ratio is drawn with its own allowed band in the matching colour
+    ax.axhspan(*r1_cuts, color="crimson", alpha=0.06)
+    ax.axhspan(*r1_5_cuts, color="royalblue", alpha=0.10)
+    for c in r1_cuts: ax.axhline(c, color="crimson", linestyle="--", linewidth=1.4)
+    for c in r1_5_cuts: ax.axhline(c, color="royalblue", linestyle=":", linewidth=1.6)
+    ax.scatter(runs, r1s, color="crimson", s=35, alpha=0.65, marker="^", label=rf"$R_{{1\%}}$ (cuts {r1_cuts[0]:g}, {r1_cuts[1]:g})")
+    ax.scatter(runs, r15s, color="royalblue", s=30, alpha=0.6, marker="o", label=rf"$R_{{1-5\%}}$ (cuts {r1_5_cuts[0]:g}, {r1_5_cuts[1]:g})")
     ax.scatter(runs, r80s, color="darkorange", s=30, alpha=0.6, marker="s", label=r"$R_{80\%}$ (Peripheral $\sim$80%)")
     ax.axhline(1.0, color="gray", linestyle="-", linewidth=1.2)
-    ax.axhline(max_central_spike, color="crimson", linestyle="--", linewidth=1.5, label=rf"Spike Cut ({max_central_spike})")
-    ax.axhline(min_central_ratio, color="crimson", linestyle=":", linewidth=1.5, label=rf"Drop Cut ({min_central_ratio})")
-    ax.axhspan(min_central_ratio, 1.20, color="royalblue", alpha=0.08)
     ax.set_ylim(0.3, 1.9)
     ax.grid(True, linestyle="--", alpha=0.4)
 
@@ -92,8 +118,8 @@ def _draw_events_scatter(ax, runs, nevts, is_good, is_outlier, is_test, s_good=3
     ax.grid(True, linestyle="--", alpha=0.4)
 
 
-def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.0,
-                max_central_spike=1.30, min_central_ratio=0.80, flat_max=80.0, save_individual=True):
+def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
+                r1_cuts=R1_CUTS, r1_5_cuts=R1_5_CUTS, flat_max=80.0, save_individual=True):
     hep.style.use("ATLAS")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +143,7 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.0,
     axes[0].set_ylabel(f"Worst 20% Class\nDeviation [%]", fontsize=13)
     axes[0].legend(loc="upper right", ncol=4, fontsize=11, frameon=True, framealpha=0.9)
 
-    _draw_ratios_scatter(axes[1], runs, r1s, r15s, r80s, max_central_spike, min_central_ratio)
+    _draw_ratios_scatter(axes[1], runs, r1s, r15s, r80s, r1_cuts, r1_5_cuts)
     axes[1].set_ylabel("Ratio to Flat", fontsize=14)
     axes[1].legend(loc="upper right", ncol=3, fontsize=11, frameon=True, framealpha=0.9)
 
@@ -134,14 +160,14 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.0,
         fig_dev, ax_dev = plt.subplots(figsize=(11, 6.5))
         _draw_class_dev_scatter(ax_dev, runs, devs, is_good, is_outlier, is_test, max_class_dev, s_good=32, s_bad=48)
         ax_dev.set_xlabel("Run Number", loc="center", fontsize=15)
-        ax_dev.set_ylabel(f"Worst 20% Class Deviation from Flat [%] (0–{flat_max:.0f}%)", fontsize=14)
+        ax_dev.set_ylabel(f"Worst 20% Class Deviation from Flat [%] (1–{flat_max:.0f}%)", fontsize=14)
         ax_dev.legend(loc="upper right", ncol=4, fontsize=11, frameon=True, framealpha=0.9)
         fig_dev.tight_layout()
         fig_dev.savefig(output_path.parent / f"{stem}_class_dev.png", dpi=300, bbox_inches="tight")
         plt.close(fig_dev)
 
         fig_rat, ax_rat = plt.subplots(figsize=(11, 6.5))
-        _draw_ratios_scatter(ax_rat, runs, r1s, r15s, r80s, max_central_spike, min_central_ratio)
+        _draw_ratios_scatter(ax_rat, runs, r1s, r15s, r80s, r1_cuts, r1_5_cuts)
         ax_rat.set_xlabel("Run Number", loc="center", fontsize=15)
         ax_rat.set_ylabel("Ratio to Flat Expectation", fontsize=14)
         ax_rat.legend(loc="upper right", ncol=3, fontsize=11, frameon=True, framealpha=0.9)
@@ -159,70 +185,65 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.0,
         plt.close(fig_ev)
 
 
-def _draw_ratios_hist(ax, r1s, r15s, max_spike, min_drop, n_spike, pct_spike, n_drop, pct_drop, zoomed=False, title_font=9.8, pad=0.35):
-    if len(r1s) > 0 and len(r15s) > 0:
-        if zoomed:
-            d1, d15 = np.clip(r1s, 0.4, 2.0), np.clip(r15s, 0.4, 2.0)
-            bins = np.linspace(0.4, 2.0, 35)
-            x_min, x_max = 0.4, 2.0
-            extra_txt = "\n(Clipped at [0.4, 2.0])"
-        else:
-            d1, d15 = r1s, r15s
-            x_min = 0
-            x_max = max(2.5, max(r1s) * 1.08)
-            bins = np.linspace(0, x_max, 55)
-            extra_txt = "\n" + rf"Max $R_{{0-1\%}}$: {max(r1s):.2f}"
+def _ratio_range(vals, cuts):
+    """x-range for a central-ratio histogram: all values and both cuts, with a little margin."""
+    lo, hi = min(min(vals), cuts[0]), max(max(vals), cuts[1])
+    pad = 0.05 * (hi - lo)
+    return lo - pad, hi + pad
 
-        ax.hist(d1, bins=bins, histtype="step", color="crimson", linewidth=2.0, label=r"$R_{0-1\%}$")
-        ax.hist(d15, bins=bins, histtype="step", color="royalblue", linewidth=2.0, label=r"$R_{0-5\%}$")
+
+def _draw_ratio_hist(ax, vals, cuts, color, symbol, title_font=10.5, pad=0.35):
+    """One central ratio with its low and high cuts, and pass / low-fail / high-fail counts."""
+    if len(vals) > 0:
+        vals = np.asarray(vals)
+        bins = _snap_axis(ax, *_ratio_range(vals, cuts), n_ticks=15)
+        n_low, n_high = int(np.sum(vals < cuts[0])), int(np.sum(vals > cuts[1]))
+        n_pass = len(vals) - n_low - n_high
+
+        ax.hist(vals, bins=bins, histtype="step", color=color, linewidth=2.0, label=rf"${symbol}$")
         ax.axvline(1.0, color="gray", linestyle="-", linewidth=1.5)
-        ax.axvline(max_spike, color="crimson", linestyle="--", linewidth=2, label=rf"Spike Cut ({max_spike})")
-        ax.axvline(min_drop, color="darkorange", linestyle="--", linewidth=2, label=rf"Drop Cut ({min_drop})")
+        ax.axvline(cuts[0], color="crimson", linestyle="--", linewidth=2, label=f"Low Cut ({cuts[0]:g})")
+        ax.axvline(cuts[1], color="darkorange", linestyle="--", linewidth=2, label=f"High Cut ({cuts[1]:g})")
         box_text = (
-            rf"Spike Fail (> {max_spike}): {n_spike:,} ({pct_spike:.1f}%)" + "\n" +
-            rf"Drop Fail (< {min_drop}): {n_drop:,} ({pct_drop:.1f}%)" + extra_txt
+            rf"Pass: {n_pass:,} ({100.0 * n_pass / len(vals):.1f}%)" + "\n" +
+            rf"Low (< {cuts[0]:g}): {n_low:,} ({100.0 * n_low / len(vals):.1f}%)" + "\n" +
+            rf"High (> {cuts[1]:g}): {n_high:,} ({100.0 * n_high / len(vals):.1f}%)"
         )
         ax.text(0.96, 0.94, box_text, transform=ax.transAxes, ha="right", va="top", fontsize=title_font,
                 bbox=dict(boxstyle=f"round,pad={pad}", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
-        ax.set_xlim(x_min, x_max)
     ax.set_yscale("log")
     ax.set_ylim(0.5, 4500)
     ax.grid(True, linestyle="--", alpha=0.3, which="both")
 
-def _draw_cut_hist(ax, vals, cut, color, x_max, unit, zoomed=False, title_font=10.0, pad=0.35, run_cuts=None, run_cut_note=""):
-    """
-    Distribution of a one-sided QA metric with its flagging cut. `run_cuts` gives each run's
-    own cut when it can be raised above `cut` (e.g. for low statistics); pass/fail counts use it.
-    """
+def _draw_cut_hist(ax, vals, cut, color, x_max, unit, zoomed=False, title_font=10.0, pad=0.35, n_ticks=18):
+    """Distribution of a one-sided QA metric with its flagging cut."""
     if len(vals) > 0:
         vals = np.asarray(vals)
-        n_fail = int(np.sum(vals > (np.asarray(run_cuts) if run_cuts is not None else cut)))
+        n_fail = int(np.sum(vals > cut))
         n_pass = len(vals) - n_fail
         if zoomed:
-            data = np.clip(vals, 0, x_max)
             extra_txt = f"\n(Clipped at {x_max:g}{unit})"
         else:
-            data = vals
-            x_max = max(x_max, float(np.max(vals)) * 1.08)
+            x_max = max(x_max, float(np.max(vals)))
             extra_txt = f"\nMax: {np.max(vals):.2f}{unit}"
-        bins = np.linspace(0, x_max, 60)
+        bins = _snap_axis(ax, 0.0, x_max, n_ticks=n_ticks)
+        data = np.clip(vals, 0, bins[-1] - 1e-9) if zoomed else vals
 
         ax.hist(data, bins=bins, histtype="step", color=color, linewidth=2.0)
         ax.axvline(cut, color="crimson", linestyle="--", linewidth=2, label=f"Cut ({cut:g}{unit})")
         box_text = (
             rf"Pass ($\leq {cut:g}${unit}): {n_pass:,} ({100.0 * n_pass / len(vals):.1f}%)" + "\n" +
-            rf"Fail (> {cut:g}{unit}{run_cut_note}): {n_fail:,} ({100.0 * n_fail / len(vals):.1f}%)" + extra_txt
+            rf"Fail (> {cut:g}{unit}): {n_fail:,} ({100.0 * n_fail / len(vals):.1f}%)" + extra_txt
         )
         ax.text(0.96, 0.78, box_text, transform=ax.transAxes, ha="right", va="top", fontsize=title_font,
                 bbox=dict(boxstyle=f"round,pad={pad}", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
-        ax.set_xlim(0, x_max)
     ax.set_yscale("log")
     ax.set_ylim(0.5, 3500)
     ax.grid(True, linestyle="--", alpha=0.3, which="both")
 
-def _draw_events_hist(ax, nevts, log_bins, evts_box_text, title_font=10.5, pad=0.35):
-    if len(nevts) > 0 and log_bins is not None:
-        ax.hist(nevts, bins=log_bins, histtype="step", color="coral", linewidth=2.0)
+def _draw_events_hist(ax, nevts, evts_box_text, title_font=10.5, pad=0.35):
+    if len(nevts) > 0:
+        ax.hist(nevts, bins=_log_tick_bins(min(nevts), max(nevts)), histtype="step", color="coral", linewidth=2.0)
         ax.text(0.04, 0.94, evts_box_text, transform=ax.transAxes, ha="left", va="top", fontsize=title_font,
                 bbox=dict(boxstyle=f"round,pad={pad}", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
         ax.set_xscale("log")
@@ -231,29 +252,20 @@ def _draw_events_hist(ax, nevts, log_bins, evts_box_text, title_font=10.5, pad=0
     ax.grid(True, linestyle="--", alpha=0.3, which="both")
 
 
-def plot_metric_distributions(data_list, output_path, max_class_dev=3.0, max_local_dev_pct=LOCAL_DEV_CUT_PCT,
-                              max_central_spike=1.30, min_central_ratio=0.80, save_individual=True):
+def plot_metric_distributions(data_list, output_path, max_class_dev=3.5, r1_cuts=R1_CUTS, r1_5_cuts=R1_5_CUTS,
+                              save_individual=True):
     hep.style.use("ATLAS")
     if hasattr(data_list, "to_dict"): data_list = data_list.to_dict("records")
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     devs = [d["class_dev_max"] for d in data_list if not np.isnan(d["class_dev_max"])]
-    local = [(d["local_dev_pct"], d["local_dev_cut_pct"]) for d in data_list if not np.isnan(d["local_dev_pct"])]
-    local_devs = [v for v, _ in local]
-    local_cuts = [c for _, c in local]
     r1s = [d["ratio_1"] for d in data_list if not np.isnan(d["ratio_1"])]
     r15s = [d["ratio_1_5"] for d in data_list if not np.isnan(d["ratio_1_5"])]
     nevts = [d["total_events"] for d in data_list if d["total_events"] > 0]
 
-    n_spike = sum(1 for v in r1s if v > max_central_spike)
-    pct_spike = 100.0 * n_spike / len(r1s) if r1s else 0.0
-    n_drop = sum(1 for v in r15s if v < min_central_ratio)
-    pct_drop = 100.0 * n_drop / len(r15s) if r15s else 0.0
-
-    log_bins, evts_box_text = None, ""
+    evts_box_text = ""
     if nevts:
-        log_bins = np.logspace(np.log10(max(1, min(nevts))), np.log10(max(nevts)), 40)
         evts_box_text = (
             rf"Total Runs: {len(nevts):,}" + "\n" +
             rf"Median: {float(np.median(nevts)):.2e} evts/run" + "\n" +
@@ -261,25 +273,25 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.0, max_loc
         )
 
     dev_label = "Worst 20% Class Deviation from Flat [%]"
-    local_label = "Max Local Deviation [%]"
-    local_kwargs = {"run_cuts": local_cuts, "run_cut_note": r" or 5$\sigma$"}
+    r1_label = r"Ratio to Flat in the 1% Bin, $R_{1\%}$"
+    r15_label = r"Mean Ratio to Flat in the 1-5% Bins, $R_{1-5\%}$"
 
-    # 1. Unzoomed / zoomed 4-panel
+    # 1. Unzoomed / zoomed 4-panel (the zoomed version clips the class-deviation outliers)
     for zoomed, path in [(False, output_path), (True, output_path.parent / f"{output_path.stem}_zoomed.png")]:
-        fig, axes = plt.subplots(2, 2, figsize=(13, 10))
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10.5))
         _draw_cut_hist(axes[0, 0], devs, max_class_dev, "darkviolet", 12.0, "%", zoomed=zoomed)
         axes[0, 0].set_xlabel(dev_label)
         axes[0, 0].legend(loc="upper right", fontsize=10.5)
 
-        _draw_cut_hist(axes[0, 1], local_devs, max_local_dev_pct, "teal", 10.0, "%", zoomed=zoomed, **local_kwargs)
-        axes[0, 1].set_xlabel(local_label)
-        axes[0, 1].legend(loc="upper right", fontsize=10.5)
+        _draw_ratio_hist(axes[0, 1], r1s, r1_cuts, "crimson", r"R_{1\%}")
+        axes[0, 1].set_xlabel(r1_label)
+        axes[0, 1].legend(loc="upper left", fontsize=10, frameon=True, framealpha=0.9)
 
-        _draw_ratios_hist(axes[1, 0], r1s, r15s, max_central_spike, min_central_ratio, n_spike, pct_spike, n_drop, pct_drop, zoomed=zoomed)
-        axes[1, 0].set_xlabel("Central Ratio to Flat")
-        axes[1, 0].legend(loc="upper left", fontsize=9.2, frameon=True, framealpha=0.9)
+        _draw_ratio_hist(axes[1, 0], r15s, r1_5_cuts, "royalblue", r"R_{1-5\%}")
+        axes[1, 0].set_xlabel(r15_label)
+        axes[1, 0].legend(loc="upper left", fontsize=10, frameon=True, framealpha=0.9)
 
-        _draw_events_hist(axes[1, 1], nevts, log_bins, evts_box_text)
+        _draw_events_hist(axes[1, 1], nevts, evts_box_text)
         axes[1, 1].set_xlabel("Total Events per Run")
 
         for ax in axes.flat: ax.set_ylabel("Runs")
@@ -290,7 +302,7 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.0, max_loc
     # 2. Individual plots
     if save_individual:
         stem = output_path.stem
-        def _save_single(draw_func, args, kwargs, name, xlabel, legend_loc="upper right", legend_size=12, yscale="log"):
+        def _save_single(draw_func, args, kwargs, name, xlabel, legend_loc="upper right", legend_size=12):
             fig, ax = plt.subplots(figsize=(9, 6.5))
             draw_func(ax, *args, **kwargs)
             ax.set_xlabel(xlabel, fontsize=15)
@@ -302,10 +314,9 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.0, max_loc
 
         _save_single(_draw_cut_hist, [devs, max_class_dev, "darkviolet", 12.0, "%"], {"zoomed": False, "title_font": 11.5, "pad": 0.38}, "class_dev", dev_label)
         _save_single(_draw_cut_hist, [devs, max_class_dev, "darkviolet", 12.0, "%"], {"zoomed": True, "title_font": 11.5, "pad": 0.38}, "class_dev_zoomed", dev_label)
-        _save_single(_draw_cut_hist, [local_devs, max_local_dev_pct, "teal", 10.0, "%"], {"zoomed": False, "title_font": 11.5, "pad": 0.38, **local_kwargs}, "local_dev", local_label)
-        _save_single(_draw_ratios_hist, [r1s, r15s, max_central_spike, min_central_ratio, n_spike, pct_spike, n_drop, pct_drop], {"zoomed": False, "title_font": 11.0, "pad": 0.38}, "ratios", "Central Ratio to Flat", legend_loc="upper left", legend_size=10.5)
-        _save_single(_draw_ratios_hist, [r1s, r15s, max_central_spike, min_central_ratio, n_spike, pct_spike, n_drop, pct_drop], {"zoomed": True, "title_font": 11.0, "pad": 0.38}, "ratios_zoomed", "Central Ratio to Flat", legend_loc="upper left", legend_size=10.5)
-        _save_single(_draw_events_hist, [nevts, log_bins, evts_box_text], {"title_font": 11.5, "pad": 0.38}, "events", "Total Events per Run", legend_loc=None)
+        _save_single(_draw_ratio_hist, [r1s, r1_cuts, "crimson", r"R_{1\%}"], {"title_font": 11.5, "pad": 0.38}, "ratio_1", r1_label, legend_loc="upper left", legend_size=11)
+        _save_single(_draw_ratio_hist, [r15s, r1_5_cuts, "royalblue", r"R_{1-5\%}"], {"title_font": 11.5, "pad": 0.38}, "ratio_1_5", r15_label, legend_loc="upper left", legend_size=11)
+        _save_single(_draw_events_hist, [nevts, evts_box_text], {"title_font": 11.5, "pad": 0.38}, "events", "Total Events per Run", legend_loc=None)
 
 def plot_ensemble_profile(data_list, output_path, test_runs=None, subtitle=None):
     if hasattr(data_list, "to_dict"): data_list = data_list.to_dict("records")
@@ -348,7 +359,7 @@ def plot_ensemble_profile(data_list, output_path, test_runs=None, subtitle=None)
     plt.close(fig)
 
 
-def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80.0, max_class_dev=3.0, is_good=None, rank=None):
+def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80.0, max_class_dev=3.5, is_good=None, rank=None):
     hep.style.use("ATLAS")
 
     run_number = metric.get("run_number", metric.get("run"))
@@ -366,7 +377,7 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
     hep.histplot((values, edges), ax=ax1, histtype="step", color="black", linewidth=2.0, label="Centrality Distribution")
     if flat_ref > 0:
         ax1.axhline(flat_ref, color="crimson", linestyle="--", linewidth=1.8, label=rf"Flat Expectation ({flat_ref:.2e})")
-        ax1.axvspan(0, flat_max, color="forestgreen", alpha=0.08, label=f"Flatness Range [0%, {flat_max:.0f}%]")
+        ax1.axvspan(0, flat_max, color="forestgreen", alpha=0.08, label=f"Flatness Range [1%, {flat_max:.0f}%]")
 
     ax1.set_ylabel("Events", fontsize=17)
     ax1.set_xlim(0, 100)
@@ -398,7 +409,7 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
     # Panel 2: ratio to flat expectation, with the 20%-class averages the calibration check uses
     tol = max_class_dev / 100.0
     r_slice = ratios[1:]
-    hep.histplot((r_slice, edges[1:]), ax=ax2, histtype="step", color="royalblue", linewidth=1.6, alpha=0.75, label="Ratio to Flat (1% classes)")
+    hep.histplot((r_slice, edges[1:]), ax=ax2, histtype="step", color="royalblue", linewidth=1.6, alpha=0.75, label="Ratio to Flat (1% bins)")
     ax2.axhline(1.0, color="gray", linestyle="-", linewidth=1.2)
     ax2.axhspan(1.0 - tol, 1.0 + tol, color="forestgreen", alpha=0.15, label=rf"Tolerance $\pm${max_class_dev:g}%")
     ax2.axvline(flat_max, color="gray", linestyle=":", linewidth=1.5)
@@ -412,7 +423,7 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
         ax2.hlines(r, lo, hi, color=color, linewidth=5, zorder=5,
                    label=f"{coarse_edges[1] - coarse_edges[0]:.0f}% Class Average" if i == 0 else None)
 
-    # Fit the y-range to the populated classes (0-92%) and the class averages, leaving the top third for the info box
+    # Fit the y-range to the populated bins (1-92%) and the class averages, leaving the top third for the info box
     r_centers = 0.5 * (edges[1:-1] + edges[2:])
     pos_r = r_slice[(r_slice > 0) & (r_centers < N_CENT_CLASSES + 0.5)]
     if len(pos_r) > 0:
@@ -440,7 +451,7 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
     worst = metric.get("worst_class", "")
     ratio_metrics_text = (
         rf"Worst 20% Class: {worst} at {ffmt('class_dev_signed', ':+.1f')} (cut $\pm${max_class_dev:g}%)" + "\n" +
-        rf"Local Dev: {ffmt('local_dev_pct')} | $R_{{0-1\%}}$: {ffmt('ratio_1', ':.3f', '')} | $R_{{0-5\%}}$: {ffmt('ratio_1_5', ':.3f', '')}"
+        rf"$R_{{1\%}}$: {ffmt('ratio_1', ':.3f', '')} | $R_{{1-5\%}}$: {ffmt('ratio_1_5', ':.3f', '')}"
     )
     ax2.text(0.03, 0.95, ratio_metrics_text, transform=ax2.transAxes, va="top", ha="left", fontsize=14,
              bbox=dict(boxstyle="round,pad=0.35", facecolor="white", edgecolor=box_edge, linewidth=1.4, alpha=0.92))
@@ -458,17 +469,22 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def plot_failure_example(metric, failure_mode, output_path, flat_max=80.0, max_class_dev=3.0):
-    return plot_centrality_1d_diagnostic(metric, failure_mode, output_path, flat_max, max_class_dev, False)
+def plot_failure_example(metric, failure_mode, output_path, flat_max=80.0, max_class_dev=3.5):
+    return plot_centrality_1d_diagnostic(metric, failure_mode, output_path, flat_max, max_class_dev)
 
-def plot_top_flat_example(metric, rank, output_path, flat_max=80.0, max_class_dev=3.0):
+def plot_top_flat_example(metric, rank, output_path, flat_max=80.0, max_class_dev=3.5):
     return plot_centrality_1d_diagnostic(metric, f"Top Flat Example #{rank}", output_path, flat_max, max_class_dev, True, rank)
 
-def plot_user_example(metric, output_path, flat_max=80.0, max_class_dev=3.0, title_suffix="User Specified"):
+def plot_user_example(metric, output_path, flat_max=80.0, max_class_dev=3.5, title_suffix="User Specified"):
     return plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max, max_class_dev, metric.get("status") == "GOOD")
 
 def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_runs, output_path,
-                                          max_class_dev=3.0, min_events=1e5):
+                                          max_class_dev=3.5, r1_cuts=R1_CUTS, r1_5_cuts=R1_5_CUTS,
+                                          min_events=1e5, title=None):
+    """
+    Distribution of the metric behind `failure_mode` over all runs, with the cut(s) and a line per
+    example run. `title` replaces the flag name in the text box (e.g. for the class-deviation peak sets).
+    """
     if hasattr(metrics_list, "to_dict"): metrics_list = metrics_list.to_dict("records")
     if not example_runs: return
     run_dict = {d.get("run_number", d.get("run")): d for d in metrics_list}
@@ -482,54 +498,60 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
     line_styles = [{"color": "#800080", "ls": "-.", "lw": 2.0}, {"color": "#d95f02", "ls": ":", "lw": 2.4},
                    {"color": "#1b9e77", "ls": "--", "lw": 2.0}, {"color": "#e7298a", "ls": "-", "lw": 2.0}]
 
-    def draw_lines(ax, key, label_fmt, min_val=None):
+    def collect(key):
+        return [float(d[key]) for d in metrics_list if not np.isnan(d.get(key, np.nan))]
+
+    def make_plot(data, color, key, line_fmt, cuts, xlabel, header, x_range=None, n_ticks=18, is_log_x=False, min_val=None):
+        fig, ax = plt.subplots(figsize=(9, 6.5))
+        if is_log_x:
+            bins = _log_tick_bins(max(1.0, min(data)), max(data))
+            ax.set_xscale("log")
+        else:
+            bins = _snap_axis(ax, *x_range, n_ticks=n_ticks)
+        ax.hist(data, bins=bins, histtype="step", color=color, linewidth=2.0, label="All Runs Distribution")
+        for cval, cc, clab in cuts: ax.axvline(cval, color=cc, linestyle="--", linewidth=2.2, label=clab)
         for idx, d in enumerate(example_dicts):
             st = line_styles[idx % len(line_styles)]
             val = d.get(key, 0.0)
             line_val = max(min_val, val) if min_val is not None else val
-            ax.axvline(line_val, color=st["color"], linestyle=st["ls"], linewidth=st["lw"], label=label_fmt.format(d.get('run_number', d.get('run')), val))
-
-    def make_plot(path, data, bins, color, key, line_fmt, cuts, xlabel, text, is_log_x=False, min_val=None):
-        fig, ax = plt.subplots(figsize=(9, 6.5))
-        ax.hist(data, bins=bins, histtype="step", color=color, linewidth=2.0, label="All Runs Distribution")
-        for cval, cc, cls, clw, clab in cuts: ax.axvline(cval, color=cc, linestyle=cls, linewidth=clw, label=clab)
-        draw_lines(ax, key, line_fmt, min_val=min_val)
+            ax.axvline(line_val, color=st["color"], linestyle=st["ls"], linewidth=st["lw"],
+                       label=line_fmt.format(d.get('run_number', d.get('run')), val))
 
         ax.set_xlabel(xlabel, fontsize=15)
         ax.set_ylabel("Runs", fontsize=15)
-        if is_log_x: ax.set_xscale("log")
         ax.set_yscale("log")
         ax.set_ylim(0.5, 3500)
-        if not is_log_x: ax.set_xlim(bins[0], bins[-1])
         ax.legend(loc="upper left" if is_log_x else "upper right", fontsize=11, frameon=True, framealpha=0.92)
         ax.grid(True, linestyle="--", alpha=0.3, which="both")
-        if text:
+        if header:
+            text = header + f"\nSelected Runs: {', '.join(map(str, example_runs))}"
             ax.text(0.04, 0.94, text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
                     bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
         fig.tight_layout()
-        fig.savefig(path, dpi=300, bbox_inches="tight")
+        fig.savefig(output_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-    sel_str = f"Selected Runs: {', '.join(map(str, example_runs))}"
+    def bold(s):
+        return r"$\bf{" + (s or failure_mode).replace("_", r"\_").replace(" ", r"\ ") + "}$"
 
     if failure_mode == "FLAG_CALIB_SHIFT":
-        dv = [float(d["class_dev_max"]) for d in metrics_list if not np.isnan(d.get("class_dev_max", np.nan))]
-        c = [(max_class_dev, "crimson", "--", 2.2, f"Cut ({max_class_dev:g}%)")]
-        txt = r"$\bf{FLAG\_CALIB\_SHIFT}$" + f"\nCut: a 20% class off flat by > {max_class_dev:g}%\n" + sel_str
-        make_plot(output_path, dv, np.linspace(0, max(12.0, max(dv) * 1.08), 60), "darkviolet",
-                  "class_dev_max", "Example Run {} (Worst Class = {:.1f}%)", c, "Worst 20% Class Deviation from Flat [%]", txt)
+        dv = collect("class_dev_max")
+        make_plot(dv, "darkviolet", "class_dev_max", "Example Run {} (Worst Class = {:.1f}%)",
+                  [(max_class_dev, "crimson", f"Cut ({max_class_dev:g}%)")], "Worst 20% Class Deviation from Flat [%]",
+                  bold(title) + f"\nCut: a 20% class off flat by > {max_class_dev:g}%", x_range=(0.0, max(dv)))
 
-    elif failure_mode == "FLAG_LOCAL_DEFECT":
-        sc = [float(d["defect_score"]) for d in metrics_list if not np.isnan(d.get("defect_score", np.nan))]
-        c = [(1.0, "crimson", "--", 2.2, "Cut (score = 1)")]
-        txt = (r"$\bf{FLAG\_LOCAL\_DEFECT}$" + "\nScore = worst of local dev, $R_{0-1\\%}$, $R_{0-5\\%}$\n"
-               + "in units of its own cut\n" + sel_str)
-        make_plot(output_path, sc, np.linspace(0, max(2.0, max(sc) * 1.08), 60), "teal",
-                  "defect_score", "Example Run {} (Score = {:.2f})", c, "Local Defect Score [fraction of cut]", txt)
+    elif failure_mode in ("FLAG_R1_LOW", "FLAG_R1_HIGH", "FLAG_R1_5_LOW", "FLAG_R1_5_HIGH"):
+        is_r1 = failure_mode.startswith("FLAG_R1_") and not failure_mode.startswith("FLAG_R1_5")
+        key, cuts, color, sym = ("ratio_1", r1_cuts, "crimson", r"R_{1\%}") if is_r1 else ("ratio_1_5", r1_5_cuts, "royalblue", r"R_{1-5\%}")
+        vals = collect(key)
+        sym_fmt = sym.replace("{", "{{").replace("}", "}}")  # literal braces for str.format
+        make_plot(vals, color, key, "Example Run {} " + rf"(${sym_fmt}$" + " = {:.3f})",
+                  [(cuts[0], "crimson", f"Low Cut ({cuts[0]:g})"), (cuts[1], "darkorange", f"High Cut ({cuts[1]:g})")],
+                  rf"Ratio to Flat, ${sym}$", bold(title) + "\n" + rf"Allowed: {cuts[0]:g} $\leq {sym} \leq$ {cuts[1]:g}",
+                  x_range=_ratio_range(vals, cuts), n_ticks=15)
 
     elif failure_mode == "FLAG_LOW_STATS":
-        nevts = [float(d["total_events"]) for d in metrics_list if not np.isnan(d.get("total_events", np.nan))]
-        max_ev = max(nevts) if (nevts and max(nevts) > 1.0) else 1e7
-        c = [(min_events, "crimson", "--", 2.2, f"Min Events ({min_events:.0e})")]
-        make_plot(output_path, nevts, np.logspace(0, np.log10(max_ev), 40), "coral",
-                  "total_events", "Example Run {} (Events = {:.2e})", c, "Total Events per Run", None, is_log_x=True, min_val=1.0)
+        nevts = collect("total_events")
+        make_plot(nevts, "coral", "total_events", "Example Run {} (Events = {:.2e})",
+                  [(min_events, "crimson", f"Min Events ({min_events:.0e})")], "Total Events per Run", None,
+                  is_log_x=True, min_val=1.0)

@@ -24,7 +24,7 @@ except ImportError:
     plot_centrality_qa = None
 
 import centrality_qa_metrics
-from centrality_qa_metrics import extract_run_metrics
+from centrality_qa_metrics import extract_run_metrics, R1_CUTS, R1_5_CUTS
 from centrality_qa_plots import (
     plot_heatmap,
     plot_trends,
@@ -40,9 +40,12 @@ from centrality_qa_plots import (
 def failure_mode_descriptions(args):
     """(flag, description) for every failure mode, in summary-table order."""
     return [
-        ("FLAG_CALIB_SHIFT",  f"A 20% Class Off Flat by > {args.max_class_dev}% (0-{args.flat_max:.0f}%)"),
-        ("FLAG_LOCAL_DEFECT", "Class Hole/Spike or 0-1%/0-5% Edge (score > 1)"),
-        ("FLAG_LOW_STATS",    f"< {args.min_events:.0e} Events in 0-{args.flat_max:.0f}% (incl. empty)"),
+        ("FLAG_CALIB_SHIFT", f"A 20% Class Off Flat by > {args.max_class_dev}% (1-{args.flat_max:.0f}%)"),
+        ("FLAG_R1_LOW",      f"R_1% < {R1_CUTS[0]:g}"),
+        ("FLAG_R1_HIGH",     f"R_1% > {R1_CUTS[1]:g}"),
+        ("FLAG_R1_5_LOW",    f"R_1-5% < {R1_5_CUTS[0]:g}"),
+        ("FLAG_R1_5_HIGH",   f"R_1-5% > {R1_5_CUTS[1]:g}"),
+        ("FLAG_LOW_STATS",   f"< {args.min_events:.0e} Events in 1-{args.flat_max:.0f}% (incl. empty)"),
     ]
 
 
@@ -135,9 +138,6 @@ def write_summary_reports(data_list, output_dir):
         "class_dev_max",
         "class_dev_signed",
         "worst_class",
-        "defect_score",
-        "local_dev_pct",
-        "local_dev_cut_pct",
         "ratio_1",
         "ratio_1_5",
         "ratio_80",
@@ -184,10 +184,10 @@ def _select_by_severity(matching_runs, used_runs, n, sort_key, reverse):
     )[:n]
 
 
-def _select_typical_shift(matching_runs, n, bin_width=0.25):
+def _select_at_peak(matching_runs, n, bin_width=0.25):
     """
-    Runs at the peak of the worst-class deviation distribution, spread across the run range,
-    so the examples show what a typical miscalibrated run looks like rather than the worst.
+    Runs at the most populated bin of the worst-class deviation distribution, spread across the
+    run range, so the examples show what a typical run of that population looks like.
     """
     devs = np.array([d["class_dev_max"] for d in matching_runs])
     bins = np.arange(devs.min(), devs.max() + bin_width, bin_width)
@@ -205,62 +205,69 @@ def _select_typical_shift(matching_runs, n, bin_width=0.25):
 
 
 def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mode=3,
-                                   flat_max=80.0, max_class_dev=3.0, min_events=1e5, submit=_run_now):
+                                   flat_max=80.0, max_class_dev=3.5, min_events=1e5, submit=_run_now):
     """
-    For each failure mode, select up to `example_runs_per_mode` representative runs
-    and generate their 1D centrality distribution + ratio diagnostic plots.
-    Also generates a version of the relevant centrality metric distribution plot
+    Select up to `example_runs_per_mode` representative runs per example set and generate their
+    1D centrality distribution + ratio diagnostic plots, plus the relevant metric distribution
     with vertical lines showing where the example runs fall.
-    Saves plots into output_dir / "failure_examples" / <FAILURE_MODE> /, plus
-    failure_examples / FLAG_CALIB_SHIFT / typical / for runs at the peak of the deviation distribution.
+      class_dev_examples / {first_peak, second_peak, far_outliers} /: the populations of the
+          worst 20% class deviation (good runs, typical miscalibrated runs, the largest deviations)
+      failure_examples / <FLAG> /: one set per central-ratio flag and LOW_STATS
     Plots are handed to `submit(fn, **kwargs)`, which renders them immediately by default.
     Returns a dict mapping example label -> {"runs": [...], "dir": <relative dir>}.
     """
     output_dir = Path(output_dir)
-    examples_dir = output_dir / "failure_examples"
     n = example_runs_per_mode
 
     def has_flag(d, mode):
         return mode in d.get("status", "").split(";")
 
-    # LOCAL_DEFECT and LOW_STATS prefer runs failing only that mode, falling back to any run with the flag
+    def by_flag(mode, severity):
+        # Runs failing only this flag first, then the furthest past the cut
+        return {
+            "label": mode,
+            "mode": mode,
+            "subdir": f"failure_examples/{mode}",
+            "candidates": lambda: [d for d in metrics_list if has_flag(d, mode)],
+            "select": lambda runs, used: sorted(
+                runs, key=lambda d: (d.get("status") != mode, d["run_number"] in used, -severity(d)))[:n],
+        }
+
+    with_dev = [d for d in metrics_list if not np.isnan(d.get("class_dev_max", np.nan))]
     example_sets = [
         {
-            "label": "FLAG_CALIB_SHIFT (worst)",
+            "label": "Class Dev: First Peak",
             "mode": "FLAG_CALIB_SHIFT",
-            "subdir": "FLAG_CALIB_SHIFT",
-            "candidates": lambda: [d for d in metrics_list if has_flag(d, "FLAG_CALIB_SHIFT")],
-            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: _metric_or(d, "class_dev_max", 0.0), True),
+            "subdir": "class_dev_examples/first_peak",
+            "candidates": lambda: [d for d in with_dev if d.get("status") == "GOOD"],
+            "select": lambda runs, used: _select_at_peak(runs, n),
         },
         {
-            "label": "FLAG_CALIB_SHIFT (typical)",
+            "label": "Class Dev: Second Peak",
             "mode": "FLAG_CALIB_SHIFT",
-            "subdir": "FLAG_CALIB_SHIFT/typical",
-            "candidates": lambda: [d for d in metrics_list if d.get("status") == "FLAG_CALIB_SHIFT"],
-            "select": lambda runs, used: _select_typical_shift(runs, n),
+            "subdir": "class_dev_examples/second_peak",
+            "candidates": lambda: [d for d in with_dev if d.get("status") == "FLAG_CALIB_SHIFT"],
+            "select": lambda runs, used: _select_at_peak(runs, n),
         },
         {
-            "label": "FLAG_LOCAL_DEFECT",
-            "mode": "FLAG_LOCAL_DEFECT",
-            "subdir": "FLAG_LOCAL_DEFECT",
-            "candidates": lambda: ([d for d in metrics_list if d.get("status") == "FLAG_LOCAL_DEFECT"]
-                                   or [d for d in metrics_list if has_flag(d, "FLAG_LOCAL_DEFECT")]),
-            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: _metric_or(d, "defect_score", 0.0), True),
+            "label": "Class Dev: Far Outliers",
+            "mode": "FLAG_CALIB_SHIFT",
+            "subdir": "class_dev_examples/far_outliers",
+            "candidates": lambda: with_dev,
+            "select": lambda runs, used: _select_by_severity(runs, set(), n, lambda d: d["class_dev_max"], True),
         },
-        {
-            "label": "FLAG_LOW_STATS",
-            "mode": "FLAG_LOW_STATS",
-            "subdir": "FLAG_LOW_STATS",
-            "candidates": lambda: [d for d in metrics_list if has_flag(d, "FLAG_LOW_STATS")],
-            "select": lambda runs, used: _select_by_severity(runs, used, n, lambda d: d.get("total_events", 0.0), False),
-        },
+        by_flag("FLAG_R1_LOW", lambda d: R1_CUTS[0] - d["ratio_1"]),
+        by_flag("FLAG_R1_HIGH", lambda d: d["ratio_1"] - R1_CUTS[1]),
+        by_flag("FLAG_R1_5_LOW", lambda d: R1_5_CUTS[0] - d["ratio_1_5"]),
+        by_flag("FLAG_R1_5_HIGH", lambda d: d["ratio_1_5"] - R1_5_CUTS[1]),
+        by_flag("FLAG_LOW_STATS", lambda d: -d.get("total_events", 0.0)),
     ]
 
     examples_map = {}
     used_runs = set()
 
     for ex in example_sets:
-        rel_dir = f"failure_examples/{ex['subdir']}/"
+        rel_dir = f"{ex['subdir']}/"
         matching_runs = ex["candidates"]()
         selected = ex["select"](matching_runs, used_runs) if matching_runs else []
         examples_map[ex["label"]] = {"runs": [d["run_number"] for d in selected], "dir": rel_dir}
@@ -268,14 +275,14 @@ def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mo
             continue
         used_runs.update(d["run_number"] for d in selected)
 
-        mode_dir = examples_dir / ex["subdir"]
+        mode_dir = output_dir / ex["subdir"]
         mode_dir.mkdir(parents=True, exist_ok=True)
 
         for d in selected:
             submit(
                 plot_failure_example,
                 metric=d,
-                failure_mode=ex["mode"],
+                failure_mode=ex["label"],
                 output_path=mode_dir / f"run_{d['run_number']}_centrality.png",
                 flat_max=flat_max,
                 max_class_dev=max_class_dev,
@@ -290,13 +297,14 @@ def generate_failure_mode_examples(metrics_list, output_dir, example_runs_per_mo
             output_path=mode_dir / "centrality_metric_distributions.png",
             max_class_dev=max_class_dev,
             min_events=min_events,
+            title=ex["label"],
         )
 
     return examples_map
 
 
 def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
-                               flat_max=80.0, max_class_dev=3.0, submit=_run_now):
+                               flat_max=80.0, max_class_dev=3.5, submit=_run_now):
     """
     Select up to `n_examples` representative runs with the best / flattest centrality distributions
     (status == 'GOOD', ranked by lowest worst-class deviation) and generate their 1D
@@ -339,7 +347,7 @@ def generate_top_flat_examples(metrics_list, output_dir, n_examples=3,
 
 
 def generate_user_examples(metrics_list, output_dir, example_runs,
-                           flat_max=80.0, max_class_dev=3.0, submit=_run_now):
+                           flat_max=80.0, max_class_dev=3.5, submit=_run_now):
     """
     Generate 1D centrality diagnostic example plots for specific run numbers requested by the user.
     Saves plots into output_dir / "user_examples" / run_<run>_centrality.png
@@ -424,7 +432,7 @@ def print_failure_summary_table(metrics_list, failure_modes_info, output_dir=Non
 
     if examples_map:
         lines.append("-" * table_width)
-        lines.append("EXAMPLE RUNS GENERATED PER FAILURE MODE (in failure_examples/):")
+        lines.append("EXAMPLE RUNS GENERATED (class_dev_examples/ and failure_examples/):")
         for label, ex in examples_map.items():
             if ex["runs"]:
                 runs_str = ", ".join(str(r) for r in ex["runs"])
@@ -480,9 +488,9 @@ def main():
                         help="Number of parallel worker processes (default: min(cpu_count(), 32)).")
     parser.add_argument("--flat-max", type=float, default=80.0,
                         help="Upper edge [%%] of the centrality range required to be flat (default: 80).")
-    parser.add_argument("--max-class-dev", type=float, default=3.0,
+    parser.add_argument("--max-class-dev", type=float, default=3.5,
                         help="Maximum deviation [%%] of any 20%%-wide centrality class from its expected "
-                             "event count before flagging CALIB_SHIFT (default: 3.0).")
+                             "event count before flagging CALIB_SHIFT (default: 3.5).")
     parser.add_argument("--min-events", type=float, default=1e5,
                         help="Minimum events in the flatness range; runs below are flagged LOW_STATS (default: 1e5).")
     parser.add_argument("--n-examples", type=int, default=3,
