@@ -342,13 +342,12 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
             plots_made = 0
             cent_ratios = {}
 
-            # 1. 1D Centrality plots (full 0-100% and zoomed first 11 bins: -0.5 to 10.5)
+            # 1. 1D Centrality plots (full 0-100% and zoomed first 11 bins: -0.5 to 10.5).
+            #    No *_MB trigger variants: centrality is only defined for MB events, so they duplicate these.
             cent_hist_names = [
                 "hCentrality",
                 "hCentrality_Trig12",
-                "hCentrality_Trig12_MB",
                 "hCentrality_Trig14",
-                "hCentrality_Trig14_MB",
                 "hCentralityZ150",
                 "hCentralityZ150_Trig14",
                 "hCentralityZOuter",
@@ -454,7 +453,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 r2, e2, t2 = cent_ratios["hCentralityZ150_Trig14"]
 
                 label1 = t1 if t1 else "|z| < 10 cm and MB"
-                label2 = t2 if t2 else "|z| < 150 cm and Trig 14"
+                label2 = t2 if t2 else "|z| < 60 cm and Trig 14"
                 label2 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label2).strip()
 
                 output_path_overlay = dir_overlay / f"run_{run_number}_hCentrality_vs_hCentralityZ150_Trig14_zoom_ratio.png"
@@ -501,14 +500,15 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 plots_made += 1
 
             # Overlay of zoomed ratio plots: hCentrality, hCentralityZ150, and hCentralityZOuter
+            # (centrality requires MB, so the Z150 / ZOuter selections stop at |z| = 60 cm)
             if "hCentrality" in cent_ratios and "hCentralityZ150" in cent_ratios and "hCentralityZOuter" in cent_ratios:
                 r_mb, e_mb, t_mb = cent_ratios["hCentrality"]
                 r_z150, e_z150, t_z150 = cent_ratios["hCentralityZ150"]
                 r_zout, e_zout, t_zout = cent_ratios["hCentralityZOuter"]
 
                 label_mb = t_mb if t_mb else "|z| < 10 cm and MB"
-                label_z150 = t_z150 if t_z150 else "|z| < 150 cm and MB"
-                label_zout = t_zout if t_zout else "10 cm < |z| < 150 cm and MB"
+                label_z150 = t_z150 if t_z150 else "|z| < 60 cm and MB"
+                label_zout = t_zout if t_zout else "10 cm < |z| < 60 cm and MB"
 
                 output_path_z_overlay = dir_overlay / f"run_{run_number}_hCentrality_Z150_ZOuter_zoom_ratio.png"
                 make_ratio_overlay_plot(
@@ -526,7 +526,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 )
                 plots_made += 1
 
-            # Overlay of zoomed ratio plots: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14 (+ 10 < |z| < 60 cm)
+            # Overlay of zoomed ratio plots: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14
             if "hCentrality_Trig14" in cent_ratios and "hCentralityZ150_Trig14" in cent_ratios and "hCentralityZOuter_Trig14" in cent_ratios:
                 r_t14, e_t14, t_t14 = cent_ratios["hCentrality_Trig14"]
                 r_z150_t14, e_z150_t14, t_z150_t14 = cent_ratios["hCentralityZ150_Trig14"]
@@ -534,12 +534,11 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
 
                 label_t14 = t_t14 if t_t14 else "|z| < 10 cm and Trig 14"
                 label_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_t14).strip()
-                label_z150_t14 = t_z150_t14 if t_z150_t14 else "|z| < 150 cm and Trig 14"
+                label_z150_t14 = t_z150_t14 if t_z150_t14 else "|z| < 60 cm and Trig 14"
                 label_z150_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_z150_t14).strip()
-                label_zout_t14 = t_zout_t14 if t_zout_t14 else "10 cm < |z| < 150 cm and Trig 14"
+                label_zout_t14 = t_zout_t14 if t_zout_t14 else "10 cm < |z| < 60 cm and Trig 14"
                 label_zout_t14 = re.sub(r'MBD N&S\s*>=\s*2.*', 'Trig 14', label_zout_t14).strip()
 
-                # 1) Original 3-way overlay: hCentrality_Trig14, hCentralityZ150_Trig14, and hCentralityZOuter_Trig14
                 output_path_z_trig14_overlay = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_zoom_ratio.png"
                 make_ratio_overlay_plot(
                     [
@@ -555,34 +554,6 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                     hline=1.0,
                 )
                 plots_made += 1
-
-                # 2) Separate 4-way overlay including 10 cm < |z| < 60 cm extracted from 2D hist h2ZVertexCentrality_Trig14
-                if "h2ZVertexCentrality_Trig14" in file:
-                    hist2d_t14 = file["h2ZVertexCentrality_Trig14"]
-                    v_2d, ex_zvtx, ey_cent = hist2d_t14.to_numpy()
-                    z_centers = 0.5 * (ex_zvtx[:-1] + ex_zvtx[1:])
-                    mask_z60 = (np.abs(z_centers) > 10.0) & (np.abs(z_centers) < 60.0)
-                    v_z60 = np.sum(v_2d[mask_z60, :], axis=0)
-                    flat_z60, _, _ = flat_expectation(v_z60, ey_cent)
-                    if flat_z60 > 0:
-                        r_z60 = np.where(v_z60 > 0, v_z60 / flat_z60, 0.0)
-                        label_z60 = "10 cm < |z| < 60 cm and Trig 14"
-                        output_path_4way = dir_overlay / f"run_{run_number}_hCentrality_Trig14_Z150_ZOuter_Z60_zoom_ratio.png"
-                        make_ratio_overlay_plot(
-                            [
-                                (r_t14, e_t14, label_t14, "blue"),
-                                (r_z150_t14, e_z150_t14, label_z150_t14, "crimson"),
-                                (r_zout_t14, e_zout_t14, label_zout_t14, "forestgreen"),
-                                (r_z60, ey_cent, label_z60, "darkorange", "--"),
-                            ],
-                            run_number,
-                            output_path_4way,
-                            xlabel="Centrality [%]",
-                            ylabel="Ratio to Flat",
-                            xlim=(-0.5, 10.5),
-                            hline=1.0,
-                        )
-                        plots_made += 1
 
             # 3. 1D Z vertex plot (full X projection of h2ZVertexCentrality)
             if "h2ZVertexCentrality" in file:

@@ -20,6 +20,10 @@ def flat_expectation(values, edges, flat_max=80.0):
     return flat_ref, n_flat, n_bins
 
 
+# |z| [cm] the MinimumBiasClassifier requires of every MB event
+MB_ZVTX_MAX = 60.0
+
+
 def get_centrality_hist_data(f, hist_name="hCentrality"):
     """
     Retrieve 1D centrality histogram data (values, edges, title) from an open uproot file.
@@ -48,29 +52,31 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
             title = getattr(item, "title", "")
             return values, edges, title
 
-    # 2. Derive base 2D name, z-range, and label from 1D hist_name conventions
+    # 2. Derive base 2D name and z-range from 1D hist_name conventions
     if hist_name.startswith("hCentralityZ150"):
         suffix = hist_name[len("hCentralityZ150"):]
         base_2d = f"h2ZVertexCentrality{suffix}"
         z_min, z_max = None, 150.0
-        slice_desc = "|z| < 150 cm"
     elif hist_name.startswith("hCentralityZOuter"):
         suffix = hist_name[len("hCentralityZOuter"):]
         base_2d = f"h2ZVertexCentrality{suffix}"
         z_min, z_max = 10.0, 150.0
-        slice_desc = "10 cm < |z| < 150 cm"
     elif hist_name.startswith("hCentrality"):
         suffix = hist_name[len("hCentrality"):]
         base_2d = f"h2ZVertexCentrality{suffix}"
         z_min, z_max = None, 10.0
-        slice_desc = "|z| < 10 cm"
     elif hist_name.startswith("h2ZVertexCentrality"):
         base_2d = hist_name
         z_min, z_max = None, 10.0
-        slice_desc = "|z| < 10 cm"
         suffix = hist_name[len("h2ZVertexCentrality"):]
     else:
         return None, None, ""
+
+    # Centrality is only valid for events passing the MB classifier, which requires |z| < MB_ZVTX_MAX,
+    # so no centrality selection reaches 150 cm
+    clean_suf = suffix.lstrip("_")
+    z_max = min(z_max, MB_ZVTX_MAX)
+    slice_desc = f"{z_min:g} cm < |z| < {z_max:g} cm" if z_min is not None else f"|z| < {z_max:g} cm"
 
     if base_2d in f:
         item = f[base_2d]
@@ -91,7 +97,6 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
             values = np.sum(values_2d[mask, :], axis=0)
             edges = edges_y
 
-            clean_suf = suffix.lstrip("_")
             if not clean_suf:
                 title = f"{slice_desc} and MB; Centrality [%]; Events"
             elif clean_suf.endswith("_MB"):
