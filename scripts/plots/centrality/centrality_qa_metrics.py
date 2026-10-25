@@ -115,13 +115,14 @@ def get_trigger_exclusive_counts(f, z_max=60.0):
     """
     Events passing the MB classifier with |z| < z_max that fired exactly one of the MBD triggers,
     from the EventQA hZVertex_*_MB histograms: N(12 & !14) = N(12 | 14) - N(14) and vice versa.
+    n_mb counts all MB events (hZVertex, filled regardless of trigger).
     Returns NaN counts if any of the histograms is missing.
     """
     counts = {}
-    for key in ("Trig12", "Trig14", "Trig12_or_Trig14"):
-        name = f"hZVertex_{key}_MB"
+    for key, name in (("Trig12", "hZVertex_Trig12_MB"), ("Trig14", "hZVertex_Trig14_MB"),
+                      ("Trig12_or_Trig14", "hZVertex_Trig12_or_Trig14_MB"), ("MB", "hZVertex")):
         if name not in f:
-            return {"n_trig12_only": np.nan, "n_trig14_only": np.nan, "n_trig_or": np.nan}
+            return {"n_trig12_only": np.nan, "n_trig14_only": np.nan, "n_trig_or": np.nan, "n_mb": np.nan}
         values, edges = f[name].to_numpy()
         in_range = (edges[:-1] >= -z_max) & (edges[1:] <= z_max)
         counts[key] = float(np.sum(values[in_range], dtype=float))
@@ -129,6 +130,7 @@ def get_trigger_exclusive_counts(f, z_max=60.0):
         "n_trig12_only": counts["Trig12_or_Trig14"] - counts["Trig14"],
         "n_trig14_only": counts["Trig12_or_Trig14"] - counts["Trig12"],
         "n_trig_or": counts["Trig12_or_Trig14"],
+        "n_mb": counts["MB"],
     }
 
 
