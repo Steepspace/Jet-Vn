@@ -225,7 +225,12 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   }
 
   // MBD Trigger
-  m_triggerAnalyzer->decodeTriggers(topNode);
+  // decodeTriggers does not reset the trigger vectors on failure, so the previous event's bits would be reused
+  if (m_triggerAnalyzer->decodeTriggers(topNode) != 0)
+  {
+    std::cout << "Aborting Run: TriggerAnalyzer failed to decode triggers (TriggerRunInfo or Gl1Packet null)" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
 
   m_didTrig14Fire = m_triggerAnalyzer->didTriggerFire(m_trig_14);
   m_didTrig12Fire = m_triggerAnalyzer->didTriggerFire(m_trig_12);
