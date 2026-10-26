@@ -38,6 +38,7 @@ class EventQA : public SubsysReco
   void set_do_hist(bool b = true) { m_do_hist = b; }
   void set_do_tree(bool b = true) { m_do_tree = b; }
   void set_cent_max(double cent_max) { m_cuts.m_cent_max = cent_max; }
+  void set_zvtx_max(double zvtx_max) { m_cuts.m_zvtx_max = zvtx_max; }
   void set_sigma_mbd(double s) { m_sigma_mbd = s; }
   void set_check_mb(bool b) { m_check_mb = b; }
   void set_check_centrality(bool b) { m_check_centrality = b; }
@@ -60,11 +61,11 @@ class EventQA : public SubsysReco
 
   int m_total_events{0};
 
-  // Luminosity / Trigger Event Counters (for |z| < 10 cm)
-  int m_n_zvtx10{0};
-  int m_n_zvtx10_trig_or{0};
-  int m_n_zvtx10_trig12{0};
-  int m_n_zvtx10_trig14{0};
+  // Luminosity / Trigger Event Counters (for |z| < m_zvtx_max)
+  int m_n_zvtx{0};
+  int m_n_zvtx_trig_or{0};
+  int m_n_zvtx_trig12{0};
+  int m_n_zvtx_trig14{0};
 
   struct HistConfig
   {
@@ -88,7 +89,7 @@ class EventQA : public SubsysReco
     ALL,
     ZVTX,
     ZVTX150,
-    ZVTX10,
+    ZVTX_CUT,
     MB_TRIG,
     MB,
     CENT
@@ -96,13 +97,13 @@ class EventQA : public SubsysReco
 
   enum class EventTriggerType : std::uint8_t
   {
-    ZVTX10,
+    ZVTX_CUT,
     TRIG12,
     TRIG14,
     TRIG12_OR_TRIG14,
-    ZVTX10_TRIG12,
-    ZVTX10_TRIG14,
-    ZVTX10_TRIG12_OR_TRIG14
+    ZVTX_CUT_TRIG12,
+    ZVTX_CUT_TRIG14,
+    ZVTX_CUT_TRIG12_OR_TRIG14
   };
 
   enum class MinBiasType : std::uint8_t
@@ -113,15 +114,9 @@ class EventQA : public SubsysReco
     BUNCH_NONE
   };
 
-  std::vector<std::string> m_eventType{"All", "Has Z", "|z| < 150 cm", "|z| < 10 cm", "MB Trig", "MB", "Cent"};
-  std::vector<std::string> m_eventTriggerType{
-      "|z| < 10 cm",
-      "Trig 12",
-      "Trig 14",
-      "Trig 12 | Trig 14",
-      "|z| < 10 cm & Trig 12",
-      "|z| < 10 cm & Trig 14",
-      "|z| < 10 cm & (Trig 12 | Trig 14)"};
+  // labels containing the z-vertex cut are filled in Init, after set_zvtx_max
+  std::vector<std::string> m_eventType;
+  std::vector<std::string> m_eventTriggerType;
   std::vector<std::string> m_MinBias_Type{"Hits < 2", "ZDC < 40 GeV", "MBD > 2100", "No Bunch Class"};
 
   std::unique_ptr<TriggerAnalyzer> m_triggerAnalyzer;
@@ -154,7 +149,7 @@ class EventQA : public SubsysReco
   // Cuts
   struct EventCuts
   {
-    double m_zvtx_max{10}; // cm
+    double m_zvtx_max{10}; // cm, offline event selection
     double m_zvtx_max_v2{150}; // cm
     double m_cent_max{60};
   };

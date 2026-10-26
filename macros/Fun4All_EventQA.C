@@ -168,6 +168,7 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   event_qa->set_do_tree(false);
   event_qa->set_strict_node_check(true);
   event_qa->set_cent_max(100);
+  event_qa->set_zvtx_max(60);
   se->registerSubsystem(event_qa);
 
   // Global QA

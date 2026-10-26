@@ -141,7 +141,7 @@ int CaloQA::Init([[maybe_unused]] PHCompositeNode* topNode)
     double totalCaloE_low = 0;
     double totalCaloE_high = 2500;
 
-    m_hists.h2CentralityTotalCaloE = new TH2D("h2CentralityTotalCaloE", "|z| < 10 cm and MB; Total Calorimeter Energy [GeV]; Centrality [%]",
+    m_hists.h2CentralityTotalCaloE = new TH2D("h2CentralityTotalCaloE", "Min Bias; Total Calorimeter Energy [GeV]; Centrality [%]",
                                               bins_totalCaloE, totalCaloE_low, totalCaloE_high,
                                               bins_cent_full, cent_low, cent_high);
 

@@ -42,6 +42,17 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
 
   m_triggerAnalyzer = std::make_unique<TriggerAnalyzer>();
 
+  const std::string zcut = std::format("|z| < {} cm", m_cuts.m_zvtx_max);
+  m_eventType = {"All", "Has Z", std::format("|z| < {} cm", m_cuts.m_zvtx_max_v2), zcut, "MB Trig", "MB", "Cent"};
+  m_eventTriggerType = {
+      zcut,
+      "Trig 12",
+      "Trig 14",
+      "Trig 12 | Trig 14",
+      zcut + " & Trig 12",
+      zcut + " & Trig 14",
+      zcut + " & (Trig 12 | Trig 14)"};
+
   if (m_do_hist)
   {
     hEvent = new TH1F("hEvent", "Event Type; Type; Events", static_cast<unsigned int>(m_eventType.size()), 0, static_cast<double>(m_eventType.size()));
@@ -75,7 +86,7 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     se->registerHisto(hZVertex_Trig12_or_Trig14_MB);
 
     // Luminosity Histogram
-    std::vector<std::string> lumiType{"|z| < 10 cm & MBD Trig", "|z| < 10 cm", "|z| < 10 cm & Trig 12", "|z| < 10 cm & Trig 14"};
+    std::vector<std::string> lumiType{zcut + " & MBD Trig", zcut, zcut + " & Trig 12", zcut + " & Trig 14"};
     hLuminosity = new TH1F("hLuminosity", "; Type; Luminosity [nb^{-1}]", lumiType.size(), 0, lumiType.size());
     for (unsigned int i = 0; i < lumiType.size(); ++i)
     {
@@ -84,7 +95,8 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     se->registerHisto(hLuminosity);
 
     // MBD t0 relative to the main bunch (events passing MB, z-vertex and centrality cuts)
-    hT0Corrected = new TH1F("hT0Corrected", "Min Bias, |z| < 10 cm, Centrality Cut; t_{0} - t_{0}^{main} [ns]; Events", m_hist_config.m_bins_t0, m_hist_config.m_t0_low, m_hist_config.m_t0_high);
+    std::string title_t0 = std::format("Min Bias, {}, Centrality Cut; t_{{0}} - t_{{0}}^{{main}} [ns]; Events", zcut);
+    hT0Corrected = new TH1F("hT0Corrected", title_t0.c_str(), m_hist_config.m_bins_t0, m_hist_config.m_t0_low, m_hist_config.m_t0_high);
     se->registerHisto(hT0Corrected);
 
     // 2D Vertex vs Centrality
@@ -209,18 +221,18 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
     hVtxZ->Fill(zvtx);
   }
 
-  bool pass_zvtx10 = std::abs(zvtx) < m_cuts.m_zvtx_max;
-  m_pass_Zvtx = pass_zvtx10;
+  bool pass_zvtx = std::abs(zvtx) < m_cuts.m_zvtx_max;
+  m_pass_Zvtx = pass_zvtx;
 
-  if (std::abs(zvtx) < m_cuts.m_zvtx_max_v2)
+  if (m_do_hist)
   {
-    if (m_do_hist)
+    if (std::abs(zvtx) < m_cuts.m_zvtx_max_v2)
     {
       hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX150));
-      if (pass_zvtx10)
-      {
-        hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX10));
-      }
+    }
+    if (pass_zvtx)
+    {
+      hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX_CUT));
     }
   }
 
@@ -253,20 +265,20 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       {
         hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::TRIG12_OR_TRIG14));
       }
-      if (pass_zvtx10)
+      if (pass_zvtx)
       {
-        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10));
+        hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX_CUT));
         if (m_didTrig12Fire)
         {
-          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG12));
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX_CUT_TRIG12));
         }
         if (m_didTrig14Fire)
         {
-          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG14));
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX_CUT_TRIG14));
         }
         if (mbd_trigger_fire)
         {
-          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX10_TRIG12_OR_TRIG14));
+          hEventTrigger->Fill(static_cast<std::uint8_t>(EventTriggerType::ZVTX_CUT_TRIG12_OR_TRIG14));
         }
       }
     }
@@ -289,24 +301,24 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   }
 
   // Update luminosity event counters
-  if (pass_zvtx10)
+  if (pass_zvtx)
   {
-    ++m_n_zvtx10;
+    ++m_n_zvtx;
     if (mbd_trigger_fire)
     {
-      ++m_n_zvtx10_trig_or;
+      ++m_n_zvtx_trig_or;
     }
     if (m_didTrig12Fire)
     {
-      ++m_n_zvtx10_trig12;
+      ++m_n_zvtx_trig12;
     }
     if (m_didTrig14Fire)
     {
-      ++m_n_zvtx10_trig14;
+      ++m_n_zvtx_trig14;
     }
   }
 
-  if (pass_zvtx10 && mbd_trigger_fire)
+  if (pass_zvtx && mbd_trigger_fire)
   {
     if (m_do_hist)
     {
@@ -364,7 +376,7 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
                   << std::endl;
       }
 
-      if (m_do_hist && pass_zvtx10 && mbd_trigger_fire)
+      if (m_do_hist && pass_zvtx && mbd_trigger_fire)
       {
         if (minbias_side_hit_low)
         {
@@ -651,21 +663,21 @@ int EventQA::End(PHCompositeNode *topNode)
 
     if (prescale_12 > 0 || prescale_14 > 0)
     {
-      lumi_trig = static_cast<double>(m_n_zvtx10_trig_or) / m_sigma_mbd * 1e-9;
+      lumi_trig = static_cast<double>(m_n_zvtx_trig_or) / m_sigma_mbd * 1e-9;
     }
 
     if (prescale_12 > 0)
     {
-      lumi_trig12 = static_cast<double>(m_n_zvtx10_trig12) / m_sigma_mbd * 1e-9;
+      lumi_trig12 = static_cast<double>(m_n_zvtx_trig12) / m_sigma_mbd * 1e-9;
     }
 
     if (prescale_14 > 0)
     {
-      lumi_trig14 = static_cast<double>(m_n_zvtx10_trig14) / m_sigma_mbd * 1e-9;
+      lumi_trig14 = static_cast<double>(m_n_zvtx_trig14) / m_sigma_mbd * 1e-9;
     }
 
     // VTX-only calculation (ignores trigger prescale statuses)
-    lumi_vtx = static_cast<double>(m_n_zvtx10) / m_sigma_mbd * 1e-9;
+    lumi_vtx = static_cast<double>(m_n_zvtx) / m_sigma_mbd * 1e-9;
 
     hLuminosity->SetBinContent(1, lumi_trig);
     hLuminosity->SetBinContent(2, lumi_vtx);
