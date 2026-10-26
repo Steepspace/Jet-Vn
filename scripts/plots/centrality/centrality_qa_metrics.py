@@ -23,6 +23,97 @@ def flat_expectation(values, edges, flat_max=80.0):
 # |z| [cm] the MinimumBiasClassifier requires of every MB event
 MB_ZVTX_MAX = 60.0
 
+# 1D hist-name prefix -> (z_min, z_max) [cm] of the |z| slice projected from the 2D histogram.
+# Checked in order, so longer prefixes come before "hCentrality".
+Z_SLICES = (
+    ("hCentralityZOuter", (10.0, 150.0)),
+    ("hCentralityZ150", (None, 150.0)),
+    ("hCentralityZ60", (None, 60.0)),
+    ("hCentrality", (None, 10.0)),
+    ("h2ZVertexCentrality", (None, 10.0)),
+)
+
+# The other MBD trigger bit, for the trigger-exclusive selections
+OTHER_TRIGGER = {"12": "14", "14": "12"}
+
+
+def get_vertex_centrality_2d(f, suffix):
+    """
+    (values, z_edges, cent_edges) of h2ZVertexCentrality{suffix}, or None if it is missing.
+
+    Derived selections, built from the EventQA histograms:
+      _TrigNonly_MB    MB & TrigN & !TrigM: h2ZVertexCentrality minus h2ZVertexCentrality_TrigM_MB.
+                       h2ZVertexCentrality holds MB & (Trig12 | Trig14), because EventQA aborts events
+                       where neither trigger fired before filling it.
+      <suffix>_zwM     <suffix> with each z bin reweighted so its z distribution matches TrigM's
+                       (same MB requirement), separating a trigger effect from a z-distribution effect.
+                       The result holds weighted counts.
+    """
+    m = re.fullmatch(r"(.*)_zw(\d+)", suffix)
+    if m:
+        base_suffix = m.group(1)
+        ref_suffix = f"_Trig{m.group(2)}" + ("_MB" if base_suffix.endswith("_MB") else "")
+        base = get_vertex_centrality_2d(f, base_suffix)
+        ref = get_vertex_centrality_2d(f, ref_suffix)
+        if base is None or ref is None:
+            return None
+        n_base = base[0].sum(axis=1)
+        n_ref = ref[0].sum(axis=1)
+        weights = np.divide(n_ref, n_base, out=np.zeros_like(n_base, dtype=float), where=n_base > 0)
+        return base[0] * weights[:, None], base[1], base[2]
+
+    m = re.fullmatch(r"_Trig(\d+)only_MB", suffix)
+    if m:
+        other = OTHER_TRIGGER.get(m.group(1))
+        both = get_vertex_centrality_2d(f, "")
+        veto = get_vertex_centrality_2d(f, f"_Trig{other}_MB") if other else None
+        if both is None or veto is None:
+            return None
+        return both[0] - veto[0], both[1], both[2]
+
+    name = f"h2ZVertexCentrality{suffix}"
+    if name not in f:
+        return None
+    arr = f[name].to_numpy()
+    if len(arr) != 3:
+        return None
+    # TH2F contents are float32, too coarse to add and subtract counts of order 1e7 exactly
+    return arr[0].astype(np.float64), arr[1], arr[2]
+
+
+def _parse_hist_name(hist_name):
+    """(z_min, z_max, suffix, slice_desc) for a 1D hist_name, or None if it follows no convention."""
+    for prefix, (z_min, z_max) in Z_SLICES:
+        if hist_name.startswith(prefix):
+            # Centrality is only valid for events passing the MB classifier, which requires
+            # |z| < MB_ZVTX_MAX, so no centrality selection reaches 150 cm
+            z_max = min(z_max, MB_ZVTX_MAX)
+            slice_desc = f"{z_min:g} cm < |z| < {z_max:g} cm" if z_min is not None else f"|z| < {z_max:g} cm"
+            return z_min, z_max, hist_name[len(prefix):], slice_desc
+    return None
+
+
+def _selection_desc(slice_desc, suffix):
+    m = re.fullmatch(r"(.*)_zw(\d+)", suffix)
+    zw_desc = f" (z-weighted to Trig {m.group(2)})" if m else ""
+    clean_suf = (m.group(1) if m else suffix).lstrip("_")
+    trig_str = clean_suf.removesuffix("_MB").replace("Trig", "Trig ").replace("only", " only")
+
+    if not clean_suf:
+        # h2ZVertexCentrality holds only events that fired Trig 12 or Trig 14 (EventQA aborts the rest)
+        sel = f"{slice_desc} and (Trig 12 | Trig 14) and MB"
+    elif clean_suf.endswith("_MB"):
+        sel = f"{slice_desc} and {trig_str} and MB"
+    else:
+        sel = f"{slice_desc} and {trig_str}"
+    return f"{sel}{zw_desc}"
+
+
+def describe_selection(hist_name):
+    """Human-readable event selection of a hist_name, e.g. '|z| < 60 cm and Trig 14 and MB'."""
+    parsed = _parse_hist_name(hist_name)
+    return _selection_desc(parsed[3], parsed[2]) if parsed else hist_name
+
 
 def get_centrality_hist_data(f, hist_name="hCentrality"):
     """
@@ -30,6 +121,10 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
     If the requested 1D histogram does not exist directly, seamlessly project it from the
     corresponding 2D vertex vs. centrality histogram (e.g. h2ZVertexCentrality*) to maintain
     full backwards compatibility.
+
+    The name is <prefix><suffix>: the prefix sets the |z| slice (see Z_SLICES), the suffix the
+    2D histogram (see get_vertex_centrality_2d), e.g. hCentralityZ60_Trig14_MB is
+    |z| < 60 cm & Trig 14 (Trig 12 allowed) & MB.
 
     Returns:
         tuple: (values, edges, title) or (None, None, "") if not found.
@@ -52,63 +147,24 @@ def get_centrality_hist_data(f, hist_name="hCentrality"):
             title = getattr(item, "title", "")
             return values, edges, title
 
-    # 2. Derive base 2D name and z-range from 1D hist_name conventions
-    if hist_name.startswith("hCentralityZ150"):
-        suffix = hist_name[len("hCentralityZ150"):]
-        base_2d = f"h2ZVertexCentrality{suffix}"
-        z_min, z_max = None, 150.0
-    elif hist_name.startswith("hCentralityZOuter"):
-        suffix = hist_name[len("hCentralityZOuter"):]
-        base_2d = f"h2ZVertexCentrality{suffix}"
-        z_min, z_max = 10.0, 150.0
-    elif hist_name.startswith("hCentrality"):
-        suffix = hist_name[len("hCentrality"):]
-        base_2d = f"h2ZVertexCentrality{suffix}"
-        z_min, z_max = None, 10.0
-    elif hist_name.startswith("h2ZVertexCentrality"):
-        base_2d = hist_name
-        z_min, z_max = None, 10.0
-        suffix = hist_name[len("h2ZVertexCentrality"):]
-    else:
+    # 2. Derive the 2D histogram and z-range from 1D hist_name conventions
+    parsed = _parse_hist_name(hist_name)
+    if parsed is None:
+        return None, None, ""
+    z_min, z_max, suffix, slice_desc = parsed
+
+    arr = get_vertex_centrality_2d(f, suffix)
+    if arr is None:
         return None, None, ""
 
-    # Centrality is only valid for events passing the MB classifier, which requires |z| < MB_ZVTX_MAX,
-    # so no centrality selection reaches 150 cm
-    clean_suf = suffix.lstrip("_")
-    z_max = min(z_max, MB_ZVTX_MAX)
-    slice_desc = f"{z_min:g} cm < |z| < {z_max:g} cm" if z_min is not None else f"|z| < {z_max:g} cm"
+    values_2d, edges_x, edges_y = arr
+    abs_z = np.abs(0.5 * (edges_x[:-1] + edges_x[1:]))
+    mask = abs_z < z_max
+    if z_min is not None:
+        mask &= abs_z >= z_min
 
-    if base_2d in f:
-        item = f[base_2d]
-        arr = item.to_numpy()
-        if len(arr) == 3:
-            values_2d, edges_x, edges_y = arr
-            z_centers = 0.5 * (edges_x[:-1] + edges_x[1:])
-
-            if z_min is not None and z_max is not None:
-                mask = (np.abs(z_centers) >= z_min) & (np.abs(z_centers) < z_max)
-            elif z_max is not None:
-                mask = np.abs(z_centers) < z_max
-            elif z_min is not None:
-                mask = np.abs(z_centers) >= z_min
-            else:
-                mask = np.ones(len(z_centers), dtype=bool)
-
-            values = np.sum(values_2d[mask, :], axis=0)
-            edges = edges_y
-
-            if not clean_suf:
-                title = f"{slice_desc} and MB; Centrality [%]; Events"
-            elif clean_suf.endswith("_MB"):
-                trig_str = clean_suf[:-3].replace("Trig", "Trig ")
-                title = f"{slice_desc} and {trig_str} and MB; Centrality [%]; Events"
-            else:
-                trig_str = clean_suf.replace("Trig", "Trig ")
-                title = f"{slice_desc} and {trig_str}; Centrality [%]; Events"
-
-            return values, edges, title
-
-    return None, None, ""
+    values = np.sum(values_2d[mask, :], axis=0)
+    return values, edges_y, f"{_selection_desc(slice_desc, suffix)}; Centrality [%]; Events"
 
 
 def get_trigger_exclusive_counts(f, z_max=60.0):

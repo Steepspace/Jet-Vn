@@ -312,7 +312,8 @@ def make_zvertex_cent_slices_plot(hist2d, run_number, output_path, slices=(1, 2,
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
 
-def process_file(path, output_dir=None, logy=False, run_subdirs=False):
+def process_file(path, output_dir=None, logy=False, run_subdirs=False, extra_hists=()):
+    """Detailed centrality plots for one run; `extra_hists` are hist names plotted first, alongside the standard set."""
     path = Path(path)
     if not path.exists():
         return f"File not found: {path}"
@@ -353,6 +354,7 @@ def process_file(path, output_dir=None, logy=False, run_subdirs=False):
                 "hCentralityZOuter",
                 "hCentralityZOuter_Trig14",
             ]
+            cent_hist_names = list(dict.fromkeys([*extra_hists, *cent_hist_names]))
             for hist_name in cent_hist_names:
                 hist_data = get_centrality_hist_data(file, hist_name=hist_name)
                 if hist_data[0] is not None:

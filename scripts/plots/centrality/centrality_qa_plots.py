@@ -5,7 +5,25 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplhep as hep
 from matplotlib.ticker import MaxNLocator, MultipleLocator
-from centrality_qa_metrics import N_CENT_CLASSES, R1_CUTS, R1_5_CUTS
+from centrality_qa_metrics import N_CENT_CLASSES, R1_CUTS, R1_5_CUTS, describe_selection
+
+
+def _stamp_selection(fig, data, pad=8, grid=False):
+    """
+    Title `fig` with the event selection of `data` (a metric dict or a list of them), just above the
+    top edge of the plot box. For a grid of panels it is centred over the whole grid instead of over
+    the first panel.
+    """
+    d = data[0] if isinstance(data, list) and data else data
+    hist_name = d.get("hist_name") if isinstance(d, dict) else None
+    if not hist_name or not fig.axes:
+        return
+    text = describe_selection(hist_name)
+    if grid:
+        fig.suptitle(text, fontsize=17, color="dimgray", y=0.995)
+    else:
+        fig.axes[0].set_title(text, fontsize=17, pad=pad, color="dimgray")
+
 
 def plot_heatmap(data_list, output_path, test_runs=None):
     hep.style.use("ATLAS")
@@ -51,6 +69,7 @@ def plot_heatmap(data_list, output_path, test_runs=None):
                         fontsize=11, fontweight="bold", color="darkred", clip_on=False)
 
     fig.tight_layout(pad=0.3)
+    _stamp_selection(fig, data_list, pad=26 if test_runs else 8)  # lift it over the run labels
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -131,6 +150,11 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
     nevts = np.array([d["total_events"] for d in data_list])
     statuses = [d["status"] for d in data_list]
 
+    # Low-statistics runs skip the shape checks, so they appear only in the events panel
+    low_stats = np.array(["FLAG_LOW_STATS" in s for s in statuses])
+    for arr in (devs, r1s, r15s, r80s):
+        arr[low_stats] = np.nan
+
     is_good = np.array([s == "GOOD" for s in statuses])
     is_outlier = ~is_good
     test_run_set = set(test_runs or [])
@@ -151,6 +175,7 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
     axes[2].set_xlabel("Run Number", loc="center", fontsize=15)
 
     fig.tight_layout()
+    _stamp_selection(fig, data_list)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
 
@@ -162,6 +187,7 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
         ax_dev.set_ylabel(f"Worst 20% Class Deviation from Flat [%] (1–{flat_max:.0f}%)", fontsize=14)
         ax_dev.legend(loc="upper right", ncol=4, fontsize=11, frameon=True, framealpha=0.9)
         fig_dev.tight_layout()
+        _stamp_selection(fig_dev, data_list)
         fig_dev.savefig(output_path.parent / f"{stem}_class_dev.png", dpi=300, bbox_inches="tight")
         plt.close(fig_dev)
 
@@ -171,6 +197,7 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
         ax_rat.set_ylabel("Ratio to Flat Expectation", fontsize=14)
         ax_rat.legend(loc="upper right", ncol=3, fontsize=11, frameon=True, framealpha=0.9)
         fig_rat.tight_layout()
+        _stamp_selection(fig_rat, data_list)
         fig_rat.savefig(output_path.parent / f"{stem}_ratios.png", dpi=300, bbox_inches="tight")
         plt.close(fig_rat)
 
@@ -180,6 +207,7 @@ def plot_trends(data_list, output_path, test_runs=None, max_class_dev=3.5,
         ax_ev.set_ylabel("Total Events", fontsize=14)
         ax_ev.legend(loc="lower right", fontsize=11, frameon=True, framealpha=0.9)
         fig_ev.tight_layout()
+        _stamp_selection(fig_ev, data_list)
         fig_ev.savefig(output_path.parent / f"{stem}_events.png", dpi=300, bbox_inches="tight")
         plt.close(fig_ev)
 
@@ -335,7 +363,8 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.5, r1_cuts
         axes[1, 1].set_xlabel("Total Events per Run")
 
         for ax in axes.flat: ax.set_ylabel("Runs")
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 1, 0.955))  # leave room for the selection title
+        _stamp_selection(fig, data_list, grid=True)
         fig.savefig(path, dpi=300, bbox_inches="tight")
         plt.close(fig)
 
@@ -349,6 +378,7 @@ def plot_metric_distributions(data_list, output_path, max_class_dev=3.5, r1_cuts
             ax.set_ylabel("Runs", fontsize=15)
             if legend_loc: ax.legend(loc=legend_loc, fontsize=legend_size)
             fig.tight_layout()
+            _stamp_selection(fig, data_list)
             fig.savefig(output_path.parent / f"{stem}_{name}.png", dpi=300, bbox_inches="tight")
             plt.close(fig)
 
@@ -393,6 +423,7 @@ def plot_ensemble_profile(data_list, output_path, test_runs=None, subtitle=None)
                 bbox=dict(boxstyle="round,pad=0.45", facecolor="white", edgecolor="#aaaaaa", alpha=0.92))
 
     fig.tight_layout()
+    _stamp_selection(fig, valid_data)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
@@ -503,7 +534,8 @@ def plot_centrality_1d_diagnostic(metric, title_suffix, output_path, flat_max=80
     ax2.legend(loc="upper right", fontsize=12, frameon=True, framealpha=0.92)
     ax2.grid(True, linestyle="--", alpha=0.3)
 
-    fig.subplots_adjust(top=0.97, bottom=0.08, left=0.12, right=0.96, hspace=0.08)
+    fig.subplots_adjust(top=0.945, bottom=0.08, left=0.12, right=0.96, hspace=0.08)
+    _stamp_selection(fig, metric)
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=300)
@@ -570,6 +602,7 @@ def plot_failure_mode_metric_distribution(metrics_list, failure_mode, example_ru
             ax.text(0.04, 0.94, text, transform=ax.transAxes, ha="left", va="top", fontsize=11.0,
                     bbox=dict(boxstyle="round,pad=0.4", facecolor="white", edgecolor="gray", alpha=0.92, zorder=4))
         fig.tight_layout()
+        _stamp_selection(fig, example_dicts)
         fig.savefig(output_path, dpi=300, bbox_inches="tight")
         plt.close(fig)
 

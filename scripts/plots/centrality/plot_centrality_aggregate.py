@@ -24,7 +24,7 @@ except ImportError:
     plot_centrality_qa = None
 
 import centrality_qa_metrics
-from centrality_qa_metrics import extract_run_metrics, R1_CUTS, R1_5_CUTS
+from centrality_qa_metrics import extract_run_metrics, describe_selection, R1_CUTS, R1_5_CUTS
 from centrality_qa_plots import (
     plot_heatmap,
     plot_trends,
@@ -410,6 +410,9 @@ def print_failure_summary_table(metrics_list, failure_modes_info, output_dir=Non
     lines = []
     lines.append("=" * table_width)
     lines.append("CENTRALITY RUN AGGREGATE QA SUMMARY")
+    if metrics_list:
+        hist_name = metrics_list[0].get("hist_name", "")
+        lines.append(f"Selection: {describe_selection(hist_name)}  ({hist_name})")
     lines.append("=" * table_width)
     lines.append(f"Total Runs Analyzed:     {total_runs:,}")
     pct_good = (good_runs / total_runs * 100.0) if total_runs > 0 else 0.0
@@ -484,7 +487,9 @@ def main():
     parser.add_argument("-o", "--output-dir", type=Path, default=Path("centrality_aggregate_qa"),
                         help="Directory to save aggregate plots, reports, and detailed test QA (default: centrality_aggregate_qa).")
     parser.add_argument("--hist-name", type=str, default="hCentrality",
-                        help="Name of centrality histogram to analyze (e.g. hCentrality, hCentralityZ150, hCentrality_Trig14, or 2D projection; default: hCentrality).")
+                        help="Name of centrality histogram to analyze (e.g. hCentrality, hCentralityZ60_Trig14_MB, "
+                             "hCentralityZOuter_Trig14_MB, hCentralityZ60_Trig12only_MB, hCentralityZ60_Trig14_MB_zw12, "
+                             "or 2D projection; see centrality_qa_metrics.get_centrality_hist_data; default: hCentrality).")
     parser.add_argument("-j", "--workers", type=int, default=None,
                         help="Number of parallel worker processes (default: min(cpu_count(), 32)).")
     parser.add_argument("--flat-max", type=float, default=80.0,
@@ -536,7 +541,7 @@ def main():
     print(f"============================================================")
     print(f"Centrality Run Aggregate QA")
     print(f"Input files:        {len(files_to_process)}")
-    print(f"Histogram:          {args.hist_name}")
+    print(f"Histogram:          {args.hist_name} ({describe_selection(args.hist_name)})")
     print(f"Flatness Range:     [0%, {args.flat_max}%]")
     print(f"Max Class Dev:      {args.max_class_dev}% (20%-wide classes)")
     print(f"Min Events:         {args.min_events:.0e}")
@@ -593,7 +598,8 @@ def main():
         for r in sorted(runs_to_detail):
             if r in run_to_path:
                 submit(plot_centrality_qa.process_file, path=run_to_path[r],
-                       output_dir=detail_output_dir, logy=False, run_subdirs=True)
+                       output_dir=detail_output_dir, logy=False, run_subdirs=True,
+                       extra_hists=[args.hist_name])
     elif runs_to_detail and plot_centrality_qa is None:
         print("Warning: Could not import plot_centrality_qa.py; skipping detailed per-run plots.")
 
