@@ -107,7 +107,6 @@ class EventQA : public SubsysReco
 
   enum class MinBiasType : std::uint8_t
   {
-    BKG_HIGH,
     SIDE_HIT_LOW,
     ZDC_LOW,
     MBD_HIGH,
@@ -123,7 +122,7 @@ class EventQA : public SubsysReco
       "|z| < 10 cm & Trig 12",
       "|z| < 10 cm & Trig 14",
       "|z| < 10 cm & (Trig 12 | Trig 14)"};
-  std::vector<std::string> m_MinBias_Type{"MBD Background", "Hits < 2", "ZDC < 40 GeV", "MBD > 2100", "No Bunch Class"};
+  std::vector<std::string> m_MinBias_Type{"Hits < 2", "ZDC < 40 GeV", "MBD > 2100", "No Bunch Class"};
 
   std::unique_ptr<TriggerAnalyzer> m_triggerAnalyzer;
 

@@ -342,7 +342,6 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
 
       m_data.t0 = m_mb_info->getT0Corrected();
 
-      bool minbias_bkg_high = pdb_params.get_int_param("minbias_background_cut_fail");
       bool minbias_side_hit_low = pdb_params.get_int_param("minbias_two_hit_min_fail");
       bool minbias_zdc_low = pdb_params.get_int_param("minbias_zdc_energy_min_fail");
       bool minbias_mbd_high = pdb_params.get_int_param("minbias_mbd_total_energy_max_fail");
@@ -358,8 +357,7 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       }
       if (Verbosity() > 1)
       {
-        std::cout << "    MinBias fails -> bkg_high: " << minbias_bkg_high
-                  << " | side_hit_low: " << minbias_side_hit_low
+        std::cout << "    MinBias fails -> side_hit_low: " << minbias_side_hit_low
                   << " | zdc_low: " << minbias_zdc_low
                   << " | mbd_high: " << minbias_mbd_high
                   << " | bunch_none: " << minbias_bunch_none
@@ -368,10 +366,6 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
 
       if (m_do_hist && pass_zvtx10 && mbd_trigger_fire)
       {
-        if (minbias_bkg_high)
-        {
-          hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::BKG_HIGH));
-        }
         if (minbias_side_hit_low)
         {
           hEventMinBias->Fill(static_cast<std::uint8_t>(MinBiasType::SIDE_HIT_LOW));
