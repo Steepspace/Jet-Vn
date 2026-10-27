@@ -68,7 +68,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &eta_calib_direct_path = "/direct/sphenix+u/anarde/Documents/sPHENIX/Jet-Vn/files/calib/rho_eta_calib_cdb_signed.root",
                     const std::string &event_list = "",
                     bool do_rcone = false,
-                    bool do_mult = true,
+                    bool do_mult = false,
                     const std::string &output_dst = "",
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
@@ -449,13 +449,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     dst_out->AddNode("TOWERS_CEMC");
     dst_out->AddNode("TOWERS_HCALIN");
     dst_out->AddNode("TOWERS_HCALOUT");
+    dst_out->AddNode("TOWERS_SEPD");
     dst_out->AddNode("Zdcinfo");
-    dst_out->AddNode("9001");
-    dst_out->AddNode("9002");
-    dst_out->AddNode("9003");
-    dst_out->AddNode("9004");
-    dst_out->AddNode("9005");
-    dst_out->AddNode("9006");
     se->registerOutputManager(dst_out);
   }
 
