@@ -136,7 +136,7 @@ def main():
                 continue
             (output_dir / f"{args.output_prefix}-{run:08d}.list").write_text("\n".join(lines) + "\n")
         with (output_dir / args.events_csv).open("w", newline="") as f:
-            writer = csv.writer(f)
+            writer = csv.writer(f, lineterminator="\n")
             writer.writerow(["run", "event"])
             writer.writerows(sorted(events))
 

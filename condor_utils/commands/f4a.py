@@ -1,6 +1,7 @@
 import math
 import re
 import shutil
+import sys
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list
@@ -91,6 +92,76 @@ def parse_zs_calib_list(zs_list, logger=None):
         logger.info(f'Loaded ZS cross calib T0 entries for {len(zs_map)} runs from {zs_path.name}')
 
     return zs_map
+
+EVENTS_PER_SEGMENT = 100000
+
+def parse_run_event_list(event_list, logger=None):
+    """
+    Parses a run,event event list (header 'run,event', e.g. from scripts/data/high_pt_event_dsts.py)
+    into a mapping (run, segment) -> sorted event IDs, with segment = event // EVENTS_PER_SEGMENT.
+    Run and segment are strings with leading zeros stripped. Returns None for a plain event list
+    (one event ID per line), which is passed unchanged to every job.
+    """
+    lines = [l.strip() for l in Path(event_list).read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+    if not lines or lines[0].replace(' ', '').lower() != 'run,event':
+        return None
+
+    run_events = {}
+    for line in lines[1:]:
+        cols = [c.strip() for c in line.split(',')]
+        try:
+            run, event = int(cols[0]), int(cols[1])
+        except (IndexError, ValueError):
+            if logger:
+                logger.warning(f'Skipping event list line without run,event: {line}')
+            continue
+        run_events.setdefault((str(run), str(event // EVENTS_PER_SEGMENT)), set()).add(event)
+
+    if logger:
+        n_events = sum(len(v) for v in run_events.values())
+        logger.info(f'Loaded {n_events} events in {len(run_events)} segments from {Path(event_list).name}')
+
+    return {key: sorted(events) for key, events in run_events.items()}
+
+def write_job_event_lists(manager, run_events, jobs_file_name="jobs.list"):
+    """
+    Gives each job of jobs_file_name its own event list with the events of its segments (one event ID
+    per line, next to its DST chunk) as an extra column. Jobs without any listed event are dropped,
+    since an empty event list would make EventSkip process every event.
+    """
+    jobs_file = manager.output_dir / jobs_file_name
+    kept = []
+    covered = set()
+    n_dropped = 0
+    for job in [l for l in jobs_file.read_text(encoding='utf-8').splitlines() if l.strip()]:
+        chunk = Path(job.split(',')[0])
+        events = []
+        for line in chunk.read_text(encoding='utf-8').splitlines():
+            match = re.search(r'-(\d+)-(\d+)\.root$', Path(line.split(',')[0].strip()).name)
+            if not match:
+                continue
+            key = (match.group(1).lstrip('0'), str(int(match.group(2))))
+            if key in run_events:
+                covered.add(key)
+                events.extend(run_events[key])
+        if not events:
+            n_dropped += 1
+            continue
+        events_file = chunk.with_suffix('.events')
+        events_file.write_text("\n".join(map(str, sorted(events))) + "\n", encoding='utf-8')
+        kept.append(f"{job},{events_file}")
+
+    if not kept:
+        manager.logger.critical("No job has any event of the run,event list: check that the input DSTs cover its runs and segments.")
+        sys.exit(1)
+    jobs_file.write_text("\n".join(kept) + "\n", encoding='utf-8')
+
+    missing = sorted(set(run_events) - covered, key=lambda k: (int(k[0]), int(k[1])))
+    if missing:
+        n_missing = sum(len(run_events[k]) for k in missing)
+        segs_str = ", ".join(f"{run}-{seg}" for run, seg in missing)
+        manager.logger.warning(f"{n_missing} listed event(s) in {len(missing)} segment(s) not covered by any input DST: {segs_str}")
+    manager.logger.info(f"Event list split per job: kept {len(kept)} job(s), dropped {n_dropped} without listed events.")
 
 def create_f4a_jobs(args):
     if getattr(args, 'overlay', False):
@@ -183,9 +254,19 @@ def create_f4a_jobs(args):
         runs_str = ", ".join(sorted(missing_zs_runs, key=lambda r: int(r) if r.isdigit() else r))
         manager.logger.warning(f"No ZS cross calib T0 entry for {len(missing_zs_runs)} run(s), passing none (CDB fallback): {runs_str}")
 
+    # run,event list (BkgSub only): each job gets the events of its own segments as a jobs.list column
+    run_events = None
+    if event_list and "Fun4All_BkgSub" in args.f4a_macro:
+        run_events = parse_run_event_list(event_list, manager.logger)
+        if run_events is not None:
+            write_job_event_lists(manager, run_events)
+
     if "Fun4All_BkgSub" in args.f4a_macro:
         eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
-        event_list_val = (manager.output_dir / event_list.name) if event_list else "none"
+        if run_events is not None:
+            event_list_val = "$(event_list)"
+        else:
+            event_list_val = (manager.output_dir / event_list.name) if event_list else "none"
         do_rcone_val = 1 if getattr(args, 'do_rcone', False) else 0
         do_mult_val = getattr(args, 'do_mult', 0)
         do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
@@ -193,6 +274,8 @@ def create_f4a_jobs(args):
         do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
         bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
         queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
+        if run_events is not None:
+            queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout,event_list from jobs.list"
     else:
         bkgsub_args = ""
         queue_arg = "input_dst,input_calib from jobs.list"
@@ -623,7 +706,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
     f4a.add_argument('-i4_calib', '--zs-calib', dest='zs_calib', type=str, default=None, help='List of ZS cross calib T0 files (CEMC/HCALIN/HCALOUT per run), used by Fun4All_BkgSub. Runs without an entry fall back to the CDB. (Optional)')
-    f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file. (Optional)')
+    f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file: one event ID per line (used by every job), or a run,event CSV (header "run,event", Fun4All_BkgSub only) that is split per job by segment = event // 100000, dropping jobs without listed events. (Optional)')
     f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD.C', help='Fun4All Macro.')
     f4a.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
