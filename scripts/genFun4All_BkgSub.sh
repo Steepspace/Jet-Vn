@@ -179,8 +179,23 @@ printenv
 
 mkdir -p "$run/hist" "$run/tree"
 
+# Output DST (written only with an event list): dst-<ClusterId>-<Process>-<run>-<segment>.root, to pair
+# with its tree while keeping run-segment last, where Fun4AllUtils::GetRunSegment reads it when the DST
+# is used as macro input. Run and segment of the first DST, as the macro uses for its run number.
+output_dst=""
+if [[ -n "$event_list_file" ]]; then
+    mkdir -p "$run/dst"
+    output_dst="$run/dst/dst-${output_tree#tree-}"
+    if [[ "$(head -n 1 dst_calofit.list)" =~ -([0-9]+)-([0-9]+)\.root$ ]]; then
+        output_dst="${output_dst%.root}-${BASH_REMATCH[1]}-${BASH_REMATCH[2]}.root"
+    else
+        echo "Warning: could not parse run-segment from $(head -n 1 dst_calofit.list), output DST: $output_dst" >&2
+    fi
+    echo "Output DST: $output_dst"
+fi
+
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\", $do_emfrac_calib)"
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"$output_dst\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\", $do_emfrac_calib)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then
