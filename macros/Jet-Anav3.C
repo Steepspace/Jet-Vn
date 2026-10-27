@@ -229,6 +229,7 @@ class JetAnalysisv3
     friend class JetAnalysisv3;
 
    private:
+    int run{0};
     int event{0};
     double zvtx{0.0};
     double centrality{0.0};
@@ -286,6 +287,7 @@ class JetAnalysisv3
   struct HighPtEvent
   {
     std::string filename;
+    int run{0};
     int event_id{0};
     int njets{0};
     double centrality{0.0};
@@ -394,7 +396,7 @@ void JetAnalysisv3::setup_chain()
 
   // List of Branches of Interest
   // Common branches between data and sim
-  std::unordered_set<std::string> branchNames = {"event", "centrality", "zvtx",
+  std::unordered_set<std::string> branchNames = {"run", "event", "centrality", "zvtx",
                                                  "emcal_energy", "ihcal_energy", "ohcal_energy",
                                                  "mbd_charge_south", "mbd_charge_north",
                                                  "psi2_raw_S", "psi2_raw_N", "psi2_raw_NS",
@@ -481,6 +483,7 @@ void JetAnalysisv3::setup_chain()
   }
 
   // Set branches to variables
+  m_chain->SetBranchAddress("run", &m_event_data.run);
   m_chain->SetBranchAddress("event", &m_event_data.event);
   m_chain->SetBranchAddress("zvtx", &m_event_data.zvtx);
   m_chain->SetBranchAddress("centrality", &m_event_data.centrality);
@@ -1072,17 +1075,14 @@ void JetAnalysisv3::process_jets()
   {
     if (!jet_data.pt || !jet_data.pt_calib || !jet_data.e || !jet_data.eta)
     {
-      if (jet_data.max_pt >= m_lead_jet_pt_threshold)
-      {
-        std::string current_file = std::filesystem::path((m_chain && m_chain->GetFile()) ? m_chain->GetFile()->GetName() : m_input_file).filename().string();
-        m_high_pt_events.push_back({current_file, m_event_data.event, 1, m_event_data.centrality, m_event_data.zvtx, jet_data.max_pt, radius, sub_type});
-      }
       return;
     }
 
     int njets = 0;
     int njets_v2 = 0;
     double max_pt_v2 = 0.0;
+    int njets_v3 = 0;
+    double max_pt_v3 = 0.0;
 
     // the stored max_pt uses the legacy JES, so recompute the leading jet pT with Z0
     const bool use_z0 = m_jes_z0_r02 != nullptr;
@@ -1123,6 +1123,9 @@ void JetAnalysisv3::process_jets()
 
         if (std::abs(calo_v2) < m_calo_v2_max)
         {
+          ++njets_v3;
+          max_pt_v3 = std::max(max_pt_v3, pt);
+
           h.hJetPtv3->Fill(pt);
           h.hJetPtv3_raw->Fill(pt_raw);
           h.h2JetEtav3->Fill(pt, eta);
@@ -1130,10 +1133,11 @@ void JetAnalysisv3::process_jets()
       }
     }
 
-    if (max_pt >= m_lead_jet_pt_threshold)
+    // high pT event list uses the same jet selection as hJetPtv3 (subtracted jets only)
+    if (sub_type != "unsub" && max_pt_v3 >= m_lead_jet_pt_threshold)
     {
       std::string current_file = std::filesystem::path((m_chain && m_chain->GetFile()) ? m_chain->GetFile()->GetName() : m_input_file).filename().string();
-      m_high_pt_events.push_back({current_file, m_event_data.event, njets, m_event_data.centrality, m_event_data.zvtx, max_pt, radius, sub_type});
+      m_high_pt_events.push_back({current_file, m_event_data.run, m_event_data.event, njets_v3, m_event_data.centrality, m_event_data.zvtx, max_pt_v3, radius, sub_type});
     }
 
     if (max_pt > 0)
@@ -1615,11 +1619,11 @@ void JetAnalysisv3::save_results() const
     }
     else
     {
-      csv_file << "filename,event_id,njets,centrality,zvtx,leading_pT,Radius,Subtraction_Type\n";
+      csv_file << "filename,run,event_id,njets,centrality,zvtx,leading_pT,Radius,Subtraction_Type\n";
       for (const auto &entry : m_high_pt_events)
       {
-        csv_file << std::format("{},{},{},{:.2f},{:.4f},{:.4f},{:.1f},{}\n",
-                                entry.filename, entry.event_id,
+        csv_file << std::format("{},{},{},{},{:.2f},{:.4f},{:.4f},{:.1f},{}\n",
+                                entry.filename, entry.run, entry.event_id,
                                 entry.njets, entry.centrality, entry.zvtx,
                                 entry.leading_pt, entry.radius,
                                 entry.subtraction_type);
