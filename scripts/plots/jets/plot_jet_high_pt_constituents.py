@@ -12,6 +12,11 @@ Constituents: every tower in every layer (retowered EMCal, IHCal, OHCal) is one 
 so N_const = n_EMCal + n_IHCal + n_OHCal. UE-subtracted towers can be negative, so the count of
 E > 0 towers is kept as well. z_lead = (max tower E) / (jet E), both raw (uncalibrated).
 
+Timing (JetValidationv3 with set_do_timing): t is the jet time, the energy-weighted time of the
+constituent towers above 0.1 GeV, and t_<layer> the same per layer, so t lies between the layer
+times. t - t0 is the jet time relative to the (main-bunch corrected) MBD t0; the band |t - t0| <
+--dt-max (default 3 ns, the TimingCut MBD window) marks in-time jets.
+
 With --event-displays, each event with a selected jet also gets tower displays (drawn with the
 calo_display_utils.py panels, tower indices decoded with scripts/plots/calo/tower_info_defs.py):
   unsub_1x4    -- unsubtracted base EMCal, retowered EMCal, IHCal, OHCal
@@ -42,7 +47,7 @@ from calo_display_utils import JET_COLORS, get_cluster_boundary_segments, plot_c
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "calo"))
 from tower_info_defs import get_emcal_ieta_iphi, get_hcal_ieta_iphi
 
-TREE_LIST = "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-27-26-high-pt-v2/tree.list"
+TREE_LIST = "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-28-26-high-pt/tree.list"
 CALO_MBD_LIST = "/sphenix/user/anarde/sEPD-Study/event_qa/10-04-26/test.list"
 
 # Jet-Anav3 cuts
@@ -57,7 +62,7 @@ COLL = "iter_r02"
 
 EVENT_BRANCHES = ["run", "event", "zvtx", "centrality", "t0", "emcal_energy", "ihcal_energy", "ohcal_energy",
                   "mbd_charge_south", "mbd_charge_north", "is_flow_failure_iter", "calo_v2_iter"]
-JET_BRANCHES = [f"{v}_{COLL}" for v in ["pt", "pt_calib", "e", "eta", "phi"]]
+JET_BRANCHES = [f"{v}_{COLL}" for v in ["pt", "pt_calib", "e", "eta", "phi", "t", "t_emcal", "t_ihcal", "t_ohcal"]]
 TOWER_BRANCHES = [f"{layer}_tower_{v}_{COLL}" for layer in LAYERS for v in ["energy", "pt"]]
 
 # event displays: full-event towers (unsubtracted and iter-subtracted) and the jet tower indices
@@ -159,10 +164,13 @@ def jet_table(events):
         "e_lead": ak.max(all_e, axis=2),
         "z_lead": ak.max(all_e, axis=2) / e_jet,
         "z_lead_pt": ak.max(all_pt, axis=2) / pt_raw,
+        "t": events[f"t_{COLL}"],
+        "dt_t0": events[f"t_{COLL}"] - events.t0,
     }
     for layer in LAYERS:
         cols[f"n_{layer}"] = ak.num(energy[layer], axis=2)
         cols[f"frac_{layer}"] = ak.sum(energy[layer], axis=2) / e_jet
+        cols[f"t_{layer}"] = events[f"t_{layer}_{COLL}"]
     table = {k: ak.to_numpy(ak.fill_none(ak.flatten(v), np.nan)) for k, v in cols.items()}
     table["lead_layer"] = np.array(LAYERS)[np.argmax(lead_by_layer, axis=1)]
     return table
@@ -332,9 +340,153 @@ def plot_vs_pt(jets, key, ylabel, pt_min, out_path, save_pdf, ylim=None):
     plt.close(fig)
 
 
+def plot_timing(jets, f, pt_min, dt_max, out_path, save_pdf):
+    """
+    Jet time relative to the MBD t0, for the jets above pt_min (by layer of the leading tower) and
+    all jets in the selected events (by layer category) as a reference.
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(24, 13))
+    dt, dt_all = jets["dt_t0"], f["dt_t0"]
+    lim = max(10, 10 * np.ceil(np.nanmax(np.abs(np.concatenate([dt, dt_all]))) / 10))
+    edges = np.linspace(-lim, lim, int(lim) + 1)  # 2 ns bins
+
+    def window(ax, vertical):
+        span = ax.axvspan if vertical else ax.axhspan
+        span(-dt_max, dt_max, color="gray", alpha=0.2, label=rf"$|t - t_{{0}}| < {dt_max:g}$ ns")
+
+    def in_time(v):
+        v = v[np.isfinite(v)]
+        return f"{np.sum(np.abs(v) < dt_max)}/{len(v)}"
+
+    def clipped(v):
+        """Finite values, with the overflow in the edge bins."""
+        return np.clip(v[np.isfinite(v)], -lim, lim)
+
+    ax = axes[0, 0]
+    ax.hist(clipped(dt_all), bins=edges, histtype="step", linewidth=2, color="black",
+            label=rf"All jets, $p_{{T}} > {FEATURE_PT_MIN:g}$ GeV (in time {in_time(dt_all)})")
+    for layer in LAYERS:
+        sel = jets["lead_layer"] == layer
+        if sel.any():
+            ax.hist(clipped(dt[sel]), bins=edges, histtype="step", linewidth=2, color=LAYER_COLORS[layer],
+                    label=f"{LAYER_LABELS[layer]} leading tower (in time {in_time(dt[sel])})")
+    window(ax, vertical=True)
+    ax.set_xlabel(r"$t_{\mathrm{jet}} - t_{0}$ [ns]")
+    ax.set_ylabel("Jets")
+    ax.set_ylim(0, ax.get_ylim()[1] * 1.6)
+    ax.legend(loc="upper left", fontsize=12, frameon=False)
+
+    # calo time vs MBD time: in-time jets follow the diagonal
+    ax = axes[0, 1]
+    ax.scatter(f["t0"], f["t"], s=12, color="#bbbbbb", label=rf"All jets, $p_{{T}} > {FEATURE_PT_MIN:g}$ GeV")
+    for layer in LAYERS:
+        sel = jets["lead_layer"] == layer
+        if sel.any():
+            ax.scatter(jets["t0"][sel], jets["t"][sel], s=45, color=LAYER_COLORS[layer], edgecolor="black", linewidth=0.5,
+                       label=f"{LAYER_LABELS[layer]} leading tower ({sel.sum()})")
+    x = np.array(ax.get_xlim())
+    ax.fill_between(x, x - dt_max, x + dt_max, color="gray", alpha=0.2, label=rf"$|t - t_{{0}}| < {dt_max:g}$ ns")
+    ax.set_xlim(*x)
+    ax.set_ylim(-lim, 1.6 * lim)
+    ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    ax.set_ylabel(r"$t_{\mathrm{jet}}$ [ns]")
+    ax.legend(loc="upper left", fontsize=12, frameon=False)
+
+    # time of each calo layer: which layer drives an out-of-time jet
+    ax = axes[0, 2]
+    for layer in LAYERS:
+        v = jets[f"t_{layer}"] - jets["t0"]
+        ax.hist(clipped(v), bins=edges, histtype="step", linewidth=2, color=LAYER_COLORS[layer],
+                label=f"{LAYER_LABELS[layer]} towers (in time {in_time(v)})")
+    window(ax, vertical=True)
+    ax.set_xlabel(r"$t_{\mathrm{layer}} - t_{0}$ [ns]")
+    ax.set_ylabel("Jets")
+    ax.set_ylim(0, ax.get_ylim()[1] * 1.6)
+    ax.legend(loc="upper left", fontsize=12, frameon=False)
+
+    ax = axes[1, 0]
+    scatter_by_category(ax, f, "pt_calib", "dt_t0")
+    window(ax, vertical=False)
+    ax.axvline(pt_min, color="gray", linestyle="--", linewidth=1)
+    ax.set_xscale("log")
+    ax.set_xlim(FEATURE_PT_MIN * 0.9, f["pt_calib"].max() * 1.3)
+    ax.set_ylim(-lim, 1.6 * lim)
+    ax.set_xlabel(r"Jet $p_{T}^{\mathrm{calib}}$ [GeV]")
+    ax.set_ylabel(r"$t_{\mathrm{jet}} - t_{0}$ [ns]")
+    ax.legend(loc="upper left", ncol=2, fontsize=12, frameon=False, title="Layer fraction")
+
+    for ax, (key, label) in zip(axes[1, 1:], [("z_lead", r"$E_{\mathrm{lead}} / E_{\mathrm{jet}}$"),
+                                              ("centrality", "Centrality [%]")]):
+        for layer in LAYERS:
+            sel = jets["lead_layer"] == layer
+            if sel.any():
+                ax.scatter(jets[key][sel], dt[sel], s=45, color=LAYER_COLORS[layer], edgecolor="black", linewidth=0.5,
+                           label=f"{LAYER_LABELS[layer]} leading tower ({sel.sum()})")
+        window(ax, vertical=False)
+        ax.set_ylim(-lim, 1.6 * lim)
+        ax.set_xlabel(label)
+        ax.set_ylabel(r"$t_{\mathrm{jet}} - t_{0}$ [ns]")
+        ax.legend(loc="upper left", fontsize=12, frameon=False)
+
+    fig.text(0.99, 0.995, rf"Au+Au, Iterative, $R = 0.2$, $p_{{T}}^{{\mathrm{{calib}}}} > {pt_min:g}$ GeV, {len(dt)} jets",
+             ha="right", va="top", fontsize=14)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_dt_vs_pt(jets, pt_min, dt_max, out_path, save_pdf):
+    """t - t0 vs calibrated pT for the jets above pt_min, by layer of the leading tower."""
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.axhspan(-dt_max, dt_max, color="gray", alpha=0.2, label=rf"$|t - t_{{0}}| < {dt_max:g}$ ns")
+    for layer in LAYERS:
+        sel = jets["lead_layer"] == layer
+        if sel.any():
+            ax.scatter(jets["pt_calib"][sel], jets["dt_t0"][sel], s=45, color=LAYER_COLORS[layer], edgecolor="black",
+                       linewidth=0.5, label=f"{LAYER_LABELS[layer]} leading tower ({sel.sum()})")
+    lim = max(10, 10 * np.ceil(np.nanmax(np.abs(jets["dt_t0"])) / 10))
+    ax.set_ylim(-lim, 1.5 * lim)
+    ax.set_xlabel(r"Jet $p_{T}^{\mathrm{calib}}$ [GeV]")
+    ax.set_ylabel(r"$t_{\mathrm{jet}} - t_{0}$ [ns]")
+    ax.legend(loc="upper left", fontsize=LEGEND_SIZE, frameon=False)
+    add_text(ax, len(jets["dt_t0"]), pt_min)
+    tighten(fig, ax)
+    fig.subplots_adjust(left=0.13)  # room for the subscripted y label
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_dt_1d(jets, f, pt_min, dt_max, out_path, save_pdf, low_range=(10.0, 20.0)):
+    """1D t - t0 (counts) for the jets above pt_min and for the jets in low_range (from all jets in the selected events)."""
+    low = (f["pt_calib"] >= low_range[0]) & (f["pt_calib"] < low_range[1])
+    samples = [(jets["dt_t0"], rf"$p_{{T}}^{{\mathrm{{calib}}}} > {pt_min:g}$ GeV", "#e41a1c"),
+               (f["dt_t0"][low], rf"${low_range[0]:g} < p_{{T}}^{{\mathrm{{calib}}}} < {low_range[1]:g}$ GeV", "#377eb8")]
+
+    lim = 80
+    edges = np.linspace(-lim, lim, 2 * lim + 1)  # 2 ns bins, overflow in the edge bins
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.axvspan(-dt_max, dt_max, color="gray", alpha=0.2, label=rf"$|t - t_{{0}}| < {dt_max:g}$ ns")
+    for dt, label, color in samples:
+        dt = dt[np.isfinite(dt)]
+        n_in = int(np.sum(np.abs(dt) < dt_max))
+        ax.hist(np.clip(dt, -lim, lim), bins=edges, histtype="step", linewidth=2, color=color,
+                label=f"{label}, {len(dt)} jets, in time {n_in}/{len(dt)} ({n_in / len(dt):.0%})")
+    ax.set_xlim(-lim, lim)
+    ax.set_xlabel(r"$t_{\mathrm{jet}} - t_{0}$ [ns]")
+    ax.set_ylabel("Jets / 2 ns")
+    ax.set_ylim(0, ax.get_ylim()[1] * 1.5)
+    ax.legend(loc="upper left", fontsize=LEGEND_SIZE - 4, frameon=False)
+    ax.text(1.0, 1.01, r"Au+Au, Iterative, $R = 0.2$", transform=ax.transAxes, ha="right", va="bottom", fontsize=TEXT_SIZE + 1)
+    ax.text(0.97, 0.96, TEXT_INFO, transform=ax.transAxes, ha="right", va="top", fontsize=TEXT_SIZE)
+    tighten(fig, ax)
+    fig.subplots_adjust(left=0.13)  # room for the subscripted x/y labels
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
 JET_CSV_COLS = ["run", "event", "centrality", "t0", "pt_calib", "pt_raw", "e", "eta", "phi", "n_const", "n_pos",
                 "n_emcal", "n_ihcal", "n_ohcal", "e_lead", "z_lead", "z_lead_pt", "lead_layer",
-                "frac_emcal", "frac_ihcal", "frac_ohcal"]
+                "frac_emcal", "frac_ihcal", "frac_ohcal", "t", "dt_t0", "t_emcal", "t_ihcal", "t_ohcal"]
 
 
 def write_csv(jets, out_path, cols=JET_CSV_COLS):
@@ -407,7 +559,8 @@ def display_payloads(events, jet_mask):
                 if len(energy) and energy.max() > lead_e:
                     lead_e, lead_pos = energy.max(), tuple(lookup["hcal"][index[np.argmax(energy)]])
             jets.append({"selected": selected, "pt": float(ev[f"pt_calib_{COLL}"][ijet]),
-                         "z_lead": lead_e / e_jet, "frac": frac, "lead": lead_pos, "masks": masks})
+                         "z_lead": lead_e / e_jet, "frac": frac, "lead": lead_pos, "masks": masks,
+                         "dt_t0": float(ev[f"t_{COLL}"][ijet]) - float(ev.t0)})
 
         lead_jet = max((j for j in jets if j["selected"]), key=lambda j: j["pt"])
         payloads.append({"run": int(ev.run), "event": int(ev.event), "grids": grids, "jets": jets, "zoom_center": lead_jet["lead"]})
@@ -434,18 +587,22 @@ def jet_label(jet, layer):
         return "Other jets"
     frac = f"{jet['frac'][layer]:.2f}".replace("-0.00", "0.00")  # tiny negative fractions from subtracted towers
     return (rf"{jet['pt']:.0f} GeV, $z_{{\mathrm{{lead}}}}$ = {jet['z_lead']:.2f}" "\n"
-            rf"$E_{{\mathrm{{{LAYER_LABELS[layer]}}}}}/E_{{\mathrm{{jet}}}}$ = {frac}")
+            rf"$E_{{\mathrm{{{LAYER_LABELS[layer]}}}}}/E_{{\mathrm{{jet}}}}$ = {frac}, $t - t_{{0}}$ = {jet['dt_t0']:.0f} ns")
 
 
 def draw_event_display(payload, out_dir, logz):
     run, event = payload["run"], payload["event"]
     grids = {k: TowerGrid(v) for k, v in payload["grids"].items()}
-    ev_dir = out_dir / f"run_{run}_event_{event}"
-    ev_dir.mkdir(parents=True, exist_ok=True)
     stem = f"run_{run}_event_{event}"
 
+    # one subfolder per plot type, so the same plot of every event can be paged through
+    def plot_path(kind):
+        kind_dir = out_dir / kind
+        kind_dir.mkdir(parents=True, exist_ok=True)
+        return kind_dir / f"{stem}_{kind}.png"
+
     make_1x4_calo_plot(run, event, grids["base"], grids["retower"], grids["ihcal"], grids["ohcal"],
-                       ev_dir / f"{stem}_unsub_1x4.png", logz=logz)
+                       plot_path("unsub_1x4"), logz=logz)
 
     # selected jets in colour with pT and leading tower fraction, the other R = 0.2 jets in grey
     xedges, yedges = np.arange(HCAL_SHAPE[0] + 1), np.arange(HCAL_SHAPE[1] + 1)
@@ -465,7 +622,7 @@ def draw_event_display(payload, out_dir, logz):
                 lbl = "_nolegend_" if not jet["selected"] and any(o[4] == label for o in overlays[layer]) else label
                 overlays[layer].append((segs, color, ls, lw, lbl))
     make_1x3_calo_plot(run, event, grids["iter_emcal"], grids["iter_ihcal"], grids["iter_ohcal"],
-                       ev_dir / f"{stem}_iter_r02_1x3.png", sub_type="Iter", logz=logz,
+                       plot_path("iter_r02_1x3"), sub_type="Iter", logz=logz,
                        overlays_emcal=overlays["emcal"], overlays_ihcal=overlays["ihcal"], overlays_ohcal=overlays["ohcal"])
 
     ceta, cphi = payload["zoom_center"]
@@ -485,8 +642,8 @@ def draw_event_display(payload, out_dir, logz):
                 overlays.append((segs, JET_COLORS[n_selected % len(JET_COLORS)], "solid", 2.0, jet_label(jet, layer)))
             n_selected += 1
         panels.append((zoom, title, overlays))
-    make_zoom_plot(run, event, panels, ev_dir / f"{stem}_zoom_1x4.png", logz=logz)
-    return ev_dir
+    make_zoom_plot(run, event, panels, plot_path("zoom_1x4"), logz=logz)
+    return out_dir
 
 
 def delta_phi(a, b):
@@ -500,6 +657,7 @@ def jet_features(events, jet_mask):
       swiss        -- 1 - (sum of the 4 direct neighbours) / (leading tower), in the leading tower's layer
       r03_r02      -- raw pT of the matched (dR < 0.2) R = 0.3 jet over the raw R = 0.2 pT, NaN if unmatched
       recoil_pt    -- highest calibrated pT of another R = 0.2 jet with dphi > pi/2, 0 if none (tree keeps pT >= 10)
+      t, dt_t0     -- jet time and jet time relative to the MBD t0
     """
     lookup = tower_lookup("hcal")
     neta, nphi = HCAL_SHAPE
@@ -508,12 +666,13 @@ def jet_features(events, jet_mask):
         ev = events[iev]
         grids = {layer: tower_grid(ak.to_numpy(ev[f"iter_{layer}_tower_index"]), ak.to_numpy(ev[f"iter_{layer}_tower_energy"]), lookup, HCAL_SHAPE)
                  for layer in LAYERS}
-        pt, pt_raw, e, eta, phi = (ak.to_numpy(ev[f"{v}_{COLL}"]) for v in ["pt_calib", "pt", "e", "eta", "phi"])
+        pt, pt_raw, e, eta, phi, t = (ak.to_numpy(ev[f"{v}_{COLL}"]) for v in ["pt_calib", "pt", "e", "eta", "phi", "t"])
         pt03, eta03, phi03 = (ak.to_numpy(ev[f"{v}_iter_r03"]) for v in ["pt", "eta", "phi"])
 
         for ij in np.flatnonzero(ak.to_numpy(jet_mask[iev])):
             row = {"run": int(ev.run), "event": int(ev.event), "centrality": float(ev.centrality),
-                   "pt_calib": pt[ij], "pt_raw": pt_raw[ij], "eta": eta[ij], "phi": phi[ij]}
+                   "pt_calib": pt[ij], "pt_raw": pt_raw[ij], "eta": eta[ij], "phi": phi[ij],
+                   "t0": float(ev.t0), "t": t[ij], "dt_t0": t[ij] - float(ev.t0)}
             lead_e, lead_layer, lead_pos = -np.inf, None, None
             for layer in LAYERS:
                 index = ak.to_numpy(ev[f"{layer}_tower_index_{COLL}"][ij]).astype(int)
@@ -628,21 +787,31 @@ def plot_layer_plane_high_pt(f, pt_min, out_path, save_pdf):
     plt.close(fig)
 
 
-def print_feature_table(f, pt_min):
+def print_feature_table(f, pt_min, dt_max):
     """Fraction of jets per pT bin that look like the high-pT jets (provisional thresholds)."""
     edges = [FEATURE_PT_MIN, 20, 40, pt_min, np.inf]
     matched = np.isfinite(f["r03_r02"])
+    dt_name = f"|t-t0|<{dt_max:g}"
     print(f"\n{'pT_calib [GeV]':16s} {'Jets':>5s} {'single layer':>13s} {'IHCal<0.05':>11s} {'swiss>0.9':>10s} "
-          f"{'R03/R02<1.05':>13s} {'no recoil':>10s}")
+          f"{'R03/R02<1.05':>13s} {'no recoil':>10s} {dt_name:>10s}")
     for lo, hi in zip(edges[:-1], edges[1:]):
         sel = (f["pt_calib"] >= lo) & (f["pt_calib"] < hi)
         if not sel.any():
             continue
         cols = [np.mean(f["category"][sel] != "mixed"), np.mean(f["frac_ihcal"][sel] < 0.05), np.mean(f["swiss"][sel] > 0.9),
-                np.mean(f["r03_r02"][sel & matched] < 1.05) if (sel & matched).any() else np.nan, np.mean(f["recoil_pt"][sel] == 0)]
+                np.mean(f["r03_r02"][sel & matched] < 1.05) if (sel & matched).any() else np.nan, np.mean(f["recoil_pt"][sel] == 0),
+                np.mean(np.abs(f["dt_t0"][sel]) < dt_max)]
         name = f"{lo:g}-{hi:g}" if np.isfinite(hi) else f">= {lo:g}"
-        print(f"{name:16s} {sel.sum():5d} " + " ".join(f"{c:{w}.1%}" for c, w in zip(cols, [13, 11, 10, 13, 10])))
+        print(f"{name:16s} {sel.sum():5d} " + " ".join(f"{c:{w}.1%}" for c, w in zip(cols, [13, 11, 10, 13, 10, 10])))
     print(f"(single layer: one layer > {SINGLE_LAYER_FRAC:.0%} of the jet energy; R03/R02 over the {matched.sum()} matched jets)")
+
+    # in-time fraction of the jets above pt_min by layer category: are the single-layer jets out of time?
+    sel = f["pt_calib"] >= pt_min
+    print(f"\npT_calib >= {pt_min:g} GeV, {dt_name} ns by layer category:")
+    for cat, label in CATEGORY_LABELS.items():
+        s = sel & (f["category"] == cat)
+        if s.any():
+            print(f"  {label:12s} {np.sum(np.abs(f['dt_t0'][s]) < dt_max):3d}/{s.sum():3d}")
 
 
 def main():
@@ -652,6 +821,7 @@ def main():
     parser.add_argument("-o", "--output", default="plots/Jet-Ana/high_pt", help="Output directory.")
     parser.add_argument("--pt-min", type=float, default=80.0, help="Calibrated jet pT min [GeV].")
     parser.add_argument("--sigma-cut", type=float, default=3.5, help="Calo-MBD consistency cut in sigma.")
+    parser.add_argument("--dt-max", type=float, default=3.0, help="In-time window |t_jet - t0| [ns] (shown, not cut on).")
     parser.add_argument("--pdf", action="store_true", help="Also save PDFs.")
     parser.add_argument("--event-displays", action="store_true", help="Tower displays for each event with a selected jet.")
     parser.add_argument("--logz", action="store_true", help="Logarithmic energy scale for the event displays.")
@@ -718,6 +888,15 @@ def main():
     else:
         print(f"\nConstituent E sum matches jet E for all jets (max deviation {rel.max():.2e})")
 
+    # the jet time is the energy-weighted mean of the layer times, so it must lie between them
+    layer_t = np.stack([jets[f"t_{layer}"] for layer in LAYERS], axis=1)
+    has_t = np.isfinite(layer_t)
+    lo = np.where(has_t, layer_t, np.inf).min(axis=1)
+    hi = np.where(has_t, layer_t, -np.inf).max(axis=1)
+    inside = (jets["t"] >= lo - 1e-3) & (jets["t"] <= hi + 1e-3)
+    print(f"Jet time between its layer times for {inside.sum()}/{len(inside)} jets "
+          f"(no timed tower: {np.sum(~has_t.any(axis=1))}, t0 NaN: {np.sum(~np.isfinite(jets['t0']))})")
+
     print(f"\n=== {len(jets['pt_calib'])} jets, pT_calib {jets['pt_calib'].min():.1f}-{jets['pt_calib'].max():.1f} GeV ===")
     for key, label in [("n_const", "N_const"), ("n_pos", "N_const (E > 0)"), ("n_emcal", "N EMCal"),
                        ("n_ihcal", "N IHCal"), ("n_ohcal", "N OHCal"), ("z_lead", "E_lead / E_jet"),
@@ -729,6 +908,12 @@ def main():
     print("  leading tower layer:   " + ", ".join(f"{LAYER_LABELS[l]} {c}" for l, c in zip(layers, counts)))
     for z in [0.3, 0.5, 0.7]:
         print(f"  E_lead / E_jet > {z}: {np.mean(jets['z_lead'] > z):6.1%}")
+    # timing can be NaN (no tower above the timing threshold in a layer, or no t0)
+    for key, label in [("dt_t0", "t - t0 [ns]"), ("t_emcal", "t EMCal [ns]"), ("t_ihcal", "t IHCal [ns]"), ("t_ohcal", "t OHCal [ns]")]:
+        v = jets[key][np.isfinite(jets[key])]
+        if len(v):
+            print(f"  {label:22s} median {np.median(v):7.2f}  min {v.min():7.2f}  max {v.max():7.2f}  ({len(v)} jets)")
+    print(f"  |t - t0| < {args.dt_max:g} ns: {np.mean(np.abs(jets['dt_t0']) < args.dt_max):6.1%}")
 
     hep.style.use("ATLAS")
     out_dir = Path(args.output)
@@ -743,13 +928,16 @@ def main():
     plot_vs_pt(jets, "n_const", r"$N_{\mathrm{const}}$", args.pt_min, out_dir / f"n_const_vs_pt_{tag}.png", args.pdf)
     write_csv(jets, out_dir / f"jets_{tag}.csv")
 
-    print_feature_table(features, args.pt_min)
+    print_feature_table(features, args.pt_min, args.dt_max)
+    plot_timing(jets, features, args.pt_min, args.dt_max, out_dir / f"timing_{tag}.png", args.pdf)
+    plot_dt_vs_pt(jets, args.pt_min, args.dt_max, out_dir / f"dt_t0_vs_pt_{tag}.png", args.pdf)
+    plot_dt_1d(jets, features, args.pt_min, args.dt_max, out_dir / f"dt_t0_1d_{tag}.png", args.pdf)
     plot_features_vs_pt(features, args.pt_min, out_dir / f"features_vs_pt_{COLL}.png", args.pdf)
     plot_layer_plane(features, args.pt_min, out_dir / f"layer_plane_{COLL}.png", args.pdf)
     plot_layer_plane_high_pt(features, args.pt_min, out_dir / f"layer_plane_{COLL}_pt{args.pt_min:g}.png", args.pdf)
     write_csv(features, out_dir / f"jets_all_{COLL}.csv",
               ["run", "event", "centrality", "pt_calib", "pt_raw", "eta", "phi", "category", "frac_emcal", "frac_ihcal",
-               "frac_ohcal", "z_lead", "lead_layer", "swiss", "r03_r02", "recoil_pt", "recoil_frac"])
+               "frac_ohcal", "z_lead", "lead_layer", "swiss", "r03_r02", "recoil_pt", "recoil_frac", "t0", "t", "dt_t0"])
 
     if payloads:
         display_dir = out_dir / "event_displays"
