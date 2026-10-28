@@ -33,6 +33,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplhep as hep
+from matplotlib.ticker import FuncFormatter
 
 from plot_jet_bkgsub_compare import save_fig
 from plot_jet_emfrac_compare import find_trees
@@ -417,8 +418,10 @@ def make_zoom_plot(run, event, panels, output_path, logz=False):
     """1x4 of square zoomed panels (make_1x4_calo_plot is sized for the full, tall detector)."""
     hep.style.use("ATLAS")
     fig, axes = plt.subplots(1, 4, figsize=(24, 5.2))
-    for ax, (grid, title, overlays) in zip(axes, panels):
+    for ax, n_phi, (grid, title, overlays) in zip(axes, [EMCAL_SHAPE[1]] + [HCAL_SHAPE[1]] * 3, panels):
         plot_calo_2d(ax, grid, title=title, logz=logz, overlays=overlays, legend_fontsize=12)
+        # the zoom window wraps in phi past the grid edge, so label the phi axis modulo the number of phi bins
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda v, _, n=n_phi: f"{int(round(v)) % n}"))
     fig.text(0.94, 0.97, rf"Run: {run}, Event: {event}", ha="right", va="top", fontsize=15, weight="bold")
     fig.subplots_adjust(left=0.04, right=0.94, top=0.86, bottom=0.13, wspace=0.5)
     fig.savefig(output_path, dpi=200)
