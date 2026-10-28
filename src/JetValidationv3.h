@@ -46,6 +46,9 @@ class JetValidationv3 : public SubsysReco
   void set_do_detailed(bool b = true) { m_do_detailed = b; }
   // store EMfrac-calibrated pT (nodes "<calib node>_calib_emfrac") and per-jet calo fractions
   void set_do_emfrac(bool b = true) { m_do_emfrac = b; }
+  // store per-jet timing (jet time and per calo layer time) and per-jet calo fractions
+  void set_do_timing(bool b = true) { m_do_timing = b; }
+  void set_timing_e_threshold(double e) { m_timing_e_threshold = e; }
   void set_do_r02(bool b = true) { m_do_r02 = b; }
   void set_do_r03(bool b = true) { m_do_r03 = b; }
   void set_jet_pt_min(double pt_min) { m_jet_pt_min_cut = pt_min; }
@@ -65,6 +68,8 @@ class JetValidationv3 : public SubsysReco
   bool get_do_mult_noflow() const { return m_do_mult_noflow; }
   bool get_do_detailed() const { return m_do_detailed; }
   bool get_do_emfrac() const { return m_do_emfrac; }
+  bool get_do_timing() const { return m_do_timing; }
+  double get_timing_e_threshold() const { return m_timing_e_threshold; }
   bool get_do_r02() const { return m_do_r02; }
   bool get_do_r03() const { return m_do_r03; }
   double get_jet_pt_min() const { return m_jet_pt_min_cut; }
@@ -85,9 +90,17 @@ class JetValidationv3 : public SubsysReco
 
     // EMfrac JES comparison (filled only with m_do_emfrac)
     std::vector<double> pt_calib_emfrac;  // NOLINT(misc-non-private-member-variables-in-classes)
+
+    // calo fractions (filled with m_do_emfrac or m_do_timing)
     std::vector<double> emcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> ihcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> ohcal_frac;       // NOLINT(misc-non-private-member-variables-in-classes)
+
+    // timing [ns] (filled only with m_do_timing): jet time and energy-weighted time per calo layer
+    std::vector<double> t;        // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> t_emcal;  // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> t_ihcal;  // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> t_ohcal;  // NOLINT(misc-non-private-member-variables-in-classes)
 
     // Detailed tower constituent info (nested vectors: 1 vector per jet in the event)
     std::vector<std::vector<int>> emcal_tower_index;        // NOLINT(misc-non-private-member-variables-in-classes)
@@ -115,6 +128,11 @@ class JetValidationv3 : public SubsysReco
       emcal_frac.clear();
       ihcal_frac.clear();
       ohcal_frac.clear();
+
+      t.clear();
+      t_emcal.clear();
+      t_ihcal.clear();
+      t_ohcal.clear();
 
       emcal_tower_index.clear();
       emcal_tower_energy.clear();
@@ -202,6 +220,11 @@ class JetValidationv3 : public SubsysReco
 
   double m_jet_pt_min_cut{10};     // GeV
 
+  // towers enter the jet time only above this energy, same as TowerJetInput (GeV)
+  double m_timing_e_threshold{0.1};
+  // tower time is in samples
+  static constexpr double NS_PER_SAMPLE = 17.6;
+
   // EMfrac-calibrated jet node = legacy calib node name + this suffix
   std::string m_emfrac_calib_suffix{"_emfrac"};
 
@@ -212,6 +235,7 @@ class JetValidationv3 : public SubsysReco
   bool m_do_mult_noflow{false};
   bool m_do_detailed{false};
   bool m_do_emfrac{false};
+  bool m_do_timing{false};
   bool m_do_r02{true};
   bool m_do_r03{true};
 

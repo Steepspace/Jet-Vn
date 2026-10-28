@@ -117,9 +117,21 @@ int JetValidationv3::Init([[maybe_unused]] PHCompositeNode *topNode)
     if (m_do_emfrac)
     {
       tree->Branch(("pt_calib_emfrac_" + tag).c_str(), &jd.pt_calib_emfrac);
+    }
+
+    if (m_do_emfrac || m_do_timing)
+    {
       tree->Branch(("emcal_frac_" + tag).c_str(), &jd.emcal_frac);
       tree->Branch(("ihcal_frac_" + tag).c_str(), &jd.ihcal_frac);
       tree->Branch(("ohcal_frac_" + tag).c_str(), &jd.ohcal_frac);
+    }
+
+    if (m_do_timing)
+    {
+      tree->Branch(("t_" + tag).c_str(), &jd.t);
+      tree->Branch(("t_emcal_" + tag).c_str(), &jd.t_emcal);
+      tree->Branch(("t_ihcal_" + tag).c_str(), &jd.t_ihcal);
+      tree->Branch(("t_ohcal_" + tag).c_str(), &jd.t_ohcal);
     }
 
     if (m_do_detailed)
@@ -448,9 +460,76 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
         if (m_do_emfrac)
         {
           jd.pt_calib_emfrac.push_back(pt_calib_emfrac);
+        }
+
+        if (m_do_emfrac || m_do_timing)
+        {
           jd.emcal_frac.push_back(jet->get_emcal_frac());
           jd.ihcal_frac.push_back(jet->get_ihcal_frac());
           jd.ohcal_frac.push_back(jet->get_ohcal_frac());
+        }
+
+        if (m_do_timing)
+        {
+          // jet time: energy-weighted constituent tower time, set by FastJetAlgoSub
+          // (NaN if no constituent tower was above the timing threshold)
+          double t = (jet->size_properties() > Jet::PROPERTY::prop_t) ? jet->get_property(Jet::PROPERTY::prop_t)
+                                                                       : std::numeric_limits<double>::quiet_NaN();
+
+          // same definition per calo layer, so the jet time is the energy-weighted mean of the three
+          std::array<double, 3> t_sum{};  // EMCal, IHCal, OHCal
+          std::array<double, 3> e_sum{};
+          for (const auto& [src, channel] : jet->get_comp_vec())
+          {
+            int layer = -1;
+            TowerInfoContainer* towers = nullptr;
+            if (src == Jet::SRC::CEMC_TOWERINFO_RETOWER || src == Jet::SRC::CEMC_TOWERINFO_SUB1)
+            {
+              layer = 0;
+              towers = cemc_towers;
+            }
+            else if (src == Jet::SRC::HCALIN_TOWERINFO || src == Jet::SRC::HCALIN_TOWERINFO_SUB1)
+            {
+              layer = 1;
+              towers = ihcal_towers;
+            }
+            else if (src == Jet::SRC::HCALOUT_TOWERINFO || src == Jet::SRC::HCALOUT_TOWERINFO_SUB1)
+            {
+              layer = 2;
+              towers = ohcal_towers;
+            }
+
+            if (!towers || channel >= towers->size())
+            {
+              continue;
+            }
+
+            TowerInfo *tower = towers->get_tower_at_channel(channel);
+            double tower_energy = tower ? tower->get_energy() : 0;
+            if (!(tower_energy > m_timing_e_threshold))
+            {
+              continue;
+            }
+
+            t_sum[layer] += NS_PER_SAMPLE * tower->get_time() * tower_energy;
+            e_sum[layer] += tower_energy;
+          }
+
+          auto layer_t = [&](int layer)
+          {
+            return e_sum[layer] > 0 ? t_sum[layer] / e_sum[layer] : std::numeric_limits<double>::quiet_NaN();
+          };
+
+          jd.t.push_back(t);
+          jd.t_emcal.push_back(layer_t(0));
+          jd.t_ihcal.push_back(layer_t(1));
+          jd.t_ohcal.push_back(layer_t(2));
+
+          if (Verbosity() > 2)
+          {
+            std::cout << "    Timing -> t: " << t << " ns | t_emcal: " << layer_t(0)
+                      << " | t_ihcal: " << layer_t(1) << " | t_ohcal: " << layer_t(2) << std::endl;
+          }
         }
 
         if (energy > 0 && pass_pt_legacy)
@@ -609,11 +688,16 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     TowerInfoContainer* cemc_sub1 = nullptr;
     TowerInfoContainer* ihcal_sub1 = nullptr;
     TowerInfoContainer* ohcal_sub1 = nullptr;
-    if (m_do_detailed)
+    if (m_do_detailed || m_do_timing)
     {
       cemc_sub1 = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_CEMC_RETOWER_SUB1");
       ihcal_sub1 = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_HCALIN_SUB1");
       ohcal_sub1 = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_HCALOUT_SUB1");
+    }
+    if (m_do_timing && (!cemc_sub1 || !ihcal_sub1 || !ohcal_sub1))
+    {
+      std::cout << "Aborting Run: Iter Tower Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
     }
 
     if (m_do_r02)
@@ -648,11 +732,16 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     TowerInfoContainer* cemc_iternf = nullptr;
     TowerInfoContainer* ihcal_iternf = nullptr;
     TowerInfoContainer* ohcal_iternf = nullptr;
-    if (m_do_detailed)
+    if (m_do_detailed || m_do_timing)
     {
       cemc_iternf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_iternf_cemc);
       ihcal_iternf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_iternf_ihcal);
       ohcal_iternf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_iternf_ohcal);
+    }
+    if (m_do_timing && (!cemc_iternf || !ihcal_iternf || !ohcal_iternf))
+    {
+      std::cout << "Aborting Run: Iter NoFlow Tower Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
     }
 
     if (m_do_r02)
@@ -687,11 +776,16 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     TowerInfoContainer* cemc_mult = nullptr;
     TowerInfoContainer* ihcal_mult = nullptr;
     TowerInfoContainer* ohcal_mult = nullptr;
-    if (m_do_detailed)
+    if (m_do_detailed || m_do_timing)
     {
       cemc_mult = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_mult_cemc);
       ihcal_mult = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_mult_ihcal);
       ohcal_mult = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_mult_ohcal);
+    }
+    if (m_do_timing && (!cemc_mult || !ihcal_mult || !ohcal_mult))
+    {
+      std::cout << "Aborting Run: Mult Tower Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
     }
 
     if (m_do_r02)
@@ -726,11 +820,16 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     TowerInfoContainer* cemc_multnf = nullptr;
     TowerInfoContainer* ihcal_multnf = nullptr;
     TowerInfoContainer* ohcal_multnf = nullptr;
-    if (m_do_detailed)
+    if (m_do_detailed || m_do_timing)
     {
       cemc_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_cemc);
       ihcal_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_ihcal);
       ohcal_multnf = findNode::getClass<TowerInfoContainer>(topNode, m_towerNode_multnf_ohcal);
+    }
+    if (m_do_timing && (!cemc_multnf || !ihcal_multnf || !ohcal_multnf))
+    {
+      std::cout << "Aborting Run: Mult NoFlow Tower Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
     }
 
     if (m_do_r02)
@@ -765,11 +864,16 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
     TowerInfoContainer* cemc_unsub = nullptr;
     TowerInfoContainer* ihcal_unsub = nullptr;
     TowerInfoContainer* ohcal_unsub = nullptr;
-    if (m_do_detailed)
+    if (m_do_detailed || m_do_timing)
     {
       cemc_unsub = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_CEMC_RETOWER");
       ihcal_unsub = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_HCALIN");
       ohcal_unsub = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_HCALOUT");
+    }
+    if (m_do_timing && (!cemc_unsub || !ihcal_unsub || !ohcal_unsub))
+    {
+      std::cout << "Aborting Run: Unsub Tower Info null" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
     }
 
     if (m_do_r02)

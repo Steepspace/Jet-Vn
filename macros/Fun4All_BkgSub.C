@@ -412,6 +412,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   jet_validation->set_do_mult_noflow(Enable::HIJETS_TOWER_MULTSUB_NOFLOW);
   jet_validation->set_do_detailed(do_detailed);
   jet_validation->set_do_emfrac(do_emfrac_calib);
+  jet_validation->set_do_timing(true);
   jet_validation->set_jet_pt_min(jet_pt_min);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);
