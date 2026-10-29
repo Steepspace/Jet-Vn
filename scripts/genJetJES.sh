@@ -25,10 +25,15 @@ lead_truth_pt_max=${6}
 sigma_cut=${7:-3.5}
 # overlay pT-hat sample (e.g. Jet20): output directory, so hadd merges each sample separately
 sample=${8:-}
+# 1: p+p MC trees (Fun4All_PP_JES), no Calo-MBD file
+pp=${9:-0}
 
-# extract runnumber from file name
+# extract runnumber from file name (p+p MC: the sample is the output directory, no run number needed)
 file=$(basename "$input")
 run=$(head -n 1 "$input" | grep -oP '(?<=/)\d+(?=/tree/)' || head -n 1 "$input" | grep -oP '\d{5,8}')
+if [[ "$pp" == "1" ]]; then
+    run=${run:-pp}
+fi
 if [ -z "$run" ]; then
     echo "Error: Could not extract run number from $input at $(date) on $(hostname)!" >&2
     mkdir -p "$submitDir/failures"
@@ -36,7 +41,11 @@ if [ -z "$run" ]; then
     exit 1
 fi
 input_file="$file"
-input_calo_mbd_file=$(basename "$input_calo_mbd")
+if [[ "$pp" == "1" ]]; then
+    input_calo_mbd_file="none"
+else
+    input_calo_mbd_file=$(basename "$input_calo_mbd")
+fi
 
 if [[ -n "$_CONDOR_SCRATCH_DIR" && -d "$_CONDOR_SCRATCH_DIR" ]]
 then
@@ -57,7 +66,9 @@ then
         exit 1
     fi
 
-    if [ -n "$input_calo_mbd" ]; then
+    if [[ "$pp" == "1" ]]; then
+        echo "p+p MC mode: no Calo-MBD file"
+    elif [ -n "$input_calo_mbd" ]; then
         if ! cp -v "$input_calo_mbd" .; then
             echo "Error: Failed to copy Calo-MBD file $input_calo_mbd in $file at $(date) on $(hostname)" >&2
             echo "copy failure (input_calo_mbd) for $input_calo_mbd in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
@@ -82,7 +93,7 @@ out_dir="${sample:-$run}"
 mkdir -p "$out_dir"
 
 echo "Starting Jet-JES binary at $(date) on $(hostname)"
-$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0
+$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0 "$pp"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then

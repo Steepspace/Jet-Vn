@@ -38,20 +38,27 @@
 // and fills the response pT_reco / pT_truth vs pT_truth in the eta bins of the legacy eta dependent JES.
 // One pT-hat sample per job: the event is kept if the leading truth R=0.4 jet pT is in the sample's
 // window, and the samples are weighted (1 / IntegratedLumi_job of h_gen_integral) and summed afterwards.
+// p+p MC mode (Fun4All_PP_JES trees): reconstructed jets are unsub / iter (no flow), a single centrality class
+// (0-100) and no event selection besides the window (|z| < 10 cm is applied in Fun4All), no Calo-MBD file.
 class JetJES
 {
  public:
-  JetJES(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir)
+  JetJES(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir, bool is_pp = false)
     : m_input_file(std::move(input_file))
     , m_calo_mbd_file(std::move(calo_mbd_file))
     , m_events_to_process(events)
     , m_output_dir(std::move(output_dir))
+    , m_is_pp(is_pp)
+    , m_ue_list(is_pp ? m_ue_list_pp : m_ue_list_overlay)
   {
   }
 
   void run()
   {
-    setup_calo_mbd_cut();
+    if (!m_is_pp)
+    {
+      setup_calo_mbd_cut();
+    }
     setup_chain();
     init_hists();
     process_events();
@@ -76,6 +83,9 @@ class JetJES
   static constexpr std::array<double, 7> m_cent_bins = {0.0, 10.0, 20.0, 30.0, 40.0, 50.0, 60.0};
   static constexpr size_t m_num_cent_bins = m_cent_bins.size() - 1;
 
+  // p+p: one class, every event
+  static constexpr std::array<double, 2> m_cent_bins_pp = {0.0, 100.0};
+
   // JetCalib eta dependent JES: [-1.2+R, 1.2-R] split in 4 bins (|z| < 30 cm), cut at the jet fiducial |eta| < eta_max
   static constexpr size_t m_num_eta_bins = 4;
 
@@ -92,8 +102,11 @@ class JetJES
       {"r03", 0.3, 0.8, {-0.8, -0.45, 0.0, 0.45, 0.8}}
   }};
 
-  // UE: iter -> Iterative Method, iternf -> Iterative Method w/o flow modulation
-  static constexpr std::array<std::string_view, 2> m_ue_list = {"iter", "iternf"};
+  // UE: iter -> Iterative Method, iternf -> Iterative Method w/o flow modulation, unsub -> no subtraction
+  // (p+p: iter is already without flow modulation)
+  static constexpr size_t m_num_ue = 2;
+  static constexpr std::array<std::string_view, m_num_ue> m_ue_list_overlay = {"iter", "iternf"};
+  static constexpr std::array<std::string_view, m_num_ue> m_ue_list_pp = {"unsub", "iter"};
 
   // Matching radius: Delta R < m_match_radius_frac * R
   static constexpr double m_match_radius_frac = 0.75;
@@ -130,7 +143,7 @@ class JetJES
     // [radius], all truth jets
     std::array<TH2 *, m_radii.size()> h2TruthEta{};
     // [ue][radius]
-    std::array<std::array<ResponseHistSet, m_radii.size()>, m_ue_list.size()> resp{};
+    std::array<std::array<ResponseHistSet, m_radii.size()>, m_num_ue> resp{};
   };
 
   AnalysisHists m_hists;
@@ -168,7 +181,7 @@ class JetJES
     // [radius], truth jets have no pt_calib and e is not read
     std::array<JetData, m_radii.size()> truth;
     // [ue][radius]
-    std::array<std::array<JetData, m_radii.size()>, m_ue_list.size()> reco;
+    std::array<std::array<JetData, m_radii.size()>, m_num_ue> reco;
   };
 
   // fiducial truth jet: index in the event and eta bin
@@ -187,6 +200,8 @@ class JetJES
   std::string m_calo_mbd_file;
   long long m_events_to_process;
   std::string m_output_dir;
+  bool m_is_pp{false};
+  std::array<std::string_view, m_num_ue> m_ue_list;
   int m_verbosity{0};
 
   double m_lead_truth_pt_min{0}; /*GeV*/
@@ -203,6 +218,9 @@ class JetJES
     CALO_V2,
     TRUTH_WINDOW
   };
+
+  // event selection steps of this mode, in hEvent bin order
+  std::vector<EventType> m_event_steps;
 
   // Hists
   std::map<std::string, std::unique_ptr<TH1>> m_hists1D;
@@ -223,7 +241,10 @@ class JetJES
 
   bool check_CaloMBD() const;
   bool check_truth_window() const;
-  static std::optional<size_t> find_cent_bin(double cent);
+  void fill_event(EventType type) const;
+  size_t num_cent_bins() const { return m_is_pp ? 1 : m_num_cent_bins; }
+  std::pair<int, int> cent_range(size_t icent) const;
+  std::optional<size_t> find_cent_bin(double cent) const;
   static std::optional<size_t> find_eta_bin(double eta, const RadiusConfig &rc);
   static double delta_r(double eta1, double phi1, double eta2, double phi2);
 
@@ -263,15 +284,19 @@ void JetJES::setup_chain()
   auto &ed = m_event_data;
   set_branch("event", &ed.event);
   set_branch("zvtx", &ed.zvtx);
-  set_branch("centrality", &ed.centrality);
-  set_branch("emcal_energy", &ed.emcal_energy);
-  set_branch("ihcal_energy", &ed.ihcal_energy);
-  set_branch("ohcal_energy", &ed.ohcal_energy);
-  set_branch("mbd_charge_south", &ed.mbd_charge_south);
-  set_branch("mbd_charge_north", &ed.mbd_charge_north);
-  set_branch("is_flow_failure_iter", &ed.is_flow_failure_iter);
-  set_branch("calo_v2_iter", &ed.calo_v2_iter);
   set_branch("max_pt_truth_r04", &ed.max_pt_truth_r04);
+  // p+p: no centrality, Calo-MBD or flow selection (the p+p trees have no calo energy / MBD charge branches)
+  if (!m_is_pp)
+  {
+    set_branch("centrality", &ed.centrality);
+    set_branch("emcal_energy", &ed.emcal_energy);
+    set_branch("ihcal_energy", &ed.ihcal_energy);
+    set_branch("ohcal_energy", &ed.ohcal_energy);
+    set_branch("mbd_charge_south", &ed.mbd_charge_south);
+    set_branch("mbd_charge_north", &ed.mbd_charge_north);
+    set_branch("is_flow_failure_iter", &ed.is_flow_failure_iter);
+    set_branch("calo_v2_iter", &ed.calo_v2_iter);
+  }
 
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
@@ -282,7 +307,7 @@ void JetJES::setup_chain()
     set_branch(std::format("phi_truth_{}", r), &truth.phi);
     set_branch(std::format("eta_truth_{}", r), &truth.eta);
 
-    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+    for (size_t iue = 0; iue < m_num_ue; ++iue)
     {
       std::string_view ue = m_ue_list[iue];
       JetData &reco = ed.reco[iue][ir];
@@ -366,25 +391,42 @@ void JetJES::init_hists()
   double eta_low = -1.5;
   double eta_high = 1.5;
 
-  std::vector<std::string> event_labels = {"All", "Centrality 0-60%", "Good Calo-MBD", "Flow Pass Iter", std::format("|Calo v_{{2}}| < {}", m_calo_v2_max),
-                                           std::format("Lead Truth R=0.4 p_{{T}} Window [{}, {})", m_lead_truth_pt_min,
-                                                       m_lead_truth_pt_max < 0 ? "#infty" : std::format("{}", m_lead_truth_pt_max))};
+  const std::map<EventType, std::string> event_labels = {
+      {EventType::ALL, "All"},
+      {EventType::CENT, "Centrality 0-60%"},
+      {EventType::CALO_MBD, "Good Calo-MBD"},
+      {EventType::FLOW_PASS_ITER, "Flow Pass Iter"},
+      {EventType::CALO_V2, std::format("|Calo v_{{2}}| < {}", m_calo_v2_max)},
+      {EventType::TRUTH_WINDOW, std::format("Lead Truth R=0.4 p_{{T}} Window [{}, {})", m_lead_truth_pt_min,
+                                            m_lead_truth_pt_max < 0 ? "#infty" : std::format("{}", m_lead_truth_pt_max))}};
 
-  int bins_event = static_cast<int>(event_labels.size());
-  m_hists1D["hEvent"] = std::make_unique<TH1F>("hEvent", "Event Type; Type; Events", bins_event, 0, bins_event);
-  for (size_t i = 0; i < event_labels.size(); ++i)
+  if (m_is_pp)
   {
-    m_hists1D["hEvent"]->GetXaxis()->SetBinLabel(static_cast<int>(i + 1), event_labels[i].c_str());
+    m_event_steps = {EventType::ALL, EventType::TRUTH_WINDOW};
+  }
+  else
+  {
+    m_event_steps = {EventType::ALL, EventType::CENT, EventType::CALO_MBD, EventType::FLOW_PASS_ITER, EventType::CALO_V2, EventType::TRUTH_WINDOW};
   }
 
-  m_hists1D["hCentrality"] = std::make_unique<TH1F>("hCentrality", "Selected Events; Centrality [%]; Events", 60, -0.5, 59.5);
+  int bins_event = static_cast<int>(m_event_steps.size());
+  m_hists1D["hEvent"] = std::make_unique<TH1F>("hEvent", "Event Type; Type; Events", bins_event, 0, bins_event);
+  for (size_t i = 0; i < m_event_steps.size(); ++i)
+  {
+    m_hists1D["hEvent"]->GetXaxis()->SetBinLabel(static_cast<int>(i + 1), event_labels.at(m_event_steps[i]).c_str());
+  }
+
+  if (!m_is_pp)
+  {
+    m_hists1D["hCentrality"] = std::make_unique<TH1F>("hCentrality", "Selected Events; Centrality [%]; Events", 60, -0.5, 59.5);
+  }
 
   m_hists1D["hMaxPtTruthR04_all"] = std::make_unique<TH1F>("hMaxPtTruthR04_all", "All Events; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
   m_hists1D["hMaxPtTruthR04"] = std::make_unique<TH1F>("hMaxPtTruthR04", "Event Selection (before window); Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
   m_hists1D["hMaxPtTruthR04_window"] = std::make_unique<TH1F>("hMaxPtTruthR04_window", "Event Selection + Window; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
 
   m_hists.hEvent = m_hists1D["hEvent"].get();
-  m_hists.hCentrality = m_hists1D["hCentrality"].get();
+  m_hists.hCentrality = m_is_pp ? nullptr : m_hists1D["hCentrality"].get();
   m_hists.hMaxPtTruthR04_all = m_hists1D["hMaxPtTruthR04_all"].get();
   m_hists.hMaxPtTruthR04 = m_hists1D["hMaxPtTruthR04"].get();
   m_hists.hMaxPtTruthR04_window = m_hists1D["hMaxPtTruthR04_window"].get();
@@ -400,18 +442,18 @@ void JetJES::init_hists()
 
     for (size_t ieta = 0; ieta < m_num_eta_bins; ++ieta)
     {
-      for (size_t icent = 0; icent < m_num_cent_bins; ++icent)
+      for (size_t icent = 0; icent < num_cent_bins(); ++icent)
       {
-        int cent_low = static_cast<int>(m_cent_bins[icent]);
-        int cent_high = static_cast<int>(m_cent_bins[icent + 1]);
+        auto [cent_low, cent_high] = cent_range(icent);
         std::string suffix = std::format("eta{}_cent_{}_{}", ieta, cent_low, cent_high);
-        std::string label = std::format("R = {:.1f}, {:.2f} #leq #eta^{{truth}} < {:.2f}, {} - {}%", rc.radius, rc.eta_edges[ieta], rc.eta_edges[ieta + 1], cent_low, cent_high);
+        std::string cent_label = m_is_pp ? std::string("p+p") : std::format("{} - {}%", cent_low, cent_high);
+        std::string label = std::format("R = {:.1f}, {:.2f} #leq #eta^{{truth}} < {:.2f}, {}", rc.radius, rc.eta_edges[ieta], rc.eta_edges[ieta + 1], cent_label);
 
         std::string truth_name = std::format("hTruth_{}_{}", r, suffix);
         m_hists1D[truth_name] = std::make_unique<TH1F>(truth_name.c_str(), std::format("{}; p_{{T}}^{{truth}} [GeV]; Jets", label).c_str(), bins_pt, pt_low, pt_high);
         m_hists.hTruth[ir][ieta][icent] = m_hists1D[truth_name].get();
 
-        for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+        for (size_t iue = 0; iue < m_num_ue; ++iue)
         {
           std::string_view ue = m_ue_list[iue];
           ResponseHistSet &h = m_hists.resp[iue][ir];
@@ -432,7 +474,7 @@ void JetJES::init_hists()
       }
     }
 
-    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+    for (size_t iue = 0; iue < m_num_ue; ++iue)
     {
       std::string_view ue = m_ue_list[iue];
       ResponseHistSet &h = m_hists.resp[iue][ir];
@@ -498,8 +540,32 @@ bool JetJES::check_truth_window() const
   return pt >= m_lead_truth_pt_min && (m_lead_truth_pt_max < 0 || pt < m_lead_truth_pt_max);
 }
 
-std::optional<size_t> JetJES::find_cent_bin(double cent)
+void JetJES::fill_event(EventType type) const
 {
+  auto it = std::ranges::find(m_event_steps, type);
+  if (it != m_event_steps.end())
+  {
+    m_hists.hEvent->Fill(static_cast<double>(std::distance(m_event_steps.begin(), it)));
+  }
+}
+
+std::pair<int, int> JetJES::cent_range(size_t icent) const
+{
+  if (m_is_pp)
+  {
+    return {static_cast<int>(m_cent_bins_pp[0]), static_cast<int>(m_cent_bins_pp[1])};
+  }
+  return {static_cast<int>(m_cent_bins[icent]), static_cast<int>(m_cent_bins[icent + 1])};
+}
+
+std::optional<size_t> JetJES::find_cent_bin(double cent) const
+{
+  // p+p: every event is in the single class
+  if (m_is_pp)
+  {
+    return 0;
+  }
+
   if (cent > m_cent_high)
   {
     return std::nullopt;
@@ -570,7 +636,7 @@ void JetJES::process_jets(size_t icent)
 
     double dr_max = m_match_radius_frac * rc.radius;
 
-    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+    for (size_t iue = 0; iue < m_num_ue; ++iue)
     {
       const JetData &reco = ed.reco[iue][ir];
       const ResponseHistSet &h = m_hists.resp[iue][ir];
@@ -661,37 +727,41 @@ void JetJES::process_events()
       std::cout << std::format("Processing {}/{}: {:.2f} %", event, n_entries, static_cast<double>(event) * 100. / static_cast<double>(n_entries)) << std::endl;
     }
 
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::ALL));
+    fill_event(EventType::ALL);
     m_hists.hMaxPtTruthR04_all->Fill(ed.max_pt_truth_r04);
 
-    // Event Selections, as in Jet-Anav3
+    // Event Selections, as in Jet-Anav3 (p+p: none, the single centrality class)
     auto icent = find_cent_bin(ed.centrality);
     if (!icent)
     {
       continue;
     }
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::CENT));
 
-    if (!check_CaloMBD())
+    if (!m_is_pp)
     {
-      ++m_ctr["events_bad_calo_mbd"];
-      continue;
-    }
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::CALO_MBD));
+      fill_event(EventType::CENT);
 
-    if (ed.is_flow_failure_iter)
-    {
-      ++m_ctr["events_flow_failure_iter"];
-      continue;
-    }
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::FLOW_PASS_ITER));
+      if (!check_CaloMBD())
+      {
+        ++m_ctr["events_bad_calo_mbd"];
+        continue;
+      }
+      fill_event(EventType::CALO_MBD);
 
-    if (std::abs(ed.calo_v2_iter) >= m_calo_v2_max)
-    {
-      ++m_ctr["events_calo_v2_iter"];
-      continue;
+      if (ed.is_flow_failure_iter)
+      {
+        ++m_ctr["events_flow_failure_iter"];
+        continue;
+      }
+      fill_event(EventType::FLOW_PASS_ITER);
+
+      if (std::abs(ed.calo_v2_iter) >= m_calo_v2_max)
+      {
+        ++m_ctr["events_calo_v2_iter"];
+        continue;
+      }
+      fill_event(EventType::CALO_V2);
     }
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::CALO_V2));
     m_hists.hMaxPtTruthR04->Fill(ed.max_pt_truth_r04);
 
     // pT-hat sample window
@@ -700,9 +770,12 @@ void JetJES::process_events()
       ++m_ctr["events_outside_truth_window"];
       continue;
     }
-    m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::TRUTH_WINDOW));
+    fill_event(EventType::TRUTH_WINDOW);
     m_hists.hMaxPtTruthR04_window->Fill(ed.max_pt_truth_r04);
-    m_hists.hCentrality->Fill(ed.centrality);
+    if (m_hists.hCentrality)
+    {
+      m_hists.hCentrality->Fill(ed.centrality);
+    }
 
     // Jets
     process_jets(*icent);
@@ -748,7 +821,7 @@ void JetJES::print_event_info(long long event_idx) const
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
     print_jets(std::format("{}_truth", m_radii[ir].tag), ed.truth[ir]);
-    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+    for (size_t iue = 0; iue < m_num_ue; ++iue)
     {
       print_jets(std::format("{}_{}", m_radii[ir].tag, m_ue_list[iue]), ed.reco[iue][ir]);
     }
@@ -796,9 +869,10 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 9)
+  if (argc < 3 || argc > 10)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity] [pp]" << std::endl;
+    std::cout << "  pp: 1 for p+p MC trees (Fun4All_PP_JES), calo_mbd_file is then not used (pass none)" << std::endl;
     return 1;
   }
 
@@ -811,21 +885,26 @@ int main(int argc, const char *const argv[])
   double lead_truth_pt_max = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : -1;
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
+  bool is_pp = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) != 0 : false;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
+  std::cout << std::format("Mode: {}\n", is_pp ? "p+p MC" : "data+MC overlay");
   std::cout << std::format("Input: {}\n", input_file);
-  std::cout << std::format("Calo-MBD File: {}\n", calo_mbd_file);
+  std::cout << std::format("Calo-MBD File: {}\n", is_pp ? "not used" : calo_mbd_file);
   std::cout << std::format("Events: {}\n", events);
   std::cout << std::format("Output Dir: {}\n", output_dir);
   std::cout << std::format("Lead Truth R=0.4 Jet pT Window: [{}, {}) [GeV]\n", lead_truth_pt_min, lead_truth_pt_max < 0 ? "inf" : std::format("{}", lead_truth_pt_max));
-  std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
+  if (!is_pp)
+  {
+    std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
+  }
   std::cout << std::format("Verbosity: {}\n", verbosity);
   std::cout << std::format("{:#<20}\n", "");
 
   try
   {
-    JetJES analysis(input_file, calo_mbd_file, events, output_dir);
+    JetJES analysis(input_file, calo_mbd_file, events, output_dir, is_pp);
     analysis.set_lead_truth_pt_min(lead_truth_pt_min);
     analysis.set_lead_truth_pt_max(lead_truth_pt_max);
     analysis.set_sigma_cut(sigma_cut);
