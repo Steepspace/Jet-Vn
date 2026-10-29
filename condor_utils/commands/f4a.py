@@ -555,6 +555,91 @@ def create_f4a_mc_jobs(args):
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
+PP_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', 'dst_truth_jet.list')
+
+def create_f4a_pp_jes_jobs(args):
+    """
+    p+p MC JES (Fun4All_PP_JES): -i lists the pT-hat samples, one per line, either as a sample list file
+    (e.g. files/MC/run-28/jet12.list, holding the paths of its dst_calo_cluster/dst_global/dst_truth_jet lists;
+    the sample is named after the file) or as a sample directory holding those three lists.
+    The three lists of a sample are aligned by segment. Each job gets dst_per_job segments of all three.
+    """
+    manager = CondorJobManager(args, job_name="F4A PP JES")
+    manager.add_file_to_check(args.f4a_macro)
+    manager.add_file_to_check(args.HIJetReco_macro)
+    manager.add_dir_to_check(args.src_dir)
+    manager.validate_paths()
+
+    manager.log_initialization({
+        'Jet pT Min': f"{args.jet_pt_min} GeV",
+        'Truth Jet pT Min': f"{args.truth_jet_pt_min} GeV",
+        'Fun4All Macro': Path(args.f4a_macro).resolve(),
+        'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
+        'Source Directory': Path(args.src_dir).resolve()
+    })
+
+    files_dir = manager.prepare_directories()
+    manager.copy_dependencies(extra_files=[args.f4a_macro, args.HIJetReco_macro], extra_dirs=[args.src_dir])
+
+    jobs_file = manager.output_dir / 'jobs.list'
+    jobs_file.unlink(missing_ok=True)
+
+    dst_per_job = max(args.dst_per_job, 1)
+    samples = [l.strip() for l in manager.input_list.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+
+    def read_lines(path):
+        return [l.strip() for l in path.read_text(encoding='utf-8').splitlines() if l.strip() and not l.startswith('#')]
+
+    total_jobs = 0
+    with open(jobs_file, mode='w', encoding='utf-8') as file_out:
+        for sample_entry in samples:
+            sample_path = Path(sample_entry)
+            if not sample_path.exists():
+                sample_path = manager.input_list.parent / sample_entry
+            if not sample_path.exists():
+                manager.logger.warning(f"Sample list/directory not found: {sample_entry}")
+                continue
+
+            # {list name: path} of the sample's three DST lists
+            if sample_path.is_dir():
+                sample = sample_path.name
+                list_paths = {name: sample_path / name for name in PP_JES_LISTS}
+            else:
+                sample = sample_path.stem
+                list_paths = {Path(p).name: Path(p) for p in read_lines(sample_path)}
+
+            missing = [name for name in PP_JES_LISTS if name not in list_paths or not list_paths[name].is_file()]
+            if missing:
+                manager.logger.warning(f"Skipping {sample}: missing {', '.join(missing)}")
+                continue
+            lists = [read_lines(list_paths[name]) for name in PP_JES_LISTS]
+
+            # line i of each list must be the same segment (-<run>-<segment>.root)
+            suffixes = [[Path(f).name.split('-', 1)[-1] for f in files] for files in lists]
+            if not (suffixes[0] == suffixes[1] == suffixes[2]):
+                manager.logger.warning(f"Skipping {sample}: the {', '.join(PP_JES_LISTS)} are not segment aligned")
+                continue
+
+            chunks = list(zip(*(chunk_list(files, dst_per_job) for files in lists)))
+            for ichunk, chunk in enumerate(chunks):
+                chunk_paths = []
+                for name, files in zip(PP_JES_LISTS, chunk):
+                    chunk_path = files_dir / f"{sample}-{ichunk:05d}-{name}"
+                    chunk_path.write_text('\n'.join(files) + '\n', encoding='utf-8')
+                    chunk_paths.append(str(chunk_path))
+                file_out.write(f"{','.join(chunk_paths)},{sample}\n")
+
+            manager.logger.info(f"Sample {sample}: {len(lists[0])} segments, {len(chunks)} jobs")
+            total_jobs += len(chunks)
+
+    manager.logger.info(f"Total jobs prepared: {total_jobs}")
+
+    arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(list_calo) $(list_global) $(list_truth) $(sample) "
+                 f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} "
+                 f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output")
+    manager.write_submit_file(arguments=arguments)
+    manager.finalize_submission(queue_arg="list_calo,list_global,list_truth,sample from jobs.list")
+
 def create_f4a_data_mc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A Data MC")
     manager.add_file_to_check(args.f4a_macro)
@@ -738,6 +823,14 @@ def setup_f4a_subparsers(subparsers):
     add_build_args(f4a_mc)
     f4a_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_MC.C', help='Fun4All Macro.')
     f4a_mc.set_defaults(dbtag='MDC2', dst_per_job=500, memory=0.5, condor_script='scripts/genFun4All_MC.sh', func=create_f4a_mc_jobs)
+
+    f4a_pp_jes = subparsers.add_parser('f4a_pp_jes', parents=[get_common_parser()], help='Create condor submission directory for the p+p MC JES (Fun4All_PP_JES).')
+    add_build_args(f4a_pp_jes)
+    f4a_pp_jes.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_PP_JES.C', help='Fun4All Macro.')
+    f4a_pp_jes.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
+    f4a_pp_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
+    f4a_pp_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
+    f4a_pp_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_pp_jes_jobs)
 
     f4a_data_mc = subparsers.add_parser('f4a_data_mc', parents=[get_common_parser()], help='Create condor submission directory.')
     add_build_args(f4a_data_mc)
