@@ -400,6 +400,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Global QA
   GlobalQA* global_qa = new GlobalQA();
   global_qa->set_do_ep(do_flow);
+  // TOWERINFO_CALIB_SEPD only exists when EpdReco runs
+  global_qa->set_do_sepd(do_flow == 3);
   global_qa->set_do_hist(false);
   global_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(global_qa);

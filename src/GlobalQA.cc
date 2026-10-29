@@ -400,6 +400,7 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
   TowerInfoContainer *towerinfosEPD = findNode::getClass<TowerInfoContainer>(topNode, "TOWERINFO_CALIB_SEPD");
   if (!towerinfosEPD)
   {
+    std::cout << "Aborting Run: TOWERINFO_CALIB_SEPD node missing (is EpdReco registered?)" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
@@ -525,6 +526,7 @@ int GlobalQA::process_mbd(PHCompositeNode *topNode)
   PdbParameterMap *pdb = findNode::getClass<PdbParameterMap>(topNode, "MinBiasParams");
   if (!pdb)
   {
+    std::cout << "Aborting Run: MinBiasParams node missing" << std::endl;
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
