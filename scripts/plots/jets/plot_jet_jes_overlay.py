@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-Jet energy scale (JES) and resolution (JER) in data+MC overlay (Jet-JES outputs), differential in the 4 eta bins
-of the legacy eta-dependent JES, to compare mid-rapidity with forward jets.
+Jet energy scale (JES) and resolution (JER) in data+MC overlay, or in pure PYTHIA8 p+p MC with --pp (Jet-JES outputs),
+differential in the 4 eta bins of the legacy eta-dependent JES, to compare mid-rapidity with forward jets.
 
 Each pT-hat sample (Jet12/20/30/40) is filled unweighted within its leading truth R=0.4 jet pT window by Jet-JES.
-Here they are weighted by 1 / IntegratedLumi_job (h_gen_integral of the Fun4All overlay hist files) and summed.
+Here they are weighted and summed, with --weights (from h_gen_integral of the Fun4All hist files in --gen-list):
+  lumi: 1 / IntegratedLumi_job (default for the overlay)
+  wiki: sigma_wiki / NEvents_job, the recommended sample cross sections (default for p+p)
+NEvents_job counts every analyzed event, before the vertex cut, so both include the vertex-cut efficiency of each sample.
 
 The response pT_reco / pT_truth of matched jets is fitted with an iterative Gaussian in truth-pT bins:
 JES = Gaussian mean, JER = sigma / mean. Both the raw pT and the stored pt_calib (eta-binned legacy JES) are shown.
 Below --pt-trust-min the response is truncated by the tree cut (reco pt_calib >= 10 GeV).
 
 The eta plots compare the shape of dN/deta of all truth jets with all reco jets with E > 0 (raw and calibrated pT) above a pT cut,
-in events with |calo v2| < 0.48 (the Jet-Anav3 v3 selection, as in h2JetEtav3),
+in the selected events (overlay: |calo v2| < 0.48, the Jet-Anav3 v3 selection, as in h2JetEtav3),
 to see whether the step at the legacy JES eta-bin edge seen in data shows up in the calibrated MC jets but not in truth.
 """
 
@@ -32,7 +35,7 @@ import mplhep as hep
 from scipy.optimize import curve_fit, OptimizeWarning
 
 from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_panel, COMMON_TEXT_INFO
-from plot_jet_noflow_compare import METHODS, add_header
+from plot_jet_noflow_compare import STYLES_WITH_UNSUB as METHODS, add_header
 from plot_jet_jes_z0_compare import legacy_eta_edges, eta_regions, ETA_BIN_COLORS, REGION_COLORS
 
 SAMPLE_COLORS = {"Jet12": "#1b9e77", "Jet20": "#d95f02", "Jet30": "#7570b3", "Jet40": "#e7298a"}
@@ -46,17 +49,46 @@ CALIBS = {
 # mid / forward: Jet-JES eta bins (legacy JES bins, truth eta) and the matching eta_regions label key
 REGIONS = {"mid": {"eta_bins": (1, 2), "key": "inside"}, "fwd": {"eta_bins": (0, 3), "key": "outside"}}
 N_ETA_BINS = 4
-CENT_CLASSES = [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)]
-CENT_ALL = "0_60"
 
 # Truth-pT bins of the response fits, on the 2 GeV grid of the Jet-JES histograms
 PT_BINS = np.array([10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 46, 52, 60])
 FIT_QA_BINS = [(20, 24), (32, 36), (46, 52)]
 MIN_N_EFF = 50  # minimum effective entries for a fit
 
-OVERLAY_TEXT = "Data + PYTHIA8 Overlay (Jet12–40)"
-# Jet-JES event selection (the Jet-Anav3 v3 one) and its reco jet cut
-SELECTION_TEXT = COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$"
+# Per-mode settings, passed to the plot functions (and the worker processes) as `mode`.
+# cent_classes: Jet-JES centrality classes, summed into cent_all; selection: Jet-JES event selection (overlay: the Jet-Anav3 v3 one)
+MODES = {
+    "overlay": {
+        "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
+        "cent_all": "0_60",
+        "cent_label": "0–60%",
+        "methods": ["iter", "iternf"],
+        "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
+        "selection_text": COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$",
+        "weights": "lumi",
+        "run": 68144,
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay",
+    },
+    "pp": {
+        "cent_classes": [(0, 100)],
+        "cent_all": "0_100",
+        "cent_label": None,
+        "methods": ["unsub", "iter"],
+        "sample_text": "PYTHIA8 p+p (Jet12–40)",
+        "selection_text": r"$|z| < 10$ cm (MBD vertex)",
+        "weights": "wiki",
+        "run": 28,
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-29-26-Run-28-MC/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/10-28-26/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_pp",
+    },
+}
+
+# Cross sections [pb] of the PYTHIA8 Jet samples recommended on the sPHENIX wiki (the --weights wiki weight factors)
+XSEC_WIKI = {"Jet12": 1.4903e+06, "Jet20": 6.2623e+04, "Jet30": 2.5298e+03, "Jet40": 1.3553e+02}
+
 RECO_JET_TEXT = r"Reco jet $E > 0$"
 JES_YLABEL = r"$\langle p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}} \rangle$ (Gaussian $\mu$)"
 JER_YLABEL = r"$\sigma / \mu$ of $p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}}$"
@@ -75,39 +107,45 @@ ETA_COUNT_WIDTH = 0.05  # count ratio across the edge, as in data (tasks/jet-eta
 
 
 def parse_sample_list(list_file):
-    """Returns {sample: path} from a list of ROOT files, with the sample (JetNN) taken from the path."""
+    """Returns {sample: path} from a list of ROOT files, with the sample JetNN taken from the last JetNN / jetNN in the path."""
     samples = {}
     with Path(list_file).open("r") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            match = re.search(r"(Jet\d+)", line)
-            if not match:
+            matches = re.findall(r"[Jj]et(\d+)", line)
+            if not matches:
                 print(f"Warning: No sample (JetNN) in {line}, skipping")
                 continue
-            samples[match.group(1)] = Path(line)
+            samples[f"Jet{matches[-1]}"] = Path(line)
     return dict(sorted(samples.items(), key=lambda kv: int(kv[0][3:])))
 
 
-def load_weights(gen_files, samples):
-    """Per-sample weight 1 / IntegratedLumi_job [pb] from h_gen_integral, with a bookkeeping table."""
+def load_weights(gen_files, samples, source):
+    """Per-sample weight [pb] from h_gen_integral: 1 / IntegratedLumi_job (source="lumi") or sigma_wiki / NEvents_job (source="wiki"),
+    with a bookkeeping table comparing the two (sigma_lumi = NEvents_job / IntegratedLumi_job)."""
     weights = {}
-    print(f"{'Sample':<8}{'L_job [pb^-1]':>16}{'NEvents_job':>14}{'NEvt/NProc':>12}{'NFiles':>8}{'weight [pb]':>14}")
+    print(f"{'Sample':<8}{'L_job [pb^-1]':>16}{'NEvents_job':>14}{'NEvt/NProc':>12}{'NFiles':>8}"
+          f"{'sigma_lumi [pb]':>17}{'sigma_wiki [pb]':>17}{'lumi / wiki':>13}{f'weight ({source}) [pb]':>22}")
     for sample in samples:
         if sample not in gen_files:
             print(f"Error: {sample} not in the generator bookkeeping list")
             sys.exit(1)
+        if source == "wiki" and sample not in XSEC_WIKI:
+            print(f"Error: no wiki cross section for {sample}")
+            sys.exit(1)
         with uproot.open(gen_files[sample]) as rf:
             h = rf["h_gen_integral"]
             info = dict(zip(h.axis().labels(), h.values()))
-        lumi = info["IntegratedLumi_job [pb^{-1}]"]
-        if lumi <= 0:
-            print(f"Error: {sample} has no integrated luminosity in {gen_files[sample]}")
+        lumi, n_gen = info["IntegratedLumi_job [pb^{-1}]"], info["NEvents_job"]
+        if lumi <= 0 or n_gen <= 0:
+            print(f"Error: {sample} has no integrated luminosity or events in {gen_files[sample]}")
             sys.exit(1)
-        weights[sample] = 1.0 / lumi
-        print(f"{sample:<8}{lumi:>16.4f}{info['NEvents_job']:>14.0f}{info['NEvents_job'] / info['NProcessed_file']:>12.4f}"
-              f"{info['NFiles']:>8.0f}{weights[sample]:>14.4e}")
+        sigma_lumi, sigma_wiki = n_gen / lumi, XSEC_WIKI.get(sample, np.nan)
+        weights[sample] = 1.0 / lumi if source == "lumi" else sigma_wiki / n_gen
+        print(f"{sample:<8}{lumi:>16.4f}{n_gen:>14.0f}{n_gen / info['NProcessed_file']:>12.4f}{info['NFiles']:>8.0f}"
+              f"{sigma_lumi:>17.4e}{sigma_wiki:>17.4e}{sigma_lumi / sigma_wiki:>13.4f}{weights[sample]:>22.4e}")
     return weights
 
 
@@ -144,13 +182,13 @@ def resp_name(calib, r_tag, ue, ieta, cent):
     return f"h2Resp_{calib}_{r_tag}_{ue}_eta{ieta}_cent_{cent}"
 
 
-def cent_tags(cent):
-    """Centrality class tags of the Jet-JES histograms in cent (a class tag or CENT_ALL)."""
-    return [f"{lo}_{hi}" for lo, hi in CENT_CLASSES] if cent == CENT_ALL else [cent]
+def cent_tags(cent, mode):
+    """Centrality class tags of the Jet-JES histograms in cent (a class tag or mode["cent_all"])."""
+    return [f"{lo}_{hi}" for lo, hi in mode["cent_classes"]] if cent == mode["cent_all"] else [cent]
 
 
-def sum_bins(hists, name_fn, eta_bins, cent):
-    return add_hists(hists[name_fn(ieta, c)] for ieta in eta_bins for c in cent_tags(cent))
+def sum_bins(hists, name_fn, eta_bins, cent, mode):
+    return add_hists(hists[name_fn(ieta, c)] for ieta in eta_bins for c in cent_tags(cent, mode))
 
 
 def pt_slice(edges, lo, hi):
@@ -260,8 +298,9 @@ def legend_after_band(ax, pt_trust_min, handles=None, **kwargs):
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(x0, 0.99), frameon=False, **kwargs)
 
 
-def info_box(ax, ue, calib=None, extra=None, x=0.95, y=0.95, ha="right", fontsize=13):
-    lines = [METHODS[ue]["label"]] + ([CALIBS[calib]["label"]] if calib else []) + [OVERLAY_TEXT, SELECTION_TEXT, RECO_JET_TEXT] + ([extra] if extra else [])
+def info_box(ax, ue, mode, calib=None, extra=None, x=0.95, y=0.95, ha="right", fontsize=13):
+    lines = ([METHODS[ue]["label"]] + ([CALIBS[calib]["label"]] if calib else []) + [mode["sample_text"], mode["selection_text"], RECO_JET_TEXT]
+             + ([extra] if extra else []))
     ax.text(x, y, "\n".join(lines), transform=ax.transAxes, ha=ha, va="top", fontsize=fontsize)
 
 
@@ -295,7 +334,7 @@ def draw_ratio(ax_ratio, num, den, key, err_key, color, marker):
 # Stitching (all samples)
 # --------------------------------------------------------------------------------------------------
 
-def plot_lead_truth_xsec(samples, weights, run, out_path, save_pdf):
+def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf):
     """Luminosity-normalized leading truth R=0.4 jet pT of each sample (all events), with each sample / the next lower one."""
     hep.style.use("ATLAS")
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
@@ -321,14 +360,14 @@ def plot_lead_truth_xsec(samples, weights, run, out_path, save_pdf):
     add_header(ax, run, None, None)
     ax.set_ylim(top=ax.get_ylim()[1] * 1e3)  # room above the spectra for the legend and text
     ax.legend(loc="upper right", frameon=False, fontsize=14)
-    ax.text(0.04, 0.96, f"{OVERLAY_TEXT}\nAll events (before selection)\nLeading truth $R = 0.4$ jet", transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    ax.text(0.04, 0.96, f"{mode['sample_text']}\nAll events (before selection)\nLeading truth $R = 0.4$ jet", transform=ax.transAxes, ha="left", va="top", fontsize=14)
     setup_ratio_panel(ax_ratio, xlabel=r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", ylabel="Sample / Lower", ratio_ylim=(0, 1.5))
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
     save_fig(fig, out_path, save_pdf)
     plt.close(fig)
 
 
-def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, out_path, save_pdf, text, r_jet=None, xlim=(0, 80), vlines=(), headroom=1e3):
+def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, mode, out_path, save_pdf, text, r_jet=None, xlim=(0, 80), vlines=(), headroom=1e3):
     """Weighted contribution of each sample and the stitched sum of one TH1."""
     hep.style.use("ATLAS")
     fig, ax = plt.subplots(figsize=(8, 7))
@@ -349,7 +388,7 @@ def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, out_path, sav
     ax.set_ylabel(rf"$d\sigma / dp_{{T}}$ [pb/GeV] ({ylabel_tag})")
     add_header(ax, run, r_jet, None)
     ax.legend(loc="upper right", frameon=False, fontsize=14)
-    ax.text(0.04, 0.96, f"{OVERLAY_TEXT}\n{text}", transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    ax.text(0.04, 0.96, f"{mode['sample_text']}\n{text}", transform=ax.transAxes, ha="left", va="top", fontsize=14)
     plt.subplots_adjust(left=0.15, right=0.96, bottom=0.12, top=0.94)
     save_fig(fig, out_path, save_pdf)
     plt.close(fig)
@@ -364,10 +403,13 @@ def sample_window(hists):
 
 
 def print_event_summary(samples):
-    print(f"\n{'Sample':<8}" + "".join(f"{label[:26]:>28}" for label in samples[next(iter(samples))]["hEvent"]["labels"]) + f"{'Calo-MBD rejected':>20}")
+    """hEvent of each sample, with the fraction rejected by the calo-MBD cut (overlay only: the p+p hEvent has no such step)."""
+    labels = list(samples[next(iter(samples))]["hEvent"]["labels"])
+    i_calo = labels.index("Good Calo-MBD") if "Good Calo-MBD" in labels else None
+    print(f"\n{'Sample':<8}" + "".join(f"{label[:26]:>28}" for label in labels) + (f"{'Calo-MBD rejected':>20}" if i_calo else ""))
     for sample, hists in samples.items():
         vals = hists["hEvent"]["values"]
-        print(f"{sample:<8}" + "".join(f"{v:>28.0f}" for v in vals) + f"{(vals[1] - vals[2]) / vals[1]:>19.2%}")
+        print(f"{sample:<8}" + "".join(f"{v:>28.0f}" for v in vals) + (f"{(vals[i_calo - 1] - vals[i_calo]) / vals[i_calo - 1]:>19.2%}" if i_calo else ""))
     print()
 
 
@@ -399,16 +441,16 @@ def plot_matching_qa(hists, r_tag, ue, run, out_path, save_pdf, pt_min=20):
     plt.close(fig)
 
 
-def plot_match_eff(hists, r_tag, ue, run, pt_trust_min, out_path, save_pdf):
-    """Fraction of fiducial truth jets with a matched reco jet, mid vs forward (0-60%)."""
+def plot_match_eff(hists, r_tag, ue, run, mode, pt_trust_min, out_path, save_pdf):
+    """Fraction of fiducial truth jets with a matched reco jet, mid vs forward (all centrality classes)."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
     labels, _ = eta_regions(r_jet)
     x, xerr = pt_centers()
     fig, ax = plt.subplots(figsize=(8, 6.5))
     for region, meta in REGIONS.items():
-        truth = sum_bins(hists, lambda ieta, c: f"hTruth_{r_tag}_eta{ieta}_cent_{c}", meta["eta_bins"], CENT_ALL)
-        matched = sum_bins(hists, lambda ieta, c: f"hTruthMatched_{r_tag}_{ue}_eta{ieta}_cent_{c}", meta["eta_bins"], CENT_ALL)
+        truth = sum_bins(hists, lambda ieta, c: f"hTruth_{r_tag}_eta{ieta}_cent_{c}", meta["eta_bins"], mode["cent_all"], mode)
+        matched = sum_bins(hists, lambda ieta, c: f"hTruthMatched_{r_tag}_{ue}_eta{ieta}_cent_{c}", meta["eta_bins"], mode["cent_all"], mode)
         t, t_var = rebin_pt(truth, PT_BINS)
         m, _ = rebin_pt(matched, PT_BINS)
         with np.errstate(divide="ignore", invalid="ignore"):
@@ -424,15 +466,15 @@ def plot_match_eff(hists, r_tag, ue, run, pt_trust_min, out_path, save_pdf):
     ax.set_xlabel(TRUTH_PT_LABEL)
     ax.set_ylabel("Matching efficiency")
     add_header(ax, run, r_jet, None)
-    info_box(ax, ue, extra=rf"$\Delta R < 0.75 R$", y=0.66, fontsize=12)
+    info_box(ax, ue, mode, extra=rf"$\Delta R < 0.75 R$", y=0.66, fontsize=12)
     ax.legend(loc="lower right", frameon=False, fontsize=13)
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.13, top=0.93)
     save_fig(fig, out_path, save_pdf)
     plt.close(fig)
 
 
-def plot_fit_qa(hists, r_tag, ue, calib, run, n_sigma, out_path, save_pdf):
-    """Stitched response distributions (mid vs forward, 0-60%) with the Gaussian fits, in a few truth-pT bins."""
+def plot_fit_qa(hists, r_tag, ue, calib, run, mode, n_sigma, out_path, save_pdf):
+    """Stitched response distributions (mid vs forward, all centrality classes) with the Gaussian fits, in a few truth-pT bins."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
     labels, _ = eta_regions(r_jet)
@@ -441,7 +483,7 @@ def plot_fit_qa(hists, r_tag, ue, calib, run, n_sigma, out_path, save_pdf):
     for ax, (lo, hi) in zip(axes, FIT_QA_BINS):
         fit_lines = []
         for region, meta in REGIONS.items():
-            h2 = sum_bins(hists, lambda ieta, c: resp_name(calib, r_tag, ue, ieta, c), meta["eta_bins"], CENT_ALL)
+            h2 = sum_bins(hists, lambda ieta, c: resp_name(calib, r_tag, ue, ieta, c), meta["eta_bins"], mode["cent_all"], mode)
             vals, variances, edges = response_in_pt(h2, lo, hi)
             norm = vals.sum() / 100.0  # percent of the jets per bin
             if norm <= 0:
@@ -464,15 +506,15 @@ def plot_fit_qa(hists, r_tag, ue, calib, run, n_sigma, out_path, save_pdf):
     axes[0].set_ylabel("Jets [%]", fontsize=20)
     handles, legend_labels = axes[0].get_legend_handles_labels()
     fig.legend(handles, legend_labels, loc="upper left", bbox_to_anchor=(0.06, 1.0), ncol=3, frameon=False, fontsize=17)
-    fig.text(0.99, 0.985, rf"Run: {run}, $R = {r_jet:g}$, {METHODS[ue]['label']}, {CALIBS[calib]['label']}, 0–60%",
-             ha="right", va="top", fontsize=17)
+    header = [rf"Run: {run}", rf"$R = {r_jet:g}$", METHODS[ue]["label"], CALIBS[calib]["label"]] + ([mode["cent_label"]] if mode["cent_label"] else [])
+    fig.text(0.99, 0.985, ", ".join(header), ha="right", va="top", fontsize=17)
     plt.tight_layout(rect=(0, 0, 1, 0.92))
     save_fig(fig, out_path, save_pdf)
     plt.close(fig)
 
 
-def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, save_pdf):
-    """JES (kind="jes") or JER (kind="jer") vs truth pT, mid vs forward (0-60%), with forward / mid."""
+def plot_regions(results, r_tag, ue, calib, run, mode, pt_trust_min, kind, out_path, save_pdf):
+    """JES (kind="jes") or JER (kind="jer") vs truth pT, mid vs forward (all centrality classes), with forward / mid."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
     labels, _ = eta_regions(r_jet)
@@ -480,7 +522,7 @@ def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, s
 
     series = {}
     for region, meta in REGIONS.items():
-        res = results[(calib, region, CENT_ALL)]
+        res = results[(calib, region, mode["cent_all"])]
         color = REGION_COLORS[meta["key"]]
         if kind == "jes":
             series[region] = [{"y": r["mu"], "yerr": r["mu_err"]} for r in res]
@@ -500,7 +542,7 @@ def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, s
     ax.set_xlim(PT_BINS[0], PT_BINS[-1])
     ax.set_ylabel(JES_YLABEL if kind == "jes" else JER_YLABEL)
     add_header(ax, run, r_jet, None)
-    info_box(ax, ue, calib, fontsize=12)
+    info_box(ax, ue, mode, calib, fontsize=12)
     handles, _ = ax.get_legend_handles_labels()
     legend_after_band(ax, pt_trust_min, handles=handles, fontsize=12)
     setup_ratio_panel(ax_ratio, xlabel=TRUTH_PT_LABEL, ylabel="Fwd / Mid", all_ratios=ratios, min_margin=0.03)
@@ -509,16 +551,16 @@ def plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, out_path, s
     plt.close(fig)
 
 
-def plot_eta_bins(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_pdf):
-    """JES vs truth pT in the 4 signed legacy eta bins (0-60%), each over mid (bins 1 + 2)."""
+def plot_eta_bins(results, r_tag, ue, calib, run, mode, pt_trust_min, out_path, save_pdf):
+    """JES vs truth pT in the 4 signed legacy eta bins (all centrality classes), each over mid (bins 1 + 2)."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
     labels = signed_eta_labels(r_jet)
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
-    mid = [{"y": r["mu"], "yerr": r["mu_err"]} for r in results[(calib, "mid", CENT_ALL)]]
+    mid = [{"y": r["mu"], "yerr": r["mu_err"]} for r in results[(calib, "mid", mode["cent_all"])]]
     ratios, y_all = [], []
     for ieta in range(N_ETA_BINS):
-        pts = [{"y": r["mu"], "yerr": r["mu_err"]} for r in results[(calib, f"eta{ieta}", CENT_ALL)]]
+        pts = [{"y": r["mu"], "yerr": r["mu_err"]} for r in results[(calib, f"eta{ieta}", mode["cent_all"])]]
         offset = (ieta - 1.5) * 0.3
         draw_points(ax, pts, "y", "yerr", ETA_BIN_COLORS[ieta], "os^D"[ieta], labels[ieta], offset=offset)
         ratios += draw_ratio(ax_ratio, pts, mid, "y", "yerr", ETA_BIN_COLORS[ieta], "os^D"[ieta])
@@ -530,7 +572,7 @@ def plot_eta_bins(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_p
     ax.set_xlim(PT_BINS[0], PT_BINS[-1])
     ax.set_ylabel(JES_YLABEL)
     add_header(ax, run, r_jet, None)
-    info_box(ax, ue, calib, fontsize=12)
+    info_box(ax, ue, mode, calib, fontsize=12)
     legend_after_band(ax, pt_trust_min, fontsize=12, title=r"$\eta^{\mathrm{truth}}$ bin", title_fontsize=12)
     setup_ratio_panel(ax_ratio, xlabel=TRUTH_PT_LABEL, ylabel="Bin / Mid", all_ratios=ratios, min_margin=0.03)
     plt.subplots_adjust(left=0.15, right=0.96, bottom=0.10, top=0.94)
@@ -538,14 +580,14 @@ def plot_eta_bins(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_p
     plt.close(fig)
 
 
-def plot_cent_grid(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_pdf):
-    """JES vs truth pT, mid vs forward, in each centrality class."""
+def plot_cent_grid(results, r_tag, ue, calib, run, mode, pt_trust_min, out_path, save_pdf):
+    """JES vs truth pT, mid vs forward, in each of the 6 overlay centrality classes."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
     labels, _ = eta_regions(r_jet)
     fig, axes = plt.subplots(2, 3, figsize=(18, 11), sharex=True, sharey=True)
     y_all = []
-    for ax, (lo, hi) in zip(axes.flat, CENT_CLASSES):
+    for ax, (lo, hi) in zip(axes.flat, mode["cent_classes"]):
         for region, meta in REGIONS.items():
             pts = [{"y": r["mu"], "yerr": r["mu_err"]} for r in results[(calib, region, f"{lo}_{hi}")]]
             draw_points(ax, pts, "y", "yerr", REGION_COLORS[meta["key"]], "o", labels[meta["key"]])
@@ -562,7 +604,7 @@ def plot_cent_grid(results, r_tag, ue, calib, run, pt_trust_min, out_path, save_
     for ax in axes[:, 0]:
         ax.set_ylabel(JES_YLABEL, fontsize=14)
     axes[0, 0].legend(loc="lower right", frameon=False, fontsize=12)
-    axes[0, 0].text(0.0, 1.01, f"{METHODS[ue]['label']}, {CALIBS[calib]['label']}, {OVERLAY_TEXT}", transform=axes[0, 0].transAxes, ha="left", va="bottom", fontsize=14)
+    axes[0, 0].text(0.0, 1.01, f"{METHODS[ue]['label']}, {CALIBS[calib]['label']}, {mode['sample_text']}", transform=axes[0, 0].transAxes, ha="left", va="bottom", fontsize=14)
     add_header(axes[0, 2], run, r_jet, None)
     plt.subplots_adjust(left=0.07, right=0.98, bottom=0.08, top=0.95, wspace=0.05, hspace=0.05)
     save_fig(fig, out_path, save_pdf)
@@ -601,8 +643,8 @@ def eta_count_ratio(h, centers, edge):
     return o / i, o / i * np.sqrt(o_var / o ** 2 + i_var / i ** 2)
 
 
-def plot_eta_dist(hists, r_tag, ue, run, pt_min, out_path, save_pdf):
-    """Shape of dN/deta of the truth, raw and calibrated reco jets with pT >= pt_min (0-60%), with reco / truth.
+def plot_eta_dist(hists, r_tag, ue, run, mode, pt_min, out_path, save_pdf):
+    """Shape of dN/deta of the truth, raw and calibrated reco jets with pT >= pt_min (all centrality classes), with reco / truth.
     Returns {series: {"count_ratio": (ratio, error), side: (step of reco / truth, error)}}, without the steps for truth."""
     hep.style.use("ATLAS")
     r_jet = RADII[r_tag]
@@ -647,7 +689,7 @@ def plot_eta_dist(hists, r_tag, ue, run, pt_min, out_path, save_pdf):
     ax.set_ylabel(r"$\frac{1}{N_{\mathrm{jets}}}\frac{dN}{d\eta}$")
     add_header(ax, run, r_jet, None)
     ax.legend(loc="upper left", frameon=False, fontsize=12)
-    info_box(ax, ue, extra=rf"All jets, $|\eta| < {eta_max:g}$", y=0.73, fontsize=12)
+    info_box(ax, ue, mode, extra=rf"All jets, $|\eta| < {eta_max:g}$", y=0.73, fontsize=12)
     step_text = "; ".join(f"{key} " + ", ".join(f"{steps[key][side][0]:.3f} $\\pm$ {steps[key][side][1]:.3f}" for side in ETA_SIDES) for key in ("raw", "calib"))
     ax_ratio.text(0.5, 0.05, rf"Step at $\eta = \mp{edge:g}$: {step_text}", transform=ax_ratio.transAxes, ha="center", va="bottom", fontsize=10)
     setup_ratio_panel(ax_ratio, xlabel=r"$\eta$", ylabel="Reco / Truth", all_ratios=ratios, min_margin=0.05)
@@ -657,39 +699,43 @@ def plot_eta_dist(hists, r_tag, ue, run, pt_min, out_path, save_pdf):
     return steps
 
 
-def fit_group(hists, r_tag, ue, n_sigma):
-    """Fits per pT bin for every calib x (mid, fwd, eta0-3 at 0-60%; mid, fwd per centrality class)."""
-    selections = [(region, meta["eta_bins"], CENT_ALL) for region, meta in REGIONS.items()]
-    selections += [(f"eta{ieta}", (ieta,), CENT_ALL) for ieta in range(N_ETA_BINS)]
-    selections += [(region, meta["eta_bins"], f"{lo}_{hi}") for lo, hi in CENT_CLASSES for region, meta in REGIONS.items()]
+def fit_group(hists, r_tag, ue, mode, n_sigma):
+    """Fits per pT bin for every calib x (mid, fwd, eta0-3 in all classes; mid, fwd per centrality class if there are several)."""
+    cent_all = mode["cent_all"]
+    selections = [(region, meta["eta_bins"], cent_all) for region, meta in REGIONS.items()]
+    selections += [(f"eta{ieta}", (ieta,), cent_all) for ieta in range(N_ETA_BINS)]
+    if len(mode["cent_classes"]) > 1:
+        selections += [(region, meta["eta_bins"], f"{lo}_{hi}") for lo, hi in mode["cent_classes"] for region, meta in REGIONS.items()]
     results = {}
     for calib in CALIBS:
         for region, eta_bins, cent in selections:
-            h2 = sum_bins(hists, lambda ieta, c: resp_name(calib, r_tag, ue, ieta, c), eta_bins, cent)
+            h2 = sum_bins(hists, lambda ieta, c: resp_name(calib, r_tag, ue, ieta, c), eta_bins, cent, mode)
             results[(calib, region, cent)] = fit_pt_bins(h2, n_sigma)
     return results
 
 
 def run_group(task):
     """All JES and eta plots of one jet radius and subtraction method. Returns the number of figures, the table rows and the eta steps."""
-    r_tag, ue, hists, run, pt_trust_min, n_sigma, eta_pt_mins, output_dir, save_pdf = task
-    results = fit_group(hists, r_tag, ue, n_sigma)
+    r_tag, ue, hists, run, mode, pt_trust_min, n_sigma, eta_pt_mins, output_dir, save_pdf = task
+    results = fit_group(hists, r_tag, ue, mode, n_sigma)
     tag = f"{r_tag}_{ue}"
     n = 0
     plot_matching_qa(hists, r_tag, ue, run, output_dir / "matching" / f"matching_qa_{tag}.png", save_pdf)
-    plot_match_eff(hists, r_tag, ue, run, pt_trust_min, output_dir / "matching" / f"match_eff_{tag}.png", save_pdf)
+    plot_match_eff(hists, r_tag, ue, run, mode, pt_trust_min, output_dir / "matching" / f"match_eff_{tag}.png", save_pdf)
     n += 2
     for calib in CALIBS:
-        plot_fit_qa(hists, r_tag, ue, calib, run, n_sigma, output_dir / "fits" / f"fits_{tag}_{calib}.png", save_pdf)
+        plot_fit_qa(hists, r_tag, ue, calib, run, mode, n_sigma, output_dir / "fits" / f"fits_{tag}_{calib}.png", save_pdf)
         for kind in ("jes", "jer"):
-            plot_regions(results, r_tag, ue, calib, run, pt_trust_min, kind, output_dir / "jes" / f"{kind}_mid_fwd_{tag}_{calib}.png", save_pdf)
-        plot_eta_bins(results, r_tag, ue, calib, run, pt_trust_min, output_dir / "jes" / f"jes_eta_bins_{tag}_{calib}.png", save_pdf)
-        plot_cent_grid(results, r_tag, ue, calib, run, pt_trust_min, output_dir / "jes_cent" / f"jes_cent_{tag}_{calib}.png", save_pdf)
-        n += 5
+            plot_regions(results, r_tag, ue, calib, run, mode, pt_trust_min, kind, output_dir / "jes" / f"{kind}_mid_fwd_{tag}_{calib}.png", save_pdf)
+        plot_eta_bins(results, r_tag, ue, calib, run, mode, pt_trust_min, output_dir / "jes" / f"jes_eta_bins_{tag}_{calib}.png", save_pdf)
+        n += 4
+        if len(mode["cent_classes"]) > 1:
+            plot_cent_grid(results, r_tag, ue, calib, run, mode, pt_trust_min, output_dir / "jes_cent" / f"jes_cent_{tag}_{calib}.png", save_pdf)
+            n += 1
 
     steps = []
     for pt_min in eta_pt_mins:
-        res = plot_eta_dist(hists, r_tag, ue, run, pt_min, output_dir / "eta" / f"eta_{tag}_pt{pt_min:g}.png", save_pdf)
+        res = plot_eta_dist(hists, r_tag, ue, run, mode, pt_min, output_dir / "eta" / f"eta_{tag}_pt{pt_min:g}.png", save_pdf)
         for series, vals in res.items():
             row = {"R": RADII[r_tag], "ue": ue, "pt_min": pt_min, "series": series}
             for key in ("count_ratio", *ETA_SIDES):
@@ -714,22 +760,37 @@ def group_hists(stitched, r_tag, ue):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay (Jet-JES outputs), mid-rapidity vs forward eta.")
-    parser.add_argument("-i", "--input-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list"),
-                        help="List of merged Jet-JES ROOT files, one per sample (JetNN in the path)")
-    parser.add_argument("-g", "--gen-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list"),
-                        help="List of the merged Fun4All overlay hist files with h_gen_integral, one per sample (JetNN in the path)")
-    parser.add_argument("-o", "--output-dir", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay"),
-                        help="Directory to save the plots")
-    parser.add_argument("--methods", nargs="+", default=["iter", "iternf"], choices=["iter", "iternf"], help="Subtraction methods (default: iter iternf)")
+    parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay or p+p MC (Jet-JES outputs), mid-rapidity vs forward eta.")
+    parser.add_argument("--pp", action="store_true", help="Pure PYTHIA8 p+p MC (Jet-JES --pp outputs) instead of the data+MC overlay")
+    parser.add_argument("-i", "--input-list", type=Path, help="List of merged Jet-JES ROOT files, one per sample (JetNN or jetNN in the path)"
+                        f" (default overlay: {MODES['overlay']['input_list']}, p+p: {MODES['pp']['input_list']})")
+    parser.add_argument("-g", "--gen-list", type=Path, help="List of the merged Fun4All hist files with h_gen_integral, one per sample (JetNN or jetNN in the path)"
+                        f" (default overlay: {MODES['overlay']['gen_list']}, p+p: {MODES['pp']['gen_list']})")
+    parser.add_argument("-w", "--weights", choices=["lumi", "wiki"],
+                        help="Sample weights: lumi = 1 / IntegratedLumi_job, wiki = sigma_wiki / NEvents_job (default overlay: lumi, p+p: wiki)")
+    parser.add_argument("-o", "--output-dir", type=Path, help="Directory to save the plots"
+                        f" (default overlay: {MODES['overlay']['output_dir']}, p+p: {MODES['pp']['output_dir']})")
+    parser.add_argument("--methods", nargs="+", choices=["unsub", "iter", "iternf"],
+                        help="Subtraction methods (default overlay: iter iternf, p+p: unsub iter)")
     parser.add_argument("--pt-trust-min", type=float, default=20.0, help="Truth pT below which the response is truncated by the reco tree cut, shaded (default: 20 GeV)")
     parser.add_argument("--n-sigma", type=float, default=1.5, help="Gaussian fit range in sigma around the mean (default: 1.5)")
     parser.add_argument("--eta-pt-mins", nargs="+", type=float, default=[10, 15, 20, 30],
                         help="pT cuts of the eta distributions, on the 1 GeV grid (default: 10 15 20 30 GeV; 10 is the data cut)")
-    parser.add_argument("--run", type=int, default=68144, help="Data run of the overlay, for the header (default: 68144)")
+    parser.add_argument("--run", type=int, help="Run for the header: data run of the overlay or MC run of the p+p sample (default overlay: 68144, p+p: 28)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1), help="Number of parallel worker processes")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF version of plots in addition to PNG")
     args = parser.parse_args()
+
+    mode = MODES["pp" if args.pp else "overlay"]
+    args.input_list = args.input_list or Path(mode["input_list"])
+    args.gen_list = args.gen_list or Path(mode["gen_list"])
+    args.output_dir = args.output_dir or Path(mode["output_dir"])
+    args.weights = args.weights or mode["weights"]
+    args.methods = args.methods or mode["methods"]
+    args.run = args.run if args.run is not None else mode["run"]
+    if missing := [ue for ue in args.methods if ue not in mode["methods"]]:
+        print(f"Error: methods {missing} are not in the {'p+p' if args.pp else 'overlay'} Jet-JES outputs (available: {mode['methods']})")
+        sys.exit(1)
 
     jes_files = parse_sample_list(args.input_list)
     gen_files = parse_sample_list(args.gen_list)
@@ -737,7 +798,7 @@ def main():
         print(f"Error: No samples in {args.input_list}")
         sys.exit(1)
 
-    weights = load_weights(gen_files, jes_files)
+    weights = load_weights(gen_files, jes_files, args.weights)
     samples = {sample: load_sample(path) for sample, path in jes_files.items()}
     print_event_summary(samples)
 
@@ -750,20 +811,21 @@ def main():
         if hi != lo:
             print(f"Warning: sample windows do not join ({hi:g} vs {lo:g}): the stitched spectra have a gap or overlap")
     windows = [lo for lo, _ in edges[1:]]
-    plot_lead_truth_xsec(samples, weights, args.run, stitch_dir / "lead_truth_r04_xsec.png", args.save_pdf)
-    plot_stitched(samples, weights, "hMaxPtTruthR04_window", r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", "selected", args.run,
+    plot_lead_truth_xsec(samples, weights, args.run, mode, stitch_dir / "lead_truth_r04_xsec.png", args.save_pdf)
+    plot_stitched(samples, weights, "hMaxPtTruthR04_window", r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", "selected", args.run, mode,
                   stitch_dir / "lead_truth_r04_stitched.png", args.save_pdf, "Event selection + sample windows", vlines=windows)
     for r_tag, r_jet in RADII.items():
         name = f"hTruth_{r_tag}_total"
         for hists in samples.values():
             hists[name] = add_hists(hists[k] for k in hists if k.startswith(f"hTruth_{r_tag}_eta"))
         eta_max = round(1.1 - r_jet, 1)
-        plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
-                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{SELECTION_TEXT}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
+        plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, mode, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
+                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
 
     stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
-    tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, args.pt_trust_min, args.n_sigma, args.eta_pt_mins, args.output_dir, args.save_pdf)
+    # the mode goes with each task, so the workers get it under any multiprocessing start method
+    tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, mode, args.pt_trust_min, args.n_sigma, args.eta_pt_mins, args.output_dir, args.save_pdf)
              for r_tag in RADII for ue in args.methods]
     n_jobs = max(1, min(args.jobs, len(tasks)))
     print(f"Generating JES plots for {len(tasks)} (R, method) groups with {n_jobs} worker(s)")
