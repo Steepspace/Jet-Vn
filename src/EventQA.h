@@ -42,6 +42,8 @@ class EventQA : public SubsysReco
   void set_sigma_mbd(double s) { m_sigma_mbd = s; }
   void set_check_mb(bool b) { m_check_mb = b; }
   void set_check_centrality(bool b) { m_check_centrality = b; }
+  // false: no GL1 trigger decoding or MBD trigger requirement (simulation)
+  void set_check_trigger(bool b) { m_check_trigger = b; }
   void set_strict_node_check(bool b) { m_strict_node_check = b; }
 
   bool get_do_tree() const { return m_do_tree; }
@@ -49,12 +51,15 @@ class EventQA : public SubsysReco
  private:
   int process_event_check(PHCompositeNode *topNode);
   int process_centrality(PHCompositeNode *topNode);
+  // z-vertex and offline MB cuts, applied with or without the centrality check
+  bool pass_zvtx_mb_selection();
 
   bool m_doAbort{true};
   bool m_do_hist{true};
   bool m_do_tree{true};
   bool m_check_mb{true};
   bool m_check_centrality{true};
+  bool m_check_trigger{true};
   bool m_strict_node_check{false};
 
   double m_sigma_mbd{6.324};  // MBD cross section [barns]

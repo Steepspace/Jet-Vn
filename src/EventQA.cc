@@ -237,15 +237,19 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   }
 
   // MBD Trigger
-  // decodeTriggers does not reset the trigger vectors on failure, so the previous event's bits would be reused
-  if (m_triggerAnalyzer->decodeTriggers(topNode) != 0)
+  // without trigger check (simulation) the trigger bits stay false and the trigger requirement is skipped
+  if (m_check_trigger)
   {
-    std::cout << "Aborting Run: TriggerAnalyzer failed to decode triggers (TriggerRunInfo or Gl1Packet null)" << std::endl;
-    return Fun4AllReturnCodes::ABORTRUN;
-  }
+    // decodeTriggers does not reset the trigger vectors on failure, so the previous event's bits would be reused
+    if (m_triggerAnalyzer->decodeTriggers(topNode) != 0)
+    {
+      std::cout << "Aborting Run: TriggerAnalyzer failed to decode triggers (TriggerRunInfo or Gl1Packet null)" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
 
-  m_didTrig14Fire = m_triggerAnalyzer->didTriggerFire(m_trig_14);
-  m_didTrig12Fire = m_triggerAnalyzer->didTriggerFire(m_trig_12);
+    m_didTrig14Fire = m_triggerAnalyzer->didTriggerFire(m_trig_14);
+    m_didTrig12Fire = m_triggerAnalyzer->didTriggerFire(m_trig_12);
+  }
 
   bool mbd_trigger_fire = m_didTrig12Fire || m_didTrig14Fire;
 
@@ -434,7 +438,7 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   }
 
   // skip event if not fire MBD Trigger
-  if (!mbd_trigger_fire)
+  if (m_check_trigger && !mbd_trigger_fire)
   {
     if (Verbosity() > 0)
     {
@@ -452,11 +456,40 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
+bool EventQA::pass_zvtx_mb_selection()
+{
+  // skip event if zvtx is too large
+  if (!m_pass_Zvtx)
+  {
+    if (Verbosity() > 0)
+    {
+      std::cout << "EventQA::pass_zvtx_mb_selection - [Event " << m_data.event << "] REJECTED: |zvtx| = " << std::abs(m_data.zvtx) << " cm >= " << m_cuts.m_zvtx_max << " cm" << std::endl;
+    }
+    ++m_ctr["process_eventCheck_zvtx_large"];
+    return false;
+  }
+
+  // skip event if not minimum bias
+  if (m_check_mb && !m_pass_MB)
+  {
+    return false;
+  }
+
+  if (m_do_hist)
+  {
+    hEvent->Fill(static_cast<std::uint8_t>(EventType::MB));
+  }
+
+  return true;
+}
+
 int EventQA::process_centrality(PHCompositeNode *topNode)
 {
+  const int reject = (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
+
   if (!m_check_centrality)
   {
-    return Fun4AllReturnCodes::EVENT_OK;
+    return pass_zvtx_mb_selection() ? Fun4AllReturnCodes::EVENT_OK : reject;
   }
 
   CentralityInfo *centInfo = findNode::getClass<CentralityInfo>(topNode, "CentralityInfo");
@@ -474,7 +507,7 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
       warned_cent = true;
     }
     m_check_centrality = false;
-    return Fun4AllReturnCodes::EVENT_OK;
+    return pass_zvtx_mb_selection() ? Fun4AllReturnCodes::EVENT_OK : reject;
   }
 
   m_data.centrality = centInfo->get_centile(CentralityInfo::PROP::mbd_NS) * 100;
@@ -546,26 +579,9 @@ int EventQA::process_centrality(PHCompositeNode *topNode)
     }
   }
 
-  // skip event if zvtx is too large
-  if (!m_pass_Zvtx)
+  if (!pass_zvtx_mb_selection())
   {
-    if (Verbosity() > 0)
-    {
-      std::cout << "EventQA::process_centrality - [Event " << m_data.event << "] REJECTED: |zvtx| = " << std::abs(m_data.zvtx) << " cm >= " << m_cuts.m_zvtx_max << " cm" << std::endl;
-    }
-    ++m_ctr["process_eventCheck_zvtx_large"];
-    return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
-  }
-
-  // skip event if not minimum bias
-  if (m_check_mb && !m_pass_MB)
-  {
-    return (m_doAbort) ? Fun4AllReturnCodes::ABORTEVENT : Fun4AllReturnCodes::EVENT_OK;
-  }
-
-  if (m_do_hist)
-  {
-    hEvent->Fill(static_cast<std::uint8_t>(EventType::MB));
+    return reject;
   }
 
   // skip event if centrality is too peripheral
