@@ -60,7 +60,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/10-04-26-v2/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144v2.root",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
-                    int do_flow = 3,
+                    int do_flow = 0,
                     int nEvents = 100,
                     int nSkip = 0,
                     int event_id = 0,
@@ -415,6 +415,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   jet_validation->set_do_detailed(do_detailed);
   jet_validation->set_do_emfrac(do_emfrac_calib);
   jet_validation->set_do_timing(true);
+  jet_validation->set_do_lead_constituent(true);
   jet_validation->set_jet_pt_min(jet_pt_min);
   jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(jet_validation);

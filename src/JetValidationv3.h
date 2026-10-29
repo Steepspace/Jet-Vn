@@ -49,6 +49,8 @@ class JetValidationv3 : public SubsysReco
   // store per-jet timing (jet time and per calo layer time) and per-jet calo fractions
   void set_do_timing(bool b = true) { m_do_timing = b; }
   void set_timing_e_threshold(double e) { m_timing_e_threshold = e; }
+  // store the highest-pT constituent tower of each jet
+  void set_do_lead_constituent(bool b = true) { m_do_lead_const = b; }
   void set_do_r02(bool b = true) { m_do_r02 = b; }
   void set_do_r03(bool b = true) { m_do_r03 = b; }
   void set_jet_pt_min(double pt_min) { m_jet_pt_min_cut = pt_min; }
@@ -70,6 +72,7 @@ class JetValidationv3 : public SubsysReco
   bool get_do_emfrac() const { return m_do_emfrac; }
   bool get_do_timing() const { return m_do_timing; }
   double get_timing_e_threshold() const { return m_timing_e_threshold; }
+  bool get_do_lead_constituent() const { return m_do_lead_const; }
   bool get_do_r02() const { return m_do_r02; }
   bool get_do_r03() const { return m_do_r03; }
   double get_jet_pt_min() const { return m_jet_pt_min_cut; }
@@ -102,6 +105,13 @@ class JetValidationv3 : public SubsysReco
     std::vector<double> t_ihcal;  // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> t_ohcal;  // NOLINT(misc-non-private-member-variables-in-classes)
 
+    // leading (highest-pT) constituent tower (filled only with m_do_lead_const)
+    // calo: 0 = EMCal, 1 = IHCal, 2 = OHCal; -1 if none found (pt/e NaN, index -1)
+    std::vector<double> lead_pt;  // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> lead_e;   // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<int> lead_calo;   // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<int> lead_index;  // NOLINT(misc-non-private-member-variables-in-classes)
+
     // Detailed tower constituent info (nested vectors: 1 vector per jet in the event)
     std::vector<std::vector<int>> emcal_tower_index;        // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<std::vector<double>> emcal_tower_energy;   // NOLINT(misc-non-private-member-variables-in-classes)
@@ -133,6 +143,11 @@ class JetValidationv3 : public SubsysReco
       t_emcal.clear();
       t_ihcal.clear();
       t_ohcal.clear();
+
+      lead_pt.clear();
+      lead_e.clear();
+      lead_calo.clear();
+      lead_index.clear();
 
       emcal_tower_index.clear();
       emcal_tower_energy.clear();
@@ -236,6 +251,7 @@ class JetValidationv3 : public SubsysReco
   bool m_do_detailed{false};
   bool m_do_emfrac{false};
   bool m_do_timing{false};
+  bool m_do_lead_const{false};
   bool m_do_r02{true};
   bool m_do_r03{true};
 
