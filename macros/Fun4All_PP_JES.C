@@ -27,17 +27,21 @@
 
 #include <treefiller/TreeFiller.h>
 
+#include "Calo_Calib.C"
 #include "HIJetReco.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
+R__LOAD_LIBRARY(libphfield_io.so)
+R__LOAD_LIBRARY(libphgeom_io.so)
 R__LOAD_LIBRARY(libffamodules.so)
 R__LOAD_LIBRARY(libsEPDValidation.so)
 R__LOAD_LIBRARY(libTreeFiller.so)
 
 // p+p Pythia8 MC JES: unsubtracted and iterative (no flow) jets, R = 0.2 and 0.3, matched offline to the truth jets.
 // Inputs are the aligned DST_CALO_CLUSTER, DST_GLOBAL and DST_TRUTH_JET of the same segments (single files or lists).
-// The DSTs already hold the calibrated towers, the MBD and the MBD vertex, so no calo calibration or MBD/vertex reco
-// is run. The only event selection is a valid MBD vertex with |z| < 10 cm (no trigger, minimum bias or centrality).
+// The calibrated towers are rebuilt from the raw towers with Process_Calo_Calib (the DST TOWERINFO_CALIB_* are not read).
+// The DSTs already hold the MBD and the MBD vertex, so no MBD/vertex reco is run.
+// The only event selection is a valid MBD vertex with |z| < 10 cm (no trigger, minimum bias or centrality).
 void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Jet20-0000000028-000000.root",
                     const std::string &flist_global = "DST_GLOBAL_pythia8_Jet20-0000000028-000000.root",
                     const std::string &flist_truth_jet = "DST_TRUTH_JET_pythia8_Jet20-0000000028-000000.root",
@@ -81,7 +85,7 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
 
   Fun4AllServer *se = Fun4AllServer::instance();
   se->Verbosity(Fun4AllBase::VERBOSITY_SOME);
-  se->VerbosityDownscale(5000);
+  se->VerbosityDownscale(100);
 
   recoConsts *rc = recoConsts::instance();
 
@@ -98,6 +102,9 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   evtSkip->set_skip(nSkip);
   evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(evtSkip);
+
+  // Calo Calib: also registers the calorimeter geometry (TOWERGEOM_*) for the retowering and the jet validation
+  Process_Calo_Calib();
 
   // Truth Jets: counts the analyzed events for the luminosity, so it runs before any event selection
   TruthJetValidation* truth_jet_validation = new TruthJetValidation();
@@ -144,16 +151,12 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   tree_filler->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(tree_filler);
 
-  // calorimeter geometry (TOWERGEOM_*) for the retowering and the jet validation
-  Fun4AllInputManager *ingeo = new Fun4AllRunNodeInputManager("DST_GEO");
-  ingeo->AddFile(CDBInterface::instance()->getUrl("calo_geo"));
-  se->registerInputManager(ingeo);
-
-  // the waveforms and clusters are not used
+  // the waveforms and clusters are not used, and the calibrated towers are rebuilt by Process_Calo_Calib
   Fun4AllInputManager* in_calo = new Fun4AllDstInputManager("calo");
   for (const std::string det : {"CEMC", "HCALIN", "HCALOUT"})
   {
     in_calo->BranchSelect("DST#" + det + "#WAVEFORM_" + det, 0);
+    in_calo->BranchSelect("DST#" + det + "#TOWERINFO_CALIB_" + det, 0);
   }
   in_calo->BranchSelect("DST#CEMC#CLUSTERINFO_CEMC", 0);
 
