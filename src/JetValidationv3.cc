@@ -44,6 +44,28 @@
 #include <TProfile2D.h>
 #include <TTree.h>
 
+namespace
+{
+  // calo layer of a jet constituent: 0 = EMCal, 1 = IHCal, 2 = OHCal, -1 = not a calo tower
+  int get_calo_layer(Jet::SRC src)
+  {
+    switch (src)
+    {
+    case Jet::SRC::CEMC_TOWERINFO_RETOWER:
+    case Jet::SRC::CEMC_TOWERINFO_SUB1:
+      return 0;
+    case Jet::SRC::HCALIN_TOWERINFO:
+    case Jet::SRC::HCALIN_TOWERINFO_SUB1:
+      return 1;
+    case Jet::SRC::HCALOUT_TOWERINFO:
+    case Jet::SRC::HCALOUT_TOWERINFO_SUB1:
+      return 2;
+    default:
+      return -1;
+    }
+  }
+}  // namespace
+
 //____________________________________________________________________________..
 JetValidationv3::JetValidationv3(const std::string &name)
   : SubsysReco(name)
@@ -477,69 +499,6 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
           jd.ohcal_frac.push_back(jet->get_ohcal_frac());
         }
 
-        if (m_do_timing)
-        {
-          // jet time: energy-weighted constituent tower time, set by FastJetAlgoSub
-          // (NaN if no constituent tower was above the timing threshold)
-          double t = (jet->size_properties() > Jet::PROPERTY::prop_t) ? jet->get_property(Jet::PROPERTY::prop_t)
-                                                                       : std::numeric_limits<double>::quiet_NaN();
-
-          // same definition per calo layer, so the jet time is the energy-weighted mean of the three
-          std::array<double, 3> t_sum{};  // EMCal, IHCal, OHCal
-          std::array<double, 3> e_sum{};
-          for (const auto& [src, channel] : jet->get_comp_vec())
-          {
-            int layer = -1;
-            TowerInfoContainer* towers = nullptr;
-            if (src == Jet::SRC::CEMC_TOWERINFO_RETOWER || src == Jet::SRC::CEMC_TOWERINFO_SUB1)
-            {
-              layer = 0;
-              towers = cemc_towers;
-            }
-            else if (src == Jet::SRC::HCALIN_TOWERINFO || src == Jet::SRC::HCALIN_TOWERINFO_SUB1)
-            {
-              layer = 1;
-              towers = ihcal_towers;
-            }
-            else if (src == Jet::SRC::HCALOUT_TOWERINFO || src == Jet::SRC::HCALOUT_TOWERINFO_SUB1)
-            {
-              layer = 2;
-              towers = ohcal_towers;
-            }
-
-            if (!towers || channel >= towers->size())
-            {
-              continue;
-            }
-
-            TowerInfo *tower = towers->get_tower_at_channel(channel);
-            double tower_energy = tower ? tower->get_energy() : 0;
-            if (!(tower_energy > m_timing_e_threshold))
-            {
-              continue;
-            }
-
-            t_sum[layer] += NS_PER_SAMPLE * tower->get_time() * tower_energy;
-            e_sum[layer] += tower_energy;
-          }
-
-          auto layer_t = [&](int layer)
-          {
-            return e_sum[layer] > 0 ? t_sum[layer] / e_sum[layer] : std::numeric_limits<double>::quiet_NaN();
-          };
-
-          jd.t.push_back(t);
-          jd.t_emcal.push_back(layer_t(0));
-          jd.t_ihcal.push_back(layer_t(1));
-          jd.t_ohcal.push_back(layer_t(2));
-
-          if (Verbosity() > 2)
-          {
-            std::cout << "    Timing -> t: " << t << " ns | t_emcal: " << layer_t(0)
-                      << " | t_ihcal: " << layer_t(1) << " | t_ohcal: " << layer_t(2) << std::endl;
-          }
-        }
-
         if (energy > 0 && pass_pt_legacy)
         {
           jd.max_pt = std::max(jd.max_pt, pt_calib);
@@ -556,70 +515,58 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
                     << std::endl;
         }
 
-        if (m_do_detailed || m_do_lead_const)
+        if (m_do_timing || m_do_detailed || m_do_lead_const)
         {
+          // indexed by calo layer (see get_calo_layer)
+          const std::array<TowerInfoContainer*, 3> calo_towers{cemc_towers, ihcal_towers, ohcal_towers};
+          const std::array<const TowerGeomArray*, 3> calo_geom{&m_geom_cemc, &m_geom_hcalin, &m_geom_hcalout};
+          const std::array<double, 3> calo_radius{m_r_cemc, m_r_hcalin, m_r_hcalout};
+
+          // timing: energy-weighted tower time per calo layer, so the jet time is the energy-weighted mean of the three
+          std::array<double, 3> t_sum{};
+          std::array<double, 3> e_sum{};
+
           // leading constituent: highest vertex-corrected tower pT
           double lead_pt = std::numeric_limits<double>::quiet_NaN();
           double lead_e = std::numeric_limits<double>::quiet_NaN();
           int lead_calo = -1;
           int lead_index = -1;
 
-          std::vector<int> emcal_idx;
-          std::vector<double> emcal_e;
-          std::vector<double> emcal_pt;
+          // detailed: constituent towers per calo layer
+          std::array<std::vector<int>, 3> tower_idx;
+          std::array<std::vector<double>, 3> tower_e;
+          std::array<std::vector<double>, 3> tower_pt;
 
-          std::vector<int> ihcal_idx;
-          std::vector<double> ihcal_e;
-          std::vector<double> ihcal_pt;
-
-          std::vector<int> ohcal_idx;
-          std::vector<double> ohcal_e;
-          std::vector<double> ohcal_pt;
-
-          for (const auto& comp : jet->get_comp_vec())
+          for (const auto& [src, channel] : jet->get_comp_vec())
           {
-            Jet::SRC src = comp.first;
-            unsigned int channel = comp.second;
-
-            TowerInfoContainer* towers = nullptr;
-            const TowerGeomArray* geom_map = nullptr;
-            double detector_radius = 0.0;
-            int calo = -1;  // EMCal, IHCal, OHCal
-
-            if (src == Jet::SRC::CEMC_TOWERINFO_RETOWER || src == Jet::SRC::CEMC_TOWERINFO_SUB1)
-            {
-              towers = cemc_towers;
-              geom_map = &m_geom_cemc;
-              detector_radius = m_r_cemc;
-              calo = 0;
-            }
-            else if (src == Jet::SRC::HCALIN_TOWERINFO || src == Jet::SRC::HCALIN_TOWERINFO_SUB1)
-            {
-              towers = ihcal_towers;
-              geom_map = &m_geom_hcalin;
-              detector_radius = m_r_hcalin;
-              calo = 1;
-            }
-            else if (src == Jet::SRC::HCALOUT_TOWERINFO || src == Jet::SRC::HCALOUT_TOWERINFO_SUB1)
-            {
-              towers = ohcal_towers;
-              geom_map = &m_geom_hcalout;
-              detector_radius = m_r_hcalout;
-              calo = 2;
-            }
-
-            if (!towers || !geom_map)
+            int calo = get_calo_layer(src);
+            if (calo < 0)
             {
               continue;
             }
 
-            if (channel >= towers->size())
+            TowerInfoContainer* towers = calo_towers[calo];
+            if (!towers || channel >= towers->size())
             {
               continue;
             }
 
             TowerInfo *tower = towers->get_tower_at_channel(channel);
             if (!tower)
+            {
+              continue;
+            }
+
+            double tower_energy = tower->get_energy();
+
+            // towers enter the jet time only above the timing threshold
+            if (m_do_timing && tower_energy > m_timing_e_threshold)
+            {
+              t_sum[calo] += NS_PER_SAMPLE * tower->get_time() * tower_energy;
+              e_sum[calo] += tower_energy;
+            }
+
+            if (!m_do_detailed && !m_do_lead_const)
             {
               continue;
             }
@@ -634,55 +581,66 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
             }
 
             size_t idx = static_cast<size_t>(ieta) * CaloGeometry::HCAL_PHI_BINS + iphi;
-            const auto &geom = (*geom_map)[idx];
+            const auto &geom = (*calo_geom[calo])[idx];
             if (!geom.is_valid)
             {
               continue;
             }
 
             double eta_corrected = geom.eta;
-            if (zvtx != 0.0 && detector_radius > 0.0)
+            if (zvtx != 0.0 && calo_radius[calo] > 0.0)
             {
               double z = geom.z0 - zvtx;
-              eta_corrected = std::asinh(z / detector_radius);
+              eta_corrected = std::asinh(z / calo_radius[calo]);
             }
 
-            double tower_energy = tower->get_energy();
-            double tower_pt = tower_energy / std::cosh(eta_corrected);
+            double pt_tower = tower_energy / std::cosh(eta_corrected);
 
-            if (lead_calo < 0 || tower_pt > lead_pt)
+            if (lead_calo < 0 || pt_tower > lead_pt)
             {
-              lead_pt = tower_pt;
+              lead_pt = pt_tower;
               lead_e = tower_energy;
               lead_calo = calo;
               lead_index = static_cast<int>(channel);
             }
 
-            if (src == Jet::SRC::CEMC_TOWERINFO_RETOWER || src == Jet::SRC::CEMC_TOWERINFO_SUB1)
+            if (m_do_detailed)
             {
-              emcal_idx.push_back(static_cast<int>(channel));
-              emcal_e.push_back(tower_energy);
-              emcal_pt.push_back(tower_pt);
-            }
-            else if (src == Jet::SRC::HCALIN_TOWERINFO || src == Jet::SRC::HCALIN_TOWERINFO_SUB1)
-            {
-              ihcal_idx.push_back(static_cast<int>(channel));
-              ihcal_e.push_back(tower_energy);
-              ihcal_pt.push_back(tower_pt);
-            }
-            else if (src == Jet::SRC::HCALOUT_TOWERINFO || src == Jet::SRC::HCALOUT_TOWERINFO_SUB1)
-            {
-              ohcal_idx.push_back(static_cast<int>(channel));
-              ohcal_e.push_back(tower_energy);
-              ohcal_pt.push_back(tower_pt);
+              tower_idx[calo].push_back(static_cast<int>(channel));
+              tower_e[calo].push_back(tower_energy);
+              tower_pt[calo].push_back(pt_tower);
             }
           }
 
-          if (Verbosity() > 1)
+          if (m_do_timing)
           {
-            std::cout << "    Constituents -> EMCAL: " << emcal_idx.size()
-                      << " towers | IHCAL: " << ihcal_idx.size()
-                      << " towers | OHCAL: " << ohcal_idx.size()
+            // jet time: energy-weighted constituent tower time, set by FastJetAlgoSub
+            // (NaN if no constituent tower was above the timing threshold)
+            double t = (jet->size_properties() > Jet::PROPERTY::prop_t) ? jet->get_property(Jet::PROPERTY::prop_t)
+                                                                         : std::numeric_limits<double>::quiet_NaN();
+
+            auto layer_t = [&](int layer)
+            {
+              return e_sum[layer] > 0 ? t_sum[layer] / e_sum[layer] : std::numeric_limits<double>::quiet_NaN();
+            };
+
+            jd.t.push_back(t);
+            jd.t_emcal.push_back(layer_t(0));
+            jd.t_ihcal.push_back(layer_t(1));
+            jd.t_ohcal.push_back(layer_t(2));
+
+            if (Verbosity() > 2)
+            {
+              std::cout << "    Timing -> t: " << t << " ns | t_emcal: " << layer_t(0)
+                        << " | t_ihcal: " << layer_t(1) << " | t_ohcal: " << layer_t(2) << std::endl;
+            }
+          }
+
+          if (Verbosity() > 1 && (m_do_detailed || m_do_lead_const))
+          {
+            std::cout << "    Constituents -> EMCAL: " << tower_idx[0].size()
+                      << " towers | IHCAL: " << tower_idx[1].size()
+                      << " towers | OHCAL: " << tower_idx[2].size()
                       << " towers" << std::endl;
             std::cout << "    Leading constituent -> calo: " << lead_calo << " | index: " << lead_index
                       << " | pT: " << lead_pt << " GeV | E: " << lead_e << " GeV" << std::endl;
@@ -698,17 +656,17 @@ int JetValidationv3::process_jets(PHCompositeNode *topNode)
 
           if (m_do_detailed)
           {
-            jd.emcal_tower_index.push_back(std::move(emcal_idx));
-            jd.emcal_tower_energy.push_back(std::move(emcal_e));
-            jd.emcal_tower_pt.push_back(std::move(emcal_pt));
+            jd.emcal_tower_index.push_back(std::move(tower_idx[0]));
+            jd.emcal_tower_energy.push_back(std::move(tower_e[0]));
+            jd.emcal_tower_pt.push_back(std::move(tower_pt[0]));
 
-            jd.ihcal_tower_index.push_back(std::move(ihcal_idx));
-            jd.ihcal_tower_energy.push_back(std::move(ihcal_e));
-            jd.ihcal_tower_pt.push_back(std::move(ihcal_pt));
+            jd.ihcal_tower_index.push_back(std::move(tower_idx[1]));
+            jd.ihcal_tower_energy.push_back(std::move(tower_e[1]));
+            jd.ihcal_tower_pt.push_back(std::move(tower_pt[1]));
 
-            jd.ohcal_tower_index.push_back(std::move(ohcal_idx));
-            jd.ohcal_tower_energy.push_back(std::move(ohcal_e));
-            jd.ohcal_tower_pt.push_back(std::move(ohcal_pt));
+            jd.ohcal_tower_index.push_back(std::move(tower_idx[2]));
+            jd.ohcal_tower_energy.push_back(std::move(tower_e[2]));
+            jd.ohcal_tower_pt.push_back(std::move(tower_pt[2]));
           }
         }
       }
