@@ -66,6 +66,7 @@ MODES = {
         "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
         "selection_text": COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$",
         "all_events_text": "All events in the trees (before Jet-JES selection)",
+        "truth_headroom": 1e6,  # y range above the truth-jet spectra, for the legend and text
         "weights": "lumi",
         "run": 68144,
         "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list",
@@ -81,6 +82,7 @@ MODES = {
         "selection_text": r"$|z| < 10$ cm (MBD vertex)",
         # the trees only hold events passing EventQA, so the cross section is sigma x the vertex-cut efficiency
         "all_events_text": r"After $|z| < 10$ cm vertex cut (before window)",
+        "truth_headroom": 1e3,
         "weights": "wiki",
         "run": 28,
         "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-29-26-Run-28-MC/test.list",
@@ -823,7 +825,7 @@ def main():
             hists[name] = add_hists(hists[k] for k in hists if k.startswith(f"hTruth_{r_tag}_eta"))
         eta_max = round(1.1 - r_jet, 1)
         plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, mode, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
-                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=1e6)
+                      f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=mode["truth_headroom"])
 
     stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
