@@ -65,6 +65,7 @@ MODES = {
         "methods": ["iter", "iternf"],
         "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
         "selection_text": COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$",
+        "all_events_text": "All events in the trees (before Jet-JES selection)",
         "weights": "lumi",
         "run": 68144,
         "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list",
@@ -78,6 +79,8 @@ MODES = {
         "methods": ["unsub", "iter"],
         "sample_text": "PYTHIA8 p+p (Jet12–40)",
         "selection_text": r"$|z| < 10$ cm (MBD vertex)",
+        # the trees only hold events passing EventQA, so the cross section is sigma x the vertex-cut efficiency
+        "all_events_text": r"After $|z| < 10$ cm vertex cut (before window)",
         "weights": "wiki",
         "run": 28,
         "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-29-26-Run-28-MC/test.list",
@@ -335,7 +338,7 @@ def draw_ratio(ax_ratio, num, den, key, err_key, color, marker):
 # --------------------------------------------------------------------------------------------------
 
 def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf):
-    """Luminosity-normalized leading truth R=0.4 jet pT of each sample (all events), with each sample / the next lower one."""
+    """Weighted leading truth R=0.4 jet pT of each sample (all events in the trees, before the Jet-JES selection), with each sample / the next lower one."""
     hep.style.use("ATLAS")
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
     xsec = {}
@@ -360,7 +363,7 @@ def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf):
     add_header(ax, run, None, None)
     ax.set_ylim(top=ax.get_ylim()[1] * 1e3)  # room above the spectra for the legend and text
     ax.legend(loc="upper right", frameon=False, fontsize=14)
-    ax.text(0.04, 0.96, f"{mode['sample_text']}\nAll events (before selection)\nLeading truth $R = 0.4$ jet", transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    ax.text(0.04, 0.96, f"{mode['sample_text']}\n{mode['all_events_text']}\nLeading truth $R = 0.4$ jet", transform=ax.transAxes, ha="left", va="top", fontsize=14)
     setup_ratio_panel(ax_ratio, xlabel=r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", ylabel="Sample / Lower", ratio_ylim=(0, 1.5))
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
     save_fig(fig, out_path, save_pdf)
