@@ -471,7 +471,7 @@ def plot_match_eff(hists, r_tag, ue, run, mode, pt_trust_min, out_path, save_pdf
     ax.set_xlabel(TRUTH_PT_LABEL)
     ax.set_ylabel("Matching efficiency")
     add_header(ax, run, r_jet, None)
-    info_box(ax, ue, mode, extra=rf"$\Delta R < 0.75 R$", y=0.66, fontsize=12)
+    info_box(ax, ue, mode, extra=rf"$\Delta R < 0.75 R$", y=0.45, fontsize=12)  # empty band between the points and the legend
     ax.legend(loc="lower right", frameon=False, fontsize=13)
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.13, top=0.93)
     save_fig(fig, out_path, save_pdf)
