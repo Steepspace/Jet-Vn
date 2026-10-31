@@ -70,8 +70,6 @@ void Fun4All_sEPD_Calib(const std::string &infile_dst_sepd="DST_SEPD_RAW_run3aua
   caEPD->set_detector_type(CaloTowerDefs::SEPD);
   caEPD->set_builder_type(buildertype);
   caEPD->set_processing_type(CaloWaveformProcessing::TEMPLATE);
-  caEPD->set_nsamples(12);
-  caEPD->set_offlineflag();
   se->registerSubsystem(caEPD);
 
   std::filesystem::path p(infile_dst_sepd);

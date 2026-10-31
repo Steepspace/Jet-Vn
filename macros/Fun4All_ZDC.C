@@ -74,8 +74,6 @@ void Fun4All_ZDC(const std::string &infile_dst_zdc,
   caZDC->set_builder_type(buildertype);
   caZDC->set_processing_type(CaloWaveformProcessing::FUNCFIT);
   caZDC->set_funcfit_type(2);
-  caZDC->set_nsamples(16);
-  caZDC->set_offlineflag();
   se->registerSubsystem(caZDC);
 
   // ZDC Reconstruction--Calib Info
