@@ -10,6 +10,7 @@
 #include <string>
 
 class PHCompositeNode;
+class TFile;
 class TTree;
 
 class TreeFiller : public SubsysReco
@@ -51,21 +52,14 @@ class TreeFiller : public SubsysReco
   void setHistoManagerName(const std::string &hm_name) { m_hm_name = hm_name; }
   const std::string &getHistoManagerName() const { return m_hm_name; }
 
-  void setOutfileName(const std::string &filename)
-  {
-    m_outfilename = filename;
-    Fun4AllServer *se = Fun4AllServer::instance();
-    Fun4AllHistoManager *hm = se->getHistoManager(m_hm_name);
-    if (!hm)
-    {
-      hm = new Fun4AllHistoManager(m_hm_name);
-      se->registerHistoManager(hm);
-    }
-    hm->setOutfileName(filename);
-  }
+  //! Output file of the tree, set before registering the TreeFiller (opened in Init).
+  //! Written and closed in End: Fun4AllServer::dumpHistos to the same file needs "UPDATE".
+  //! Without an output file, the tree is memory resident and written by the HistoManager.
+  void setOutfileName(const std::string &filename) { m_outfilename = filename; }
   const std::string &getOutfileName() const { return m_outfilename; }
 
-  //! Method to retrieve or create a TTree managed by Fun4AllHistoManager
+  //! Method to retrieve or create the TTree (a single tree, filled by the TreeFiller).
+  //! hm_name is unused: the TreeFiller's HistoManager is used without an output file.
   static TTree *getTree(const std::string &tree_name = "T",
                         const std::string &hm_name = "ANALYSIS_HM",
                         const std::string &tree_title = "Analysis Tree");
@@ -73,6 +67,7 @@ class TreeFiller : public SubsysReco
  private:
   static TreeFiller *m_instance;
   static TTree *m_tree;
+  static TFile *m_file;
 
   std::string m_tree_name{"T"};
   std::string m_hm_name{"ANALYSIS_HM"};

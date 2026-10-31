@@ -212,7 +212,8 @@ void Fun4All_sEPDQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   se->run(nEvents);
   se->End();
 
-  se->dumpHistos(output_tree);
+  // UPDATE: TreeFiller already wrote the tree to this file in End
+  se->dumpHistos(output_tree, "UPDATE");
 
   CDBInterface::instance()->Print();  // print used DB files
   se->PrintTimer();

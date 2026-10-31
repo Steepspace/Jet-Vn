@@ -540,7 +540,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
 
   if (do_detailed)
   {
-    se->dumpHistos(output_tree);
+    // UPDATE: TreeFiller already wrote the tree to this file in End
+    se->dumpHistos(output_tree, "UPDATE");
   }
   else
   {
