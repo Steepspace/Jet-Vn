@@ -76,11 +76,14 @@ class JetAnalysisv3
   void set_do_iter(bool b = true) { m_do_iter = b; }
   void set_do_mult(bool b = true) { m_do_mult = b; }
   void set_do_rcone(bool b = true) { m_do_rcone = b; }
+  // Treat the stored 'iter' branches as the no-flow (iternf) version and ignore all flow related inputs
+  void set_iter_is_noflow(bool b = true) { m_iter_is_noflow = b; }
 
   bool get_do_unsub() const { return m_do_unsub; }
   bool get_do_iter() const { return m_do_iter; }
   bool get_do_mult() const { return m_do_mult; }
   bool get_do_rcone() const { return m_do_rcone; }
+  bool get_iter_is_noflow() const { return m_iter_is_noflow; }
 
   void set_jet_pt_min(double jet_pt_min) { m_jet_pt_min = jet_pt_min; }
   double get_jet_pt_min() const { return m_jet_pt_min; }
@@ -314,6 +317,9 @@ class JetAnalysisv3
   bool m_do_mult{true};
   bool m_do_rcone{true};
 
+  // Stored 'iter' branches are really no-flow: read them as iternf, skip psi2 / calo_v2 / flow failure / mult
+  bool m_iter_is_noflow{false};
+
   // No flow subtraction, enabled if iter / mult are enabled and the branches exist
   bool m_has_iternf{false};
   bool m_has_multnf{false};
@@ -394,13 +400,27 @@ void JetAnalysisv3::setup_chain()
   // Setup branches
   m_chain->SetBranchStatus("*", false);
 
+  // iter-is-noflow mode: the 'iter' branches are filled into the iternf hists, everything flow related is ignored
+  const bool want_iter = m_do_iter;
+  if (m_iter_is_noflow)
+  {
+    std::cout << "iter-is-noflow mode: reading 'iter' branches as iternf, ignoring flow (psi2, calo_v2, flow failure, mult)\n";
+    m_do_iter = false;
+    m_do_mult = false;
+  }
+  const std::string nf_tree_name = m_iter_is_noflow ? "iter" : "iternf";
+
   // List of Branches of Interest
   // Common branches between data and sim
   std::unordered_set<std::string> branchNames = {"run", "event", "centrality", "zvtx",
                                                  "emcal_energy", "ihcal_energy", "ohcal_energy",
-                                                 "mbd_charge_south", "mbd_charge_north",
-                                                 "psi2_raw_S", "psi2_raw_N", "psi2_raw_NS",
-                                                 "psi2_S", "psi2_N", "psi2_NS"};
+                                                 "mbd_charge_south", "mbd_charge_north"};
+
+  if (!m_iter_is_noflow)
+  {
+    branchNames.insert({"psi2_raw_S", "psi2_raw_N", "psi2_raw_NS",
+                        "psi2_S", "psi2_N", "psi2_NS"});
+  }
 
   if (m_do_iter)
   {
@@ -447,7 +467,7 @@ void JetAnalysisv3::setup_chain()
     return true;
   };
 
-  m_has_iternf = m_do_iter && add_noflow("iternf");
+  m_has_iternf = (m_iter_is_noflow ? want_iter : m_do_iter) && add_noflow(nf_tree_name);
   m_has_multnf = m_do_mult && add_noflow("multnf");
 
   if (m_do_unsub)
@@ -494,13 +514,16 @@ void JetAnalysisv3::setup_chain()
   m_chain->SetBranchAddress("mbd_charge_south", &m_event_data.mbd_charge_south);
   m_chain->SetBranchAddress("mbd_charge_north", &m_event_data.mbd_charge_north);
 
-  m_chain->SetBranchAddress("psi2_raw_S", &m_event_data.psi2_raw_S);
-  m_chain->SetBranchAddress("psi2_raw_N", &m_event_data.psi2_raw_N);
-  m_chain->SetBranchAddress("psi2_raw_NS", &m_event_data.psi2_raw_NS);
+  if (!m_iter_is_noflow)
+  {
+    m_chain->SetBranchAddress("psi2_raw_S", &m_event_data.psi2_raw_S);
+    m_chain->SetBranchAddress("psi2_raw_N", &m_event_data.psi2_raw_N);
+    m_chain->SetBranchAddress("psi2_raw_NS", &m_event_data.psi2_raw_NS);
 
-  m_chain->SetBranchAddress("psi2_S", &m_event_data.psi2_S);
-  m_chain->SetBranchAddress("psi2_N", &m_event_data.psi2_N);
-  m_chain->SetBranchAddress("psi2_NS", &m_event_data.psi2_NS);
+    m_chain->SetBranchAddress("psi2_S", &m_event_data.psi2_S);
+    m_chain->SetBranchAddress("psi2_N", &m_event_data.psi2_N);
+    m_chain->SetBranchAddress("psi2_NS", &m_event_data.psi2_NS);
+  }
 
   if (m_do_iter)
   {
@@ -558,9 +581,9 @@ void JetAnalysisv3::setup_chain()
 
   if (m_has_iternf)
   {
-    m_chain->SetBranchAddress("seeds_iternf", &m_event_data.seeds_iternf);
-    set_jet_branches(m_event_data.iternf_r02, "iternf", "r02");
-    set_jet_branches(m_event_data.iternf_r03, "iternf", "r03");
+    m_chain->SetBranchAddress(std::format("seeds_{}", nf_tree_name).c_str(), &m_event_data.seeds_iternf);
+    set_jet_branches(m_event_data.iternf_r02, nf_tree_name, "r02");
+    set_jet_branches(m_event_data.iternf_r03, nf_tree_name, "r03");
   }
 
   if (m_has_multnf)
@@ -1399,6 +1422,12 @@ void JetAnalysisv3::process_event_check()
       }
     }
 
+    if (m_iter_is_noflow && m_has_iternf)
+    {
+      m_hists.hEvent->Fill(static_cast<std::uint8_t>(EventType::FLOW_PASS_ITER));
+      m_hists.h2Seeds_iternf->Fill(cent, ed.seeds_iternf);
+    }
+
     if (m_do_mult)
     {
       if (ed.is_flow_failure_mult)
@@ -1427,13 +1456,16 @@ void JetAnalysisv3::process_event_check()
       }
     }
 
-    m_hists.h2Psi2_S_raw->Fill(ed.psi2_raw_S, cent);
-    m_hists.h2Psi2_N_raw->Fill(ed.psi2_raw_N, cent);
-    m_hists.h2Psi2_NS_raw->Fill(ed.psi2_raw_NS, cent);
+    if (!m_iter_is_noflow)
+    {
+      m_hists.h2Psi2_S_raw->Fill(ed.psi2_raw_S, cent);
+      m_hists.h2Psi2_N_raw->Fill(ed.psi2_raw_N, cent);
+      m_hists.h2Psi2_NS_raw->Fill(ed.psi2_raw_NS, cent);
 
-    m_hists.h2Psi2_S->Fill(ed.psi2_S, cent);
-    m_hists.h2Psi2_N->Fill(ed.psi2_N, cent);
-    m_hists.h2Psi2_NS->Fill(ed.psi2_NS, cent);
+      m_hists.h2Psi2_S->Fill(ed.psi2_S, cent);
+      m_hists.h2Psi2_N->Fill(ed.psi2_N, cent);
+      m_hists.h2Psi2_NS->Fill(ed.psi2_NS, cent);
+    }
   }
   else
   {
@@ -1642,9 +1674,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 14)
+  if (argc < 3 || argc > 15)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut] [jes_z0_file]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut] [jes_z0_file] [iter_is_noflow]" << std::endl;
     return 1;
   }
 
@@ -1662,6 +1694,7 @@ int main(int argc, const char *const argv[])
   double lead_jet_pt_threshold = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 100.0;
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   std::string jes_z0_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
+  bool iter_is_noflow = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -1678,6 +1711,7 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Lead Jet pT Threshold: {} [GeV]\n", lead_jet_pt_threshold);
   std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   std::cout << std::format("JES Z0 File: {}\n", (jes_z0_file.empty() || jes_z0_file == "none") ? "none (stored eta-binned pt_calib)" : jes_z0_file);
+  std::cout << std::format("Iter Is NoFlow: {}\n", iter_is_noflow);
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -1692,6 +1726,7 @@ int main(int argc, const char *const argv[])
     analysis.set_lead_jet_pt_threshold(lead_jet_pt_threshold);
     analysis.set_sigma_cut(sigma_cut);
     analysis.set_jes_z0_file(jes_z0_file);
+    analysis.set_iter_is_noflow(iter_is_noflow);
     analysis.run();
   }
   catch (const std::exception &e)
