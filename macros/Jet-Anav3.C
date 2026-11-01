@@ -337,7 +337,7 @@ class JetAnalysisv3
   bool m_do_rcone{true};
 
   // Stored 'iter' branches are really no-flow: read them as iternf, skip psi2 / calo_v2 / flow failure / mult
-  bool m_iter_is_noflow{false};
+  bool m_iter_is_noflow{true};
 
   // No flow subtraction, enabled if iter / mult are enabled and the branches exist
   bool m_has_iternf{false};
@@ -1864,7 +1864,7 @@ int main(int argc, const char *const argv[])
   double lead_jet_pt_threshold = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 100.0;
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   std::string jes_z0_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
-  bool iter_is_noflow = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : false;
+  bool iter_is_noflow = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
