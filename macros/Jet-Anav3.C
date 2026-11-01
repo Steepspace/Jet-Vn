@@ -169,6 +169,20 @@ class JetAnalysisv3
     JetHistSet unsub_r02;
     JetHistSet unsub_r03;
 
+    // Leading iternf jet: (jet time - MBD t0) vs OHCal energy fraction, in raw pT ranges
+    static constexpr size_t n_timing_pt = 4;  // 15-40, 15-20, 20-30, 30-40
+    struct TimingHistSet
+    {
+      std::array<TH2 *, n_timing_pt> h2TimeOHCalFrac{};
+      TH1 *hStatus{nullptr};
+
+      // Leading jet: jet time - MBD t0 vs raw pT (10 - 100 GeV)
+      TH2 *h2TimeRawPt{nullptr};
+      TH1 *hStatusRawPt{nullptr};
+    };
+    TimingHistSet timing_iternf_r02;
+    TimingHistSet timing_iternf_r03;
+
     struct RConeHistSet
     {
       TH1 *hEta{nullptr};
@@ -225,6 +239,10 @@ class JetAnalysisv3
     std::vector<double> *phi{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> *eta{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
     double max_pt{0};                        // NOLINT(misc-non-private-member-variables-in-classes)
+
+    // timing (only read for iternf)
+    std::vector<double> *t{nullptr};          // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *ohcal_frac{nullptr}; // NOLINT(misc-non-private-member-variables-in-classes)
   };
 
   struct EventData
@@ -242,6 +260,7 @@ class JetAnalysisv3
 
     double mbd_charge_south{0.0};
     double mbd_charge_north{0.0};
+    float t0{0};
 
     double psi2_raw_S{0};
     double psi2_raw_N{0};
@@ -323,6 +342,9 @@ class JetAnalysisv3
   // No flow subtraction, enabled if iter / mult are enabled and the branches exist
   bool m_has_iternf{false};
   bool m_has_multnf{false};
+
+  // Raw pT ranges [GeV] for the leading jet timing plots
+  static constexpr std::array<std::pair<double, double>, 4> m_timing_pt_ranges = {{{15, 40}, {15, 20}, {20, 30}, {30, 40}}};
 
   // Jet Cuts
   double m_jet_pt_min{10}; /*GeV*/
@@ -470,6 +492,17 @@ void JetAnalysisv3::setup_chain()
   m_has_iternf = (m_iter_is_noflow ? want_iter : m_do_iter) && add_noflow(nf_tree_name);
   m_has_multnf = m_do_mult && add_noflow("multnf");
 
+  // Timing branches for the iternf leading jet plots are required (error out if missing)
+  if (m_has_iternf)
+  {
+    branchNames.insert("t0");
+    for (const char *r : {"r02", "r03"})
+    {
+      branchNames.insert(std::format("t_{}_{}", nf_tree_name, r));
+      branchNames.insert(std::format("ohcal_frac_{}_{}", nf_tree_name, r));
+    }
+  }
+
   if (m_do_unsub)
   {
     branchNames.insert({
@@ -584,6 +617,13 @@ void JetAnalysisv3::setup_chain()
     m_chain->SetBranchAddress(std::format("seeds_{}", nf_tree_name).c_str(), &m_event_data.seeds_iternf);
     set_jet_branches(m_event_data.iternf_r02, nf_tree_name, "r02");
     set_jet_branches(m_event_data.iternf_r03, nf_tree_name, "r03");
+
+    m_chain->SetBranchAddress("t0", &m_event_data.t0);
+    for (auto [jd, r] : {std::pair{&m_event_data.iternf_r02, "r02"}, std::pair{&m_event_data.iternf_r03, "r03"}})
+    {
+      m_chain->SetBranchAddress(std::format("t_{}_{}", nf_tree_name, r).c_str(), &jd->t);
+      m_chain->SetBranchAddress(std::format("ohcal_frac_{}_{}", nf_tree_name, r).c_str(), &jd->ohcal_frac);
+    }
   }
 
   if (m_has_multnf)
@@ -931,6 +971,39 @@ void JetAnalysisv3::init_hists()
     m_hists2D["h2Seeds_multnf"] = std::make_unique<TH2F>("h2Seeds_multnf", "Multiplicity No Flow Seeds; Centrality [%]; Seeds Multiplicity No Flow", m_bins_cent, m_cent_low, m_cent_high, bins_seeds_mult, seeds_mult_low, seeds_mult_high);
   }
 
+  if (m_has_iternf)
+  {
+    for (const char *r : {"r02", "r03"})
+    {
+      for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+      {
+        auto [lo, hi] = m_timing_pt_ranges[i];
+        std::string name = std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}", r, static_cast<int>(lo), static_cast<int>(hi));
+        std::string title = std::format("Leading Jet, raw p_{{T}} {} - {} GeV; OHCal Energy Fraction; Jet t - MBD t_{{0}} [ns]", static_cast<int>(lo), static_cast<int>(hi));
+        m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), 50, 0, 1, 100, -25, 25);
+      }
+
+      std::string sname = std::format("hLeadJetTimingStatus_{}_iternf", r);
+      m_hists1D[sname] = std::make_unique<TH1F>(sname.c_str(), "Leading jet timing, raw p_{T} 15 - 40 GeV; ; Events", 4, 0, 4);
+      const char *labels[] = {"Leading jet in 15-40", "Filled", "t NaN", "OHCal frac or t0 NaN"};
+      for (int i = 0; i < 4; ++i)
+      {
+        m_hists1D[sname]->GetXaxis()->SetBinLabel(i + 1, labels[i]);
+      }
+
+      std::string pname = std::format("h2LeadJetTimeRawPt_{}_iternf", r);
+      m_hists2D[pname] = std::make_unique<TH2F>(pname.c_str(), "Leading Jet; Jet raw p_{T} [GeV]; Jet t - MBD t_{0} [ns]", 90, 10, 100, 100, -25, 25);
+
+      std::string spname = std::format("hLeadJetTimingStatusRawPt_{}_iternf", r);
+      m_hists1D[spname] = std::make_unique<TH1F>(spname.c_str(), "Leading jet timing, raw p_{T} 10 - 100 GeV; ; Events", 3, 0, 3);
+      const char *plabels[] = {"Leading jet in 10-100", "Filled", "t, or t0 NaN"};
+      for (int i = 0; i < 3; ++i)
+      {
+        m_hists1D[spname]->GetXaxis()->SetBinLabel(i + 1, plabels[i]);
+      }
+    }
+  }
+
   m_hists2D["h2Psi2_S_raw"] = std::make_unique<TH2F>("h2Psi2_S_raw", "; 2 #Psi_{2}; Centrality [%]", bins_psi, psi_low, psi_high, m_bins_cent, m_cent_low, m_cent_high);
 
   clone_hist(m_hists2D, "h2Psi2_S_raw", "h2Psi2_N_raw");
@@ -1035,6 +1108,21 @@ void JetAnalysisv3::init_hists()
   {
     bind_jet_set(m_hists.unsub_r02, "r02", "unsub");
     bind_jet_set(m_hists.unsub_r03, "r03", "unsub");
+  }
+
+  if (m_has_iternf)
+  {
+    for (auto [set, r] : {std::pair{&m_hists.timing_iternf_r02, "r02"}, std::pair{&m_hists.timing_iternf_r03, "r03"}})
+    {
+      for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+      {
+        auto [lo, hi] = m_timing_pt_ranges[i];
+        set->h2TimeOHCalFrac[i] = m_hists2D[std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}", r, static_cast<int>(lo), static_cast<int>(hi))].get();
+      }
+      set->hStatus = m_hists1D[std::format("hLeadJetTimingStatus_{}_iternf", r)].get();
+      set->h2TimeRawPt = m_hists2D[std::format("h2LeadJetTimeRawPt_{}_iternf", r)].get();
+      set->hStatusRawPt = m_hists1D[std::format("hLeadJetTimingStatusRawPt_{}_iternf", r)].get();
+    }
   }
 
   if (m_do_rcone)
@@ -1225,6 +1313,82 @@ void JetAnalysisv3::process_jets()
     }
   };
 
+  // Leading jet (highest raw pT, |eta| < eta_max, E > 0): (jet t - MBD t0) vs OHCal fraction in raw pT ranges
+  auto fill_lead_jet_timing = [this](const JetData &jd, const AnalysisHists::TimingHistSet &h, double eta_max)
+  {
+    if (!jd.pt || !jd.e || !jd.eta || !jd.t || !jd.ohcal_frac)
+    {
+      return;
+    }
+
+    int lead = -1;
+    double lead_pt = 0;
+    for (size_t idx = 0; idx < jd.pt->size(); ++idx)
+    {
+      if (jd.e->at(idx) <= 0 || std::abs(jd.eta->at(idx)) >= eta_max)
+      {
+        continue;
+      }
+      if (lead < 0 || jd.pt->at(idx) > lead_pt)
+      {
+        lead = static_cast<int>(idx);
+        lead_pt = jd.pt->at(idx);
+      }
+    }
+
+    if (lead < 0)
+    {
+      return;
+    }
+
+    const double t = jd.t->at(static_cast<size_t>(lead));
+
+    // raw pT 10 - 100 GeV
+    if (lead_pt >= 10 && lead_pt < 100)
+    {
+      h.hStatusRawPt->Fill(0.5);
+      if (std::isfinite(t) && std::isfinite(m_event_data.t0))
+      {
+        h.hStatusRawPt->Fill(1.5);
+        h.h2TimeRawPt->Fill(lead_pt, t - m_event_data.t0);
+      }
+      else
+      {
+        h.hStatusRawPt->Fill(2.5);
+      }
+    }
+
+    const auto [full_lo, full_hi] = m_timing_pt_ranges[0];
+    if (lead_pt < full_lo || lead_pt >= full_hi)
+    {
+      return;
+    }
+    h.hStatus->Fill(0.5);
+
+    const double frac = jd.ohcal_frac->at(static_cast<size_t>(lead));
+    if (!std::isfinite(t))
+    {
+      h.hStatus->Fill(2.5);
+      return;
+    }
+    if (!std::isfinite(frac) || !std::isfinite(m_event_data.t0))
+    {
+      h.hStatus->Fill(3.5);
+      return;
+    }
+    h.hStatus->Fill(1.5);
+
+    const double dt = t - m_event_data.t0;
+    for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+    {
+      const auto [lo, hi] = m_timing_pt_ranges[i];
+      if (lead_pt >= lo && lead_pt < hi)
+      {
+        h.h2TimeOHCalFrac[i]->Fill(frac, dt);
+      }
+    }
+  };
+
   if (m_do_iter)
   {
     // Process r02 branches for iter (eta_max = 0.9)
@@ -1284,6 +1448,12 @@ void JetAnalysisv3::process_jets()
       fill_jet_flow_fail_hists(m_event_data.iternf_r02, m_hists.iternf_r02, m_jet_eta_max_r02, 0.2);
       fill_jet_flow_fail_hists(m_event_data.iternf_r03, m_hists.iternf_r03, m_jet_eta_max_r03, 0.3);
     }
+  }
+
+  if (m_has_iternf)
+  {
+    fill_lead_jet_timing(m_event_data.iternf_r02, m_hists.timing_iternf_r02, m_jet_eta_max_r02);
+    fill_lead_jet_timing(m_event_data.iternf_r03, m_hists.timing_iternf_r03, m_jet_eta_max_r03);
   }
 
   if (m_has_multnf)
