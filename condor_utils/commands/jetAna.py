@@ -76,6 +76,7 @@ def run_jet_jobs(args, version):
         init_log['Do RCone'] = args.do_rcone
         init_log['Lead Jet pT Threshold'] = f"{args.lead_jet_pt_threshold} GeV"
         init_log['Sigma Cut'] = args.sigma_cut
+        init_log['Iter Is NoFlow'] = args.iter_is_noflow
         init_log['JES Z0 File'] = Path(args.jes_z0_file).resolve() if args.jes_z0_file else "Not Provided (Using stored eta-binned pt_calib)"
     elif version == "jetJES":
         # the jet pT is not cut on, the response is filled for every matched truth jet
@@ -195,7 +196,7 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {jet_eta_max} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
     elif version == "jetAnav3":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'}"
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetJES":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {1 if args.pp else 0}"
@@ -261,6 +262,7 @@ def setup_jetAna_subparsers(subparsers):
     jetAnav3.add_argument('--lead-jet-pt-threshold', type=float, default=100.0, help='Leading Jet pT Threshold for CSV saving. Default: 100 [GeV]')
     jetAnav3.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
     jetAnav3.add_argument('--jes-z0-file', type=str, default=None, help='Legacy JES payload (JES_Calib_Default); recalibrates the raw jet pT with its eta-averaged R0X_Z0 function instead of the stored eta-binned pt_calib. (Optional)')
+    jetAnav3.add_argument('--iter-is-noflow', type=int, default=1, help='Treat the stored iter branches as the no-flow (iternf) version and ignore flow inputs (psi2, calo_v2, flow failure, mult). Default: 1')
     jetAnav3.set_defaults(func=jetAnav3_jobs)
 
     jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay or p+p MC JES, all pT-hat samples of the input list in one submission).')
