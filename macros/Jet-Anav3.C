@@ -980,7 +980,7 @@ void JetAnalysisv3::init_hists()
         auto [lo, hi] = m_timing_pt_ranges[i];
         std::string name = std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}", r, static_cast<int>(lo), static_cast<int>(hi));
         std::string title = std::format("Leading Jet, raw p_{{T}} {} - {} GeV; OHCal Energy Fraction; Jet t - MBD t_{{0}} [ns]", static_cast<int>(lo), static_cast<int>(hi));
-        m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), 50, 0, 1, 100, -25, 25);
+        m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), 60, -0.25, 1.25, 100, -25, 25);
       }
 
       std::string sname = std::format("hLeadJetTimingStatus_{}_iternf", r);
