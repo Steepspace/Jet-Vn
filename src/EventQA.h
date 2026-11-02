@@ -126,15 +126,19 @@ class EventQA : public SubsysReco
 
   std::unique_ptr<TriggerAnalyzer> m_triggerAnalyzer;
 
-  const int m_trig_12 = 12; // MBD N&S >= 2, vtx < 10 cm
-  const int m_trig_14 = 14; // MBD N&S >= 2, vtx < 150 cm
+  // MBD triggers are selected by name; the GL1 bits are resolved in InitRun
+  const std::string m_trig_mbd_narrow{"MBD N&S >= 2, vtx < 10 cm"};
+  const std::string m_trig_mbd_wide{"MBD N&S >= 2, vtx < 150 cm"};
+
+  int m_bit_mbd_narrow{-1};
+  int m_bit_mbd_wide{-1};
 
   int m_prescale_12{-1};
   int m_prescale_14{-1};
 
-  std::vector<int> m_triggerBits = {m_trig_12, m_trig_14};
-  std::vector<std::string> m_triggernames = {"MBD N&S >= 2, vtx < 10 cm",
-                                             "MBD N&S >= 2, vtx < 150 cm"};
+  // histogram name suffixes keep the Run 3 Au+Au bit numbers (Trig12/Trig14) for output compatibility
+  std::vector<int> m_triggerHistIds = {12, 14};
+  std::vector<std::string> m_triggernames = {m_trig_mbd_narrow, m_trig_mbd_wide};
 
   enum TrigIdx : std::size_t
   {

@@ -103,9 +103,9 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     h2ZVertexCentrality = new TH2F("h2ZVertexCentrality", "Min Bias; Z [cm]; Centrality [%]", m_hist_config.m_bins_zvtx, m_hist_config.m_zvtx_low, m_hist_config.m_zvtx_high, m_hist_config.m_bins_cent, m_hist_config.m_cent_low, m_hist_config.m_cent_high);
     se->registerHisto(h2ZVertexCentrality);
 
-    for (size_t i = 0; i < m_triggerBits.size(); ++i)
+    for (size_t i = 0; i < m_triggerHistIds.size(); ++i)
     {
-      int triggerIdx = m_triggerBits[i];
+      int triggerIdx = m_triggerHistIds[i];
       const auto &trig = m_triggernames[i];
 
       size_t idx_relaxed = 2 * i;
@@ -167,12 +167,44 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
 
 int EventQA::InitRun(PHCompositeNode *topNode)
 {
-  TriggerRunInfo *trigInfo = findNode::getClass<TriggerRunInfo>(topNode, "TriggerRunInfo");
-  if (trigInfo)
+  // without trigger check (simulation) there are no trigger bits to resolve
+  if (!m_check_trigger)
   {
-    m_prescale_12 = trigInfo->getPrescaleByBit(m_trig_12);
-    m_prescale_14 = trigInfo->getPrescaleByBit(m_trig_14);
+    return Fun4AllReturnCodes::EVENT_OK;
   }
+
+  TriggerRunInfo *trigInfo = findNode::getClass<TriggerRunInfo>(topNode, "TriggerRunInfo");
+  if (!trigInfo)
+  {
+    std::cout << "Aborting Run: TriggerRunInfo null" << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  // getTriggerBitByName returns 0 for an unknown name, so confirm the round trip
+  auto resolve_bit = [trigInfo](const std::string &name) -> int
+  {
+    int bit = static_cast<int>(trigInfo->getTriggerBitByName(name));
+    return (trigInfo->getTriggerName(bit) == name) ? bit : -1;
+  };
+
+  m_bit_mbd_narrow = resolve_bit(m_trig_mbd_narrow);
+  m_bit_mbd_wide = resolve_bit(m_trig_mbd_wide);
+
+  if (m_bit_mbd_narrow < 0 || m_bit_mbd_wide < 0)
+  {
+    std::cout << std::format("Aborting Run: MBD trigger not found in TriggerRunInfo: \"{}\" -> {}, \"{}\" -> {}",
+                             m_trig_mbd_narrow, m_bit_mbd_narrow, m_trig_mbd_wide, m_bit_mbd_wide) << std::endl;
+    return Fun4AllReturnCodes::ABORTRUN;
+  }
+
+  if (Verbosity() > 0)
+  {
+    std::cout << std::format("EventQA::InitRun - \"{}\" -> bit {}, \"{}\" -> bit {}",
+                             m_trig_mbd_narrow, m_bit_mbd_narrow, m_trig_mbd_wide, m_bit_mbd_wide) << std::endl;
+  }
+
+  m_prescale_12 = trigInfo->getPrescaleByBit(m_bit_mbd_narrow);
+  m_prescale_14 = trigInfo->getPrescaleByBit(m_bit_mbd_wide);
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
@@ -247,8 +279,8 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
       return Fun4AllReturnCodes::ABORTRUN;
     }
 
-    m_didTrig14Fire = m_triggerAnalyzer->didTriggerFire(m_trig_14);
-    m_didTrig12Fire = m_triggerAnalyzer->didTriggerFire(m_trig_12);
+    m_didTrig14Fire = m_triggerAnalyzer->didTriggerFire(m_bit_mbd_wide);
+    m_didTrig12Fire = m_triggerAnalyzer->didTriggerFire(m_bit_mbd_narrow);
   }
 
   bool mbd_trigger_fire = m_didTrig12Fire || m_didTrig14Fire;
@@ -650,25 +682,15 @@ int EventQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   return Fun4AllReturnCodes::EVENT_OK;
 }
 
-int EventQA::End(PHCompositeNode *topNode)
+int EventQA::End([[maybe_unused]] PHCompositeNode *topNode)
 {
   std::cout << "EventQA::End" << std::endl;
-
-  if ((m_prescale_12 < 0 || m_prescale_14 < 0) && topNode)
-  {
-    TriggerRunInfo *trigInfo = findNode::getClass<TriggerRunInfo>(topNode, "TriggerRunInfo");
-    if (trigInfo)
-    {
-      m_prescale_12 = trigInfo->getPrescaleByBit(m_trig_12);
-      m_prescale_14 = trigInfo->getPrescaleByBit(m_trig_14);
-    }
-  }
 
   int prescale_12 = m_prescale_12;
   int prescale_14 = m_prescale_14;
 
-  std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_12, prescale_12);
-  std::cout << std::format("Trigger: {}, Prescale: {}\n", m_trig_14, prescale_14);
+  std::cout << std::format("Trigger: {} (bit {}), Prescale: {}\n", m_trig_mbd_narrow, m_bit_mbd_narrow, prescale_12);
+  std::cout << std::format("Trigger: {} (bit {}), Prescale: {}\n", m_trig_mbd_wide, m_bit_mbd_wide, prescale_14);
 
   if (m_do_hist && hLuminosity)
   {
