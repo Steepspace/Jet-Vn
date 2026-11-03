@@ -171,6 +171,7 @@ class JetAnalysisv3
 
     // Leading iternf jet: (jet time - MBD t0) vs OHCal energy fraction, in raw pT ranges
     static constexpr size_t n_timing_pt = 4;  // 15-40, 15-20, 20-30, 30-40
+    static constexpr size_t n_timing_cent = 3;  // 0-20, 20-40, 40-60 %
     struct TimingHistSet
     {
       std::array<TH2 *, n_timing_pt> h2TimeOHCalFrac{};
@@ -179,6 +180,10 @@ class JetAnalysisv3
       // Leading jet: jet time - MBD t0 vs raw pT (10 - 100 GeV)
       TH2 *h2TimeRawPt{nullptr};
       TH1 *hStatusRawPt{nullptr};
+
+      // Leading jet: profile of jet time - MBD t0 vs (OHCal fraction, raw pT), all centralities and per centrality class
+      TProfile2D *p2TimeOHCalFracRawPt{nullptr};
+      std::array<TProfile2D *, n_timing_cent> p2TimeOHCalFracRawPt_cent{};
     };
     TimingHistSet timing_iternf_r02;
     TimingHistSet timing_iternf_r03;
@@ -345,6 +350,16 @@ class JetAnalysisv3
 
   // Raw pT ranges [GeV] for the leading jet timing plots
   static constexpr std::array<std::pair<double, double>, 4> m_timing_pt_ranges = {{{15, 40}, {15, 20}, {20, 30}, {30, 40}}};
+
+  // Leading jet timing profile vs (OHCal fraction, raw pT): x axis as h2LeadJetTimeOHCalFrac, raw pT 10-60 GeV in
+  // 1 GeV bins to 30 GeV, 2.5 GeV to 40 GeV, 5 GeV to 60 GeV; jet t - MBD t0 kept within the same +-25 ns as the TH2s
+  static constexpr std::array<double, 29> m_timing_profile_pt_edges = {
+      10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+      32.5, 35, 37.5, 40, 45, 50, 55, 60};
+  static constexpr double m_timing_dt_max = 25; /*ns*/
+  // Centrality classes [%] of the per-centrality timing profiles
+  static constexpr std::array<std::pair<double, double>, 3> m_timing_cent_ranges = {{{0, 20}, {20, 40}, {40, 60}}};
+  static_assert(m_timing_cent_ranges.size() == AnalysisHists::n_timing_cent, "one timing profile per centrality class");
 
   // Jet Cuts
   double m_jet_pt_min{10}; /*GeV*/
@@ -1001,6 +1016,20 @@ void JetAnalysisv3::init_hists()
       {
         m_hists1D[spname]->GetXaxis()->SetBinLabel(i + 1, plabels[i]);
       }
+
+      // Profile of the leading jet time vs (OHCal fraction, raw pT): stores sum w, sum w t, sum w t^2, sum w^2 per cell
+      // (sum w^2 is enabled for all booked hists and profiles further below, in the Sumw2 loop)
+      const int n_pt = static_cast<int>(m_timing_profile_pt_edges.size()) - 1;
+      std::string p2name = std::format("p2LeadJetTimeOHCalFracRawPt_{}_iternf", r);
+      m_profiles2D[p2name] = std::make_unique<TProfile2D>(p2name.c_str(), "Leading Jet, |t - t_{0}| < 25 ns; OHCal Energy Fraction; Jet raw p_{T} [GeV]; Jet t - MBD t_{0} [ns]",
+                                                          60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
+      for (const auto &[clo, chi] : m_timing_cent_ranges)
+      {
+        std::string cname = std::format("{}_cent_{}_{}", p2name, static_cast<int>(clo), static_cast<int>(chi));
+        std::string ctitle = std::format("Leading Jet, {} - {}%, |t - t_{{0}}| < 25 ns; OHCal Energy Fraction; Jet raw p_{{T}} [GeV]; Jet t - MBD t_{{0}} [ns]",
+                                         static_cast<int>(clo), static_cast<int>(chi));
+        m_profiles2D[cname] = std::make_unique<TProfile2D>(cname.c_str(), ctitle.c_str(), 60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
+      }
     }
   }
 
@@ -1122,6 +1151,13 @@ void JetAnalysisv3::init_hists()
       set->hStatus = m_hists1D[std::format("hLeadJetTimingStatus_{}_iternf", r)].get();
       set->h2TimeRawPt = m_hists2D[std::format("h2LeadJetTimeRawPt_{}_iternf", r)].get();
       set->hStatusRawPt = m_hists1D[std::format("hLeadJetTimingStatusRawPt_{}_iternf", r)].get();
+      std::string p2name = std::format("p2LeadJetTimeOHCalFracRawPt_{}_iternf", r);
+      set->p2TimeOHCalFracRawPt = m_profiles2D[p2name].get();
+      for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+      {
+        auto [clo, chi] = m_timing_cent_ranges[i];
+        set->p2TimeOHCalFracRawPt_cent[i] = m_profiles2D[std::format("{}_cent_{}_{}", p2name, static_cast<int>(clo), static_cast<int>(chi))].get();
+      }
     }
   }
 
@@ -1350,7 +1386,26 @@ void JetAnalysisv3::process_jets()
       if (std::isfinite(t) && std::isfinite(m_event_data.t0))
       {
         h.hStatusRawPt->Fill(1.5);
-        h.h2TimeRawPt->Fill(lead_pt, t - m_event_data.t0);
+        const double dt = t - m_event_data.t0;
+        h.h2TimeRawPt->Fill(lead_pt, dt);
+
+        // Profile vs (OHCal fraction, raw pT); the same |dt| window as the TH2 axes (the profile has no t range)
+        const double frac = jd.ohcal_frac->at(static_cast<size_t>(lead));
+        if (std::isfinite(frac) && std::abs(dt) < m_timing_dt_max)
+        {
+          h.p2TimeOHCalFracRawPt->Fill(frac, lead_pt, dt);
+          const double cent = m_event_data.centrality;
+          for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+          {
+            const auto [clo, chi] = m_timing_cent_ranges[i];
+            // the last class includes its upper edge (centrality up to m_cent_high = 59.5)
+            if (cent >= clo && (cent < chi || (i == m_timing_cent_ranges.size() - 1 && cent <= chi)))
+            {
+              h.p2TimeOHCalFracRawPt_cent[i]->Fill(frac, lead_pt, dt);
+              break;
+            }
+          }
+        }
       }
       else
       {
