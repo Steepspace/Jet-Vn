@@ -725,6 +725,25 @@ def write_model(path, r_tag, src, M, P, args):
     print(f"Saved: {path}")
 
 
+def write_correction_csv(path, M, src):
+    """The correction in the form Jet-Anav3.C reads (--timing-fc-file): one row per (radius, centrality class) with
+    the x clamp range and the f_c coefficients c0..c4 (ascending powers of x). The lines are in the per-run CSV."""
+    rows = []
+    for r_tag, Mr in M.items():
+        for (lo, hi), fk in zip(CENT_CLASSES, Mr["fc"]):
+            rows.append({"radius": r_tag, "cent_lo": lo, "cent_hi": hi, "x_lo": fk["x_range"][0], "x_hi": fk["x_range"][1],
+                         **{f"c{i}": float(c) for i, c in enumerate(fk["coef"][::-1])}})
+    keys = ["radius", "cent_lo", "cent_hi", "x_lo", "x_hi"] + [f"c{i}" for i in range(FIT_DEG + 1)]
+    with path.open("w", newline="") as f:
+        f.write(f"# t_corr = t - t0 - [f_c(clamp(x, x_lo, x_hi)) + a_run + b_run * x], f_c = sum_i c_i x^i; "
+                f"raw pT {TIMING_PT[0]}-{TIMING_PT[1]} GeV; lines: per_run_lines_{src}_iternf.csv\n")
+        writer = csv.DictWriter(f, fieldnames=keys, lineterminator="\n")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: (f"{v:.10g}" if isinstance(v, float) else v) for k, v in row.items()})
+    print(f"Saved: {path}")
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------------------------------------
@@ -885,6 +904,7 @@ def main():
 
     for r_tag in args.radii:
         write_model(tdir / f"model_{r_tag}_iternf.json", r_tag, src, M[r_tag], P[r_tag], args)
+    write_correction_csv(tdir / "timing_correction_iternf.csv", M, src)
 
     # ---- The plots, with y ranges shared by the radii
     for r_tag in args.radii:

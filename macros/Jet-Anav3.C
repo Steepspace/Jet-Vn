@@ -14,16 +14,20 @@
 // ====================================================================
 // Standard C++ Includes
 // ====================================================================
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -66,6 +70,7 @@ class JetAnalysisv3
   {
     setup_calo_mbd_cut();
     setup_jes_z0();
+    setup_timing_corr();
     setup_chain();
     init_hists();
     process_events();
@@ -104,6 +109,16 @@ class JetAnalysisv3
   // Empty or "none": use the stored pt_calib (eta-binned legacy JES).
   void set_jes_z0_file(std::string file) { m_jes_z0_file = std::move(file); }
   const std::string &get_jes_z0_file() const { return m_jes_z0_file; }
+
+  // Leading iternf jet timing correction from scripts/plots/jets/plot_jet_iternf_timing.py: fc_file is its
+  // timing_correction_iternf.csv (f_c(x) per radius and centrality class), lines_file its per_run_lines_<r>_iternf.csv
+  // (a_run, b_run). The corrected time is t - t0 - [f_c(x) + a_run + b_run x], filled into the *_corr hists next to
+  // the uncorrected ones. Both "none" (default): no correction, the *_corr hists are not booked.
+  void set_timing_corr_files(std::string fc_file, std::string lines_file)
+  {
+    m_timing_fc_file = std::move(fc_file);
+    m_timing_lines_file = std::move(lines_file);
+  }
 
  private:
   static constexpr size_t m_bins_cent = 60;
@@ -184,6 +199,13 @@ class JetAnalysisv3
       // Leading jet: profile of jet time - MBD t0 vs (OHCal fraction, raw pT), all centralities and per centrality class
       TProfile2D *p2TimeOHCalFracRawPt{nullptr};
       std::array<TProfile2D *, n_timing_cent> p2TimeOHCalFracRawPt_cent{};
+
+      // Corrected: jet time - MBD t0 - timing model (see set_timing_corr_files); null when the correction is off
+      std::array<TH2 *, n_timing_pt> h2TimeOHCalFracCorr{};
+      TH2 *h2TimeRawPtCorr{nullptr};
+      std::array<TProfile2D *, n_timing_cent> p2TimeOHCalFracRawPtCorr_cent{};
+      TH1 *hCorrStatus{nullptr};
+      size_t r_idx{0};  // 0: R = 0.2, 1: R = 0.3 (the model's row)
     };
     TimingHistSet timing_iternf_r02;
     TimingHistSet timing_iternf_r03;
@@ -376,6 +398,20 @@ class JetAnalysisv3
   double m_jet_pt_min_r02{10}; /*GeV*/
   double m_jet_pt_min_r03{10}; /*GeV*/
 
+  // Leading jet timing correction (see set_timing_corr_files)
+  struct TimingShape
+  {
+    double x_lo{0};  // x is clamped to [x_lo, x_hi], the fitted range of the class
+    double x_hi{0};
+    std::array<double, 5> c{};  // f_c(x) = sum_i c[i] x^i
+    bool set{false};
+  };
+  std::string m_timing_fc_file{"none"};
+  std::string m_timing_lines_file{"none"};
+  bool m_has_timing_corr{false};
+  std::array<std::array<TimingShape, AnalysisHists::n_timing_cent>, 2> m_timing_fc{};  // [R = 0.2, 0.3][class]
+  std::unordered_map<int, std::pair<double, double>> m_timing_lines;                   // run -> (a_run, b_run)
+
   std::vector<HighPtEvent> m_high_pt_events;
   std::map<std::string, int> m_ctr;
 
@@ -405,6 +441,12 @@ class JetAnalysisv3
   void setup_calo_mbd_cut();
 
   void setup_jes_z0();
+  void setup_timing_corr();
+  // timing model f_c(x) + a_run + b_run x of radius row r_idx and centrality class cls
+  double timing_model(size_t r_idx, size_t cls, double x, const std::pair<double, double> &line) const;
+  // index of the timing centrality class of cent, -1 if none; the last class includes its upper edge (centrality up
+  // to m_cent_high = 59.5)
+  static int timing_cent_class(double cent);
   double jet_pt_min(double radius) const { return radius < 0.25 ? m_jet_pt_min_r02 : m_jet_pt_min_r03; }
   double calib_pt(const JetData &jet_data, size_t idx, double radius) const;
 
@@ -778,6 +820,200 @@ double JetAnalysisv3::calib_pt(const JetData &jet_data, size_t idx, double radiu
   return z0 ? z0->Eval(jet_data.pt->at(idx)) : jet_data.pt_calib->at(idx);
 }
 
+void JetAnalysisv3::setup_timing_corr()
+{
+  auto is_none = [](const std::string &f) { return f.empty() || f == "none"; };
+  if (is_none(m_timing_fc_file) && is_none(m_timing_lines_file))
+  {
+    return;
+  }
+  if (is_none(m_timing_fc_file) || is_none(m_timing_lines_file))
+  {
+    throw std::runtime_error("Error: the timing correction needs both the f_c file and the per-run lines file");
+  }
+
+  std::cout << "Processing... setup_timing_corr" << std::endl;
+
+  // CSV rows of a file, without '#' comment lines; the first row is the header
+  auto read_rows = [](const std::string &path)
+  {
+    std::ifstream file(path);
+    if (!file)
+    {
+      throw std::runtime_error(std::format("Error: Could not open timing correction file: {}", path));
+    }
+    std::vector<std::vector<std::string>> rows;
+    std::string line;
+    while (std::getline(file, line))
+    {
+      if (!line.empty() && line.back() == '\r')
+      {
+        line.pop_back();  // CRLF line ends (Python's csv module)
+      }
+      if (line.empty() || line[0] == '#')
+      {
+        continue;
+      }
+      std::vector<std::string> fields;
+      std::stringstream ss(line);
+      std::string field;
+      while (std::getline(ss, field, ','))
+      {
+        fields.push_back(field);
+      }
+      rows.push_back(std::move(fields));
+    }
+    if (rows.size() < 2)
+    {
+      throw std::runtime_error(std::format("Error: no rows in timing correction file: {}", path));
+    }
+    return rows;
+  };
+  // column index of name in the header
+  auto column = [](const std::vector<std::string> &header, const std::string &name, const std::string &path)
+  {
+    auto it = std::ranges::find(header, name);
+    if (it == header.end())
+    {
+      throw std::runtime_error(std::format("Error: no column {} in {}", name, path));
+    }
+    return static_cast<size_t>(it - header.begin());
+  };
+  auto number = [](const std::string &s, const std::string &path)
+  {
+    try
+    {
+      return std::stod(s);
+    }
+    catch (const std::exception &)
+    {
+      throw std::runtime_error(std::format("Error: bad number '{}' in {}", s, path));
+    }
+  };
+
+  // f_c per (radius, centrality class)
+  {
+    const auto rows = read_rows(m_timing_fc_file);
+    const auto &hdr = rows[0];
+    const size_t i_r = column(hdr, "radius", m_timing_fc_file);
+    const size_t i_clo = column(hdr, "cent_lo", m_timing_fc_file);
+    const size_t i_chi = column(hdr, "cent_hi", m_timing_fc_file);
+    const size_t i_xlo = column(hdr, "x_lo", m_timing_fc_file);
+    const size_t i_xhi = column(hdr, "x_hi", m_timing_fc_file);
+    std::array<size_t, 5> i_c{};
+    for (size_t i = 0; i < i_c.size(); ++i)
+    {
+      i_c[i] = column(hdr, std::format("c{}", i), m_timing_fc_file);
+    }
+    for (size_t row = 1; row < rows.size(); ++row)
+    {
+      const auto &f = rows[row];
+      if (f.size() != hdr.size())
+      {
+        throw std::runtime_error(std::format("Error: row {} of {} has {} fields, expected {}", row, m_timing_fc_file, f.size(), hdr.size()));
+      }
+      size_t r_idx = 0;
+      if (f[i_r] == "r02")
+      {
+        r_idx = 0;
+      }
+      else if (f[i_r] == "r03")
+      {
+        r_idx = 1;
+      }
+      else
+      {
+        throw std::runtime_error(std::format("Error: unknown radius {} in {}", f[i_r], m_timing_fc_file));
+      }
+      const double clo = number(f[i_clo], m_timing_fc_file);
+      const double chi = number(f[i_chi], m_timing_fc_file);
+      auto cls = std::ranges::find(m_timing_cent_ranges, std::pair{clo, chi});
+      if (cls == m_timing_cent_ranges.end())
+      {
+        throw std::runtime_error(std::format("Error: centrality class {}-{} of {} is not a timing class", clo, chi, m_timing_fc_file));
+      }
+      auto &shape = m_timing_fc[r_idx][static_cast<size_t>(cls - m_timing_cent_ranges.begin())];
+      shape.x_lo = number(f[i_xlo], m_timing_fc_file);
+      shape.x_hi = number(f[i_xhi], m_timing_fc_file);
+      for (size_t i = 0; i < i_c.size(); ++i)
+      {
+        shape.c[i] = number(f[i_c[i]], m_timing_fc_file);
+      }
+      shape.set = true;
+    }
+    for (size_t r_idx = 0; r_idx < m_timing_fc.size(); ++r_idx)
+    {
+      for (size_t k = 0; k < m_timing_cent_ranges.size(); ++k)
+      {
+        const auto &s = m_timing_fc[r_idx][k];
+        if (!s.set)
+        {
+          throw std::runtime_error(std::format("Error: no f_c for R = 0.{}, {}-{}% in {}", r_idx + 2,
+                                               m_timing_cent_ranges[k].first, m_timing_cent_ranges[k].second, m_timing_fc_file));
+        }
+        std::cout << std::format("Timing f_c R = 0.{}, {}-{}%: x in [{:.3f}, {:.3f}], c = {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n",
+                                 r_idx + 2, m_timing_cent_ranges[k].first, m_timing_cent_ranges[k].second, s.x_lo, s.x_hi,
+                                 s.c[0], s.c[1], s.c[2], s.c[3], s.c[4]);
+      }
+    }
+  }
+
+  // per-run lines; runs without status "ok" get no line (their jets are counted, not corrected)
+  {
+    const auto rows = read_rows(m_timing_lines_file);
+    const auto &hdr = rows[0];
+    const size_t i_run = column(hdr, "run", m_timing_lines_file);
+    const size_t i_status = column(hdr, "status", m_timing_lines_file);
+    const size_t i_a = column(hdr, "a", m_timing_lines_file);
+    const size_t i_b = column(hdr, "b", m_timing_lines_file);
+    int skipped = 0;
+    for (size_t row = 1; row < rows.size(); ++row)
+    {
+      const auto &f = rows[row];
+      if (f.size() != hdr.size())
+      {
+        throw std::runtime_error(std::format("Error: row {} of {} has {} fields, expected {}", row, m_timing_lines_file, f.size(), hdr.size()));
+      }
+      const double a = number(f[i_a], m_timing_lines_file);
+      const double b = number(f[i_b], m_timing_lines_file);
+      if (f[i_status] != "ok" || !std::isfinite(a) || !std::isfinite(b))
+      {
+        ++skipped;
+        continue;
+      }
+      m_timing_lines[static_cast<int>(number(f[i_run], m_timing_lines_file))] = {a, b};
+    }
+    std::cout << std::format("Timing lines: {} runs from {} ({} rows without a line)\n", m_timing_lines.size(), m_timing_lines_file, skipped);
+  }
+
+  m_has_timing_corr = true;
+}
+
+double JetAnalysisv3::timing_model(size_t r_idx, size_t cls, double x, const std::pair<double, double> &line) const
+{
+  const auto &s = m_timing_fc[r_idx][cls];
+  const double xc = std::clamp(x, s.x_lo, s.x_hi);
+  double f = 0;
+  for (size_t i = s.c.size(); i-- > 0;)
+  {
+    f = f * xc + s.c[i];
+  }
+  return f + line.first + line.second * x;
+}
+
+int JetAnalysisv3::timing_cent_class(double cent)
+{
+  for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+  {
+    const auto [clo, chi] = m_timing_cent_ranges[i];
+    if (cent >= clo && (cent < chi || (i == m_timing_cent_ranges.size() - 1 && cent <= chi)))
+    {
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
 void JetAnalysisv3::init_hists()
 {
   int bins_pt = 500;
@@ -1030,6 +1266,38 @@ void JetAnalysisv3::init_hists()
                                          static_cast<int>(clo), static_cast<int>(chi));
         m_profiles2D[cname] = std::make_unique<TProfile2D>(cname.c_str(), ctitle.c_str(), 60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
       }
+
+      // Corrected versions: jet t - MBD t0 - timing model, same binning and selection as the uncorrected ones
+      if (m_has_timing_corr)
+      {
+        for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+        {
+          auto [lo, hi] = m_timing_pt_ranges[i];
+          std::string name = std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}_corr", r, static_cast<int>(lo), static_cast<int>(hi));
+          std::string title = std::format("Leading Jet, raw p_{{T}} {} - {} GeV; OHCal Energy Fraction; Jet t - MBD t_{{0}} - model [ns]", static_cast<int>(lo), static_cast<int>(hi));
+          m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), 60, -0.25, 1.25, 100, -25, 25);
+        }
+
+        std::string pcname = std::format("h2LeadJetTimeRawPt_{}_iternf_corr", r);
+        m_hists2D[pcname] = std::make_unique<TH2F>(pcname.c_str(), "Leading Jet; Jet raw p_{T} [GeV]; Jet t - MBD t_{0} - model [ns]", 90, 10, 100, 100, -25, 25);
+
+        // filled with the jets of the uncorrected profiles (|t - t0| < 25 ns), so the two compare jet by jet
+        for (const auto &[clo, chi] : m_timing_cent_ranges)
+        {
+          std::string cname = std::format("{}_cent_{}_{}_corr", p2name, static_cast<int>(clo), static_cast<int>(chi));
+          std::string ctitle = std::format("Leading Jet, {} - {}%, |t - t_{{0}}| < 25 ns; OHCal Energy Fraction; Jet raw p_{{T}} [GeV]; Jet t - MBD t_{{0}} - model [ns]",
+                                           static_cast<int>(clo), static_cast<int>(chi));
+          m_profiles2D[cname] = std::make_unique<TProfile2D>(cname.c_str(), ctitle.c_str(), 60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
+        }
+
+        std::string csname = std::format("hLeadJetTimingCorrStatus_{}_iternf", r);
+        m_hists1D[csname] = std::make_unique<TH1F>(csname.c_str(), "Leading jet timing correction, raw p_{T} 10 - 100 GeV; ; Events", 4, 0, 4);
+        const char *clabels[] = {"t and t0 finite", "Corrected", "No line for the run", "OHCal frac NaN or no class"};
+        for (int i = 0; i < 4; ++i)
+        {
+          m_hists1D[csname]->GetXaxis()->SetBinLabel(i + 1, clabels[i]);
+        }
+      }
     }
   }
 
@@ -1157,6 +1425,23 @@ void JetAnalysisv3::init_hists()
       {
         auto [clo, chi] = m_timing_cent_ranges[i];
         set->p2TimeOHCalFracRawPt_cent[i] = m_profiles2D[std::format("{}_cent_{}_{}", p2name, static_cast<int>(clo), static_cast<int>(chi))].get();
+      }
+
+      set->r_idx = (std::string_view(r) == "r02") ? 0 : 1;
+      if (m_has_timing_corr)
+      {
+        for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+        {
+          auto [lo, hi] = m_timing_pt_ranges[i];
+          set->h2TimeOHCalFracCorr[i] = m_hists2D[std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}_corr", r, static_cast<int>(lo), static_cast<int>(hi))].get();
+        }
+        set->h2TimeRawPtCorr = m_hists2D[std::format("h2LeadJetTimeRawPt_{}_iternf_corr", r)].get();
+        for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+        {
+          auto [clo, chi] = m_timing_cent_ranges[i];
+          set->p2TimeOHCalFracRawPtCorr_cent[i] = m_profiles2D[std::format("{}_cent_{}_{}_corr", p2name, static_cast<int>(clo), static_cast<int>(chi))].get();
+        }
+        set->hCorrStatus = m_hists1D[std::format("hLeadJetTimingCorrStatus_{}_iternf", r)].get();
       }
     }
   }
@@ -1378,6 +1663,12 @@ void JetAnalysisv3::process_jets()
     }
 
     const double t = jd.t->at(static_cast<size_t>(lead));
+    const double frac = jd.ohcal_frac->at(static_cast<size_t>(lead));
+    const int cls = timing_cent_class(m_event_data.centrality);
+
+    // corrected time t - t0 - model, NaN when the correction is off or cannot be applied (set for raw pT 10 - 100 GeV,
+    // which contains the 15 - 40 GeV of the TH2s below)
+    double dt_corr = std::numeric_limits<double>::quiet_NaN();
 
     // raw pT 10 - 100 GeV
     if (lead_pt >= 10 && lead_pt < 100)
@@ -1389,20 +1680,36 @@ void JetAnalysisv3::process_jets()
         const double dt = t - m_event_data.t0;
         h.h2TimeRawPt->Fill(lead_pt, dt);
 
+        if (h.hCorrStatus)
+        {
+          h.hCorrStatus->Fill(0.5);
+          const auto line = m_timing_lines.find(m_event_data.run);
+          if (line == m_timing_lines.end())
+          {
+            h.hCorrStatus->Fill(2.5);
+          }
+          else if (!std::isfinite(frac) || cls < 0)
+          {
+            h.hCorrStatus->Fill(3.5);
+          }
+          else
+          {
+            h.hCorrStatus->Fill(1.5);
+            dt_corr = dt - timing_model(h.r_idx, static_cast<size_t>(cls), frac, line->second);
+            h.h2TimeRawPtCorr->Fill(lead_pt, dt_corr);
+          }
+        }
+
         // Profile vs (OHCal fraction, raw pT); the same |dt| window as the TH2 axes (the profile has no t range)
-        const double frac = jd.ohcal_frac->at(static_cast<size_t>(lead));
         if (std::isfinite(frac) && std::abs(dt) < m_timing_dt_max)
         {
           h.p2TimeOHCalFracRawPt->Fill(frac, lead_pt, dt);
-          const double cent = m_event_data.centrality;
-          for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+          if (cls >= 0)
           {
-            const auto [clo, chi] = m_timing_cent_ranges[i];
-            // the last class includes its upper edge (centrality up to m_cent_high = 59.5)
-            if (cent >= clo && (cent < chi || (i == m_timing_cent_ranges.size() - 1 && cent <= chi)))
+            h.p2TimeOHCalFracRawPt_cent[static_cast<size_t>(cls)]->Fill(frac, lead_pt, dt);
+            if (std::isfinite(dt_corr))
             {
-              h.p2TimeOHCalFracRawPt_cent[i]->Fill(frac, lead_pt, dt);
-              break;
+              h.p2TimeOHCalFracRawPtCorr_cent[static_cast<size_t>(cls)]->Fill(frac, lead_pt, dt_corr);
             }
           }
         }
@@ -1420,7 +1727,6 @@ void JetAnalysisv3::process_jets()
     }
     h.hStatus->Fill(0.5);
 
-    const double frac = jd.ohcal_frac->at(static_cast<size_t>(lead));
     if (!std::isfinite(t))
     {
       h.hStatus->Fill(2.5);
@@ -1440,6 +1746,10 @@ void JetAnalysisv3::process_jets()
       if (lead_pt >= lo && lead_pt < hi)
       {
         h.h2TimeOHCalFrac[i]->Fill(frac, dt);
+        if (std::isfinite(dt_corr))
+        {
+          h.h2TimeOHCalFracCorr[i]->Fill(frac, dt_corr);
+        }
       }
     }
   };
@@ -1899,9 +2209,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 15)
+  if (argc < 3 || argc > 17)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut] [jes_z0_file] [iter_is_noflow]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [jet_pt_min] [output_directory] [verbosity] [do_iter] [do_mult] [do_unsub] [do_rcone] [lead_jet_pt_threshold] [sigma_cut] [jes_z0_file] [iter_is_noflow] [timing_fc_file] [timing_lines_file]" << std::endl;
     return 1;
   }
 
@@ -1920,6 +2230,8 @@ int main(int argc, const char *const argv[])
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   std::string jes_z0_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
   bool iter_is_noflow = (argc >= ctr + 1) ? (std::atoi(argv[ctr++]) != 0) : true;
+  std::string timing_fc_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
+  std::string timing_lines_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -1937,6 +2249,8 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   std::cout << std::format("JES Z0 File: {}\n", (jes_z0_file.empty() || jes_z0_file == "none") ? "none (stored eta-binned pt_calib)" : jes_z0_file);
   std::cout << std::format("Iter Is NoFlow: {}\n", iter_is_noflow);
+  std::cout << std::format("Timing f_c File: {}\n", timing_fc_file);
+  std::cout << std::format("Timing Lines File: {}\n", timing_lines_file);
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -1952,6 +2266,7 @@ int main(int argc, const char *const argv[])
     analysis.set_sigma_cut(sigma_cut);
     analysis.set_jes_z0_file(jes_z0_file);
     analysis.set_iter_is_noflow(iter_is_noflow);
+    analysis.set_timing_corr_files(timing_fc_file, timing_lines_file);
     analysis.run();
   }
   catch (const std::exception &e)

@@ -31,6 +31,12 @@ def run_jet_jobs(args, version):
         manager.add_file_to_check(args.calo_mbd_list)
         if args.jes_z0_file:
             manager.add_file_to_check(args.jes_z0_file)
+        if bool(args.timing_fc_file) != bool(args.timing_lines_file):
+            manager.logger.critical("The timing correction needs both --timing-fc-file and --timing-lines-file")
+            sys.exit(1)
+        for timing_file in (args.timing_fc_file, args.timing_lines_file):
+            if timing_file:
+                manager.add_file_to_check(timing_file)
     elif version == "jetJES":
         # p+p MC trees (Fun4All_PP_JES) have no Calo-MBD selection
         if not args.pp:
@@ -78,6 +84,8 @@ def run_jet_jobs(args, version):
         init_log['Sigma Cut'] = args.sigma_cut
         init_log['Iter Is NoFlow'] = args.iter_is_noflow
         init_log['JES Z0 File'] = Path(args.jes_z0_file).resolve() if args.jes_z0_file else "Not Provided (Using stored eta-binned pt_calib)"
+        init_log['Timing f_c File'] = Path(args.timing_fc_file).resolve() if args.timing_fc_file else "Not Provided (no timing correction)"
+        init_log['Timing Lines File'] = Path(args.timing_lines_file).resolve() if args.timing_lines_file else "Not Provided (no timing correction)"
     elif version == "jetJES":
         # the jet pT is not cut on, the response is filled for every matched truth jet
         del init_log['Jet pT Min']
@@ -196,7 +204,9 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {jet_eta_max} {manager.output_dir}/output"
         queue_arg = "input_tree_list from jobs.list"
     elif version == "jetAnav3":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow}"
+        # the timing correction files are read in place by the jobs: pass absolute paths
+        timing_files = " ".join(str(Path(f).resolve()) if f else "none" for f in (args.timing_fc_file, args.timing_lines_file))
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow} {timing_files}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetJES":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {1 if args.pp else 0}"
@@ -263,6 +273,8 @@ def setup_jetAna_subparsers(subparsers):
     jetAnav3.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
     jetAnav3.add_argument('--jes-z0-file', type=str, default=None, help='Legacy JES payload (JES_Calib_Default); recalibrates the raw jet pT with its eta-averaged R0X_Z0 function instead of the stored eta-binned pt_calib. (Optional)')
     jetAnav3.add_argument('--iter-is-noflow', type=int, default=1, help='Treat the stored iter branches as the no-flow (iternf) version and ignore flow inputs (psi2, calo_v2, flow failure, mult). Default: 1')
+    jetAnav3.add_argument('--timing-fc-file', type=str, default=None, help='Leading jet timing correction: f_c(x) per radius and centrality class (timing_correction_iternf.csv of plot_jet_iternf_timing.py). With --timing-lines-file, fills the *_corr timing hists. (Optional)')
+    jetAnav3.add_argument('--timing-lines-file', type=str, default=None, help='Leading jet timing correction: per-run lines a_run, b_run (per_run_lines_r03_iternf.csv of plot_jet_iternf_timing.py). (Optional)')
     jetAnav3.set_defaults(func=jetAnav3_jobs)
 
     jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay or p+p MC JES, all pT-hat samples of the input list in one submission).')
