@@ -72,7 +72,7 @@ EVENT_INFO = (
 TIME_LABEL = r"Jet $t - t_{0}^{\mathrm{MBD}}$ [ns]"
 CORR_LABEL = r"$t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$ [ns]"
 FRAC_LABEL = r"OHCal Energy Fraction $x$"
-POINTS_NOTE = r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs combined"
+POINTS_NOTE = r"points: $t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs combined"
 
 
 def pt_hist_name(r_tag):
@@ -1180,7 +1180,7 @@ def main():
         plot_profiles(Pr["xc"], Pr["fit"], Mr["per_pt"], Mr["x_pt"], r_tag, ylim_p, rlim_p,
                       bdir / f"baseline_pt_{name}.png", mode="model", header=(runs, lumi), colors=PT_SPLIT_COLORS,
                       ylabel=CORR_LABEL, res_label=r"Data $-\ \langle f_{c}(x)\rangle$ [ns]",
-                      note=r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs and classes combined" "\n"
+                      note=r"points: $t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs and classes combined" "\n"
                            r"lines: $f_{c}(x)$ averaged over the jets of each $p_{T}$ bin", save_pdf=args.save_pdf)
         plot_grid(Pr["xc"], Mr["by_class"], cent_names, pt_names, PT_SPLIT_COLORS, Mr["x_pt"], r_tag, rlim_p, runs, lumi,
                   bdir / f"baseline_pt_fcx_{name}.png", panel_fn=fc_fn,
