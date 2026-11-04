@@ -38,7 +38,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-from matplotlib.ticker import LogLocator
+from matplotlib.ticker import LogLocator, MaxNLocator
 import mplhep as hep
 
 from plot_jet_bkgsub_compare import save_fig
@@ -84,6 +84,16 @@ LADDER = (
 )
 LADDER_COLORS = {"M1": "#7f7f7f", "M2": "#377eb8", "M3": "#4daf4a", "M4a": "#ff7f00", "M4b": "#984ea3", "M5": "#e41a1c"}
 FINAL = "M5"
+
+# The baseline: one f(x) fitted to the run-combined 15-40 GeV profile, no run, pT or centrality dependence
+BASELINE_DEG = 4
+# Example runs for the baseline's run dependence (R = 0.3 lines): a = +0.52, b = +0.53 ns; a = -0.56, b = +0.45 ns
+# (same slope, opposite offsets); a = +0.05, b = -0.67 ns (no offset, opposite slope). All have > 0.6 M jets.
+EXAMPLE_RUNS = (75143, 73841, 78470)
+EXAMPLE_COLORS = ("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628")
+BASELINE_MIN_RUN_JETS = 20                        # min jets in a run's x bin for it to be drawn
+PT_SPLIT = ((15, 20), (20, 30), (30, 40))         # raw pT bins of the baseline's pT step [GeV]
+PT_SPLIT_COLORS = ("#1b7837", "#e08214", "#762a83")
 
 
 def pt_hist_name(r_tag):
@@ -638,6 +648,506 @@ def plot_timing(values, xedges, yedges, prof_raw, corr_x, model_x, runs, r_tag, 
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# Plot 2b: the baseline, one f(x) fitted to the run-combined 15-40 GeV profile
+# ---------------------------------------------------------------------------------------------------------------------
+
+def pt_bins_in(ptedges, pt=TIMING_PT):
+    """Mask of the profile's raw pT bins inside [pt0, pt1); warns if the range does not fall on bin edges."""
+    sel = (ptedges[:-1] >= pt[0]) & (ptedges[1:] <= pt[1])
+    lo, hi = ptedges[:-1][sel].min(), ptedges[1:][sel].max()
+    if not (np.isclose(lo, pt[0]) and np.isclose(hi, pt[1])):
+        print(f"Warning: raw pT {pt} is not on the profile bin edges, using {lo:g}-{hi:g} GeV")
+    return sel
+
+
+def fit_baseline(mean, err, neff, xc, min_jets):
+    """Weighted polynomial fit of degree BASELINE_DEG to a profile, over the x bins with >= min_jets jets."""
+    ok = np.isfinite(mean) & np.isfinite(err) & (err > 0) & (neff >= min_jets)
+    coef = np.polyfit(xc[ok], mean[ok], BASELINE_DEG, w=1.0 / err[ok])
+    chi2 = float((((mean[ok] - np.polyval(coef, xc[ok])) / err[ok]) ** 2).sum())
+    xw = 0.5 * (xc[1] - xc[0])
+    return {"coef": coef, "chi2": chi2, "ndf": int(ok.sum()) - BASELINE_DEG - 1,
+            "x_range": (float(xc[ok].min() - xw), float(xc[ok].max() + xw))}
+
+
+def plot_baseline_grid(xc, panels, panel_names, entry_names, colors, x_show, r_tag, rlim, runs, lumi, output_path,
+                       save_pdf=False, entry_coef=None, panel_coef=None, panel_curve_names=None, fitted=False,
+                       res_label=r"Data $-$ model [ns]", lines_txt=""):
+    """B6b-d: a row of panels (centrality classes or pT bins), each with several profiles of t - a_run - b_run x (runs
+    pooled, lines fixed) and their model, with data - model below.
+
+    panels[i][j]: dict mean, err, ok (and deg when fitted). The model of entry (i, j) is entry_coef[i][j], its own
+    curve drawn in its colour over its points (None: too few bins, points only), or panel_coef[i], one black curve per
+    panel. fitted: the entry curves were fitted to these points (chi2/ndf, ndf = N - degree - 1), otherwise chi2/N.
+    """
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    nP = len(panels)
+    fig, axes = plt.subplots(2, nP, figsize=(18, 8.5), sharex=True, sharey="row",
+                             gridspec_kw={"height_ratios": [2, 1], "hspace": 0.05, "wspace": 0.04})
+    hw = 0.5 * (xc[1] - xc[0])
+    lows, highs = [], []
+    for i in range(nP):
+        ax, axr = axes[0, i], axes[1, i]
+        axr.axhline(0.0, color="black", linewidth=1.5)
+        n = len(panels[i])
+        for j, (e, color, name) in enumerate(zip(panels[i], colors, entry_names)):
+            ok = e["ok"]
+            if not ok.any():
+                continue
+            x = xc[ok] + 0.004 * (j - (n - 1) / 2)              # small offsets so the entries do not hide each other
+            good = e["err"][ok] < 0.3
+            if good.any():
+                lows.append(e["mean"][ok][good].min())
+                highs.append(e["mean"][ok][good].max())
+            coef = entry_coef[i][j] if entry_coef is not None else panel_coef[i]
+            if coef is None:
+                ax.errorbar(x, e["mean"][ok], yerr=e["err"][ok], fmt="o", color=color, markersize=3.5, capsize=0,
+                            linewidth=1.0, label=f"{name}: too few bins to fit", zorder=3)
+                continue
+            if entry_coef is not None:
+                xo = np.linspace(xc[ok].min() - hw, xc[ok].max() + hw, 300)
+                ax.plot(xo, np.polyval(coef, xo), "-", color=color, linewidth=1.8, zorder=2)
+            d = e["mean"][ok] - np.polyval(coef, xc[ok])
+            chi2 = float(((d / e["err"][ok]) ** 2).sum())
+            if fitted:
+                deg_txt = "" if e["deg"] == BASELINE_DEG else f" (degree {e['deg']})"
+                label = rf"{name}: $\chi^{{2}}/\mathrm{{ndf}}$ = {chi2:.0f}/{int(ok.sum()) - e['deg'] - 1}{deg_txt}"
+            else:
+                label = rf"{name}: $\chi^{{2}}/N$ = {chi2:.0f}/{int(ok.sum())}"
+            ax.errorbar(x, e["mean"][ok], yerr=e["err"][ok], fmt="o", color=color, markersize=3.5, capsize=0,
+                        linewidth=1.0, zorder=3, label=label)
+            axr.errorbar(x, d, yerr=e["err"][ok], fmt="o", color=color, markersize=3.5, capsize=0, linewidth=1.0,
+                         zorder=3)
+        if panel_coef is not None:                         # one curve per panel, over the panel's points
+            shown = np.any([e["ok"] for e in panels[i]], axis=0)
+            xo = np.linspace(xc[shown].min() - hw, xc[shown].max() + hw, 300)
+            ax.plot(xo, np.polyval(panel_coef[i], xo), "-", color="black", linewidth=1.8, zorder=2,
+                    label=panel_curve_names[i])
+        ax.legend(loc="lower left", fontsize=10, frameon=False)
+        ax.text(0.05, 0.95, panel_names[i], transform=ax.transAxes, ha="left", va="top", fontsize=16)
+        axr.set_xlabel(FRAC_LABEL, fontsize=16)
+    lo, hi = min(lows), max(highs)
+    axes[0, 0].set_ylim(lo - 0.55 * (hi - lo), hi + 0.45 * (hi - lo))
+    axes[1, 0].set_ylim(-rlim, rlim)
+    axes[0, 0].set_xlim(*x_show)
+    axes[0, 0].set_ylabel(r"$t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$ [ns]")
+    axes[1, 0].set_ylabel(res_label)
+    axes[1, 0].xaxis.set_major_locator(MaxNLocator(nbins=6, prune="both"))   # shared x: no clash at the panel edges
+    axes[0, 1].text(0.05, 0.26 if panel_coef is not None else 0.22,
+                    r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs combined" "\n" + lines_txt,
+                    transform=axes[0, 1].transAxes, ha="left", va="bottom", fontsize=11)
+    axes[0, -1].text(0.96, 0.95, timing_info(meta["eta_max"]), transform=axes[0, -1].transAxes, ha="right", va="top",
+                     fontsize=10)
+    add_header(axes[0, -1], runs, meta["r"], lumi)
+    plt.subplots_adjust(left=0.07, right=0.98, bottom=0.10, top=0.95)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def fit_run_lines(mom_r, xc, f_x, sigma, in_range, min_jets):
+    """Per run, the line a + b x fitted to (run profile - f(x)) with f fixed, by weighted least squares.
+
+    mom_r: (n_runs, 4, n_x) profile moments. A bin's error is sigma_x / sqrt(n_run_x), sigma_x the pooled time RMS;
+    bins inside in_range with >= min_jets jets are used. a, b are nan for runs with < 3 such bins.
+    Returns dict a, b, a_err, b_err, chi2 (n_runs,) and ok (n_runs, n_x).
+    """
+    s0, s1, sw2 = mom_r[:, 0], mom_r[:, 1], mom_r[:, 3]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        y = s1 / s0
+        n = np.where(sw2 > 0, s0 ** 2 / sw2, 0.0)
+        w = n / sigma[None, :] ** 2
+    ok = in_range[None, :] & (n >= min_jets) & np.isfinite(y) & np.isfinite(w) & (w > 0)
+    w = np.where(ok, w, 0.0)
+    d = np.where(ok, y - f_x[None, :], 0.0)
+    S0, S1, S2 = w.sum(1), (w * xc).sum(1), (w * xc ** 2).sum(1)
+    T0, T1 = (w * d).sum(1), (w * xc * d).sum(1)
+    det = S0 * S2 - S1 ** 2
+    good = (ok.sum(1) >= 3) & (det > 0)
+    det = np.where(good, det, 1.0)
+    a = np.where(good, (S2 * T0 - S1 * T1) / det, np.nan)
+    b = np.where(good, (S0 * T1 - S1 * T0) / det, np.nan)
+    chi2 = (w * (d - np.nan_to_num(a)[:, None] - np.nan_to_num(b)[:, None] * xc) ** 2).sum(1)
+    return {"a": a, "b": b, "a_err": np.sqrt(np.where(good, S2 / det, np.nan)),
+            "b_err": np.sqrt(np.where(good, S0 / det, np.nan)), "chi2": np.where(good, chi2, np.nan), "ok": ok}
+
+
+def baseline_fit_label():
+    return rf"$f(x)$: polynomial of degree {BASELINE_DEG} fitted to the profile"
+
+
+def plot_baseline(values, xedges, yedges, xc, prof, fit, runs, r_tag, lumi, output_path, time_ylim=None, save_pdf=False):
+    """B1: the 15-40 GeV TH2 with the run-combined profile and the baseline fit f(x)."""
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    fig, ax = plt.subplots(figsize=(9, 7))
+    z = np.where(values > 0, values, np.nan)
+    pcm = ax.pcolormesh(xedges, yedges, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
+    cbar = fig.colorbar(pcm, ax=ax, pad=0.02)
+    cbar.set_label("Counts")
+
+    mean, err = prof
+    ok = np.isfinite(mean)
+    ax.errorbar(xc[ok], mean[ok], yerr=np.nan_to_num(err[ok]), fmt="o", color="black", markersize=4, capsize=0,
+                linewidth=1.2, label="Profile", zorder=3)
+    xs = np.linspace(*fit["x_range"], 300)
+    ax.plot(xs, np.polyval(fit["coef"], xs), "-", color="#e41a1c", linewidth=2, label=baseline_fit_label(), zorder=4)
+
+    ax.set_xlim(xedges[0], xedges[-1])
+    ax.set_ylim(*(time_ylim if time_ylim is not None else (yedges[0], yedges[-1])))
+    ax.set_xlabel(FRAC_LABEL)
+    ax.set_ylabel(TIME_LABEL)
+    box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3)
+    add_header(ax, runs, meta["r"], lumi)
+    ax.text(0.97, 0.97, timing_info(meta["eta_max"]), transform=ax.transAxes, ha="right", va="top", fontsize=12, bbox=box)
+    ax.legend(loc="upper left", fontsize=11, frameon=True, framealpha=0.8, edgecolor="none")
+    plt.subplots_adjust(left=0.13, right=0.97, bottom=0.12, top=0.94)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_baseline_runs(xc, fit, per_run, x_show, r_tag, ylim, rlim, output_path, save_pdf=False, with_lines=False,
+                       header=None, colors=EXAMPLE_COLORS, ylabel=TIME_LABEL, res_label=r"Run $-\ f(x)$ [ns]", note=None):
+    """B2: the 15-40 GeV profiles of a few runs with the run-combined fit f(x), and run - f(x) below.
+
+    with_lines (B3): each run is compared with f(x) + a_run + b_run x, its line fitted to its own profile with f fixed.
+    Also used for B4 (entries = centrality classes, each with a 'name'). header: (runs, lumi) for the header line,
+    default the entries' runs. x_show: the x range drawn, where the entries have points.
+    """
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    fig, (ax, axr) = plt.subplots(2, 1, figsize=(9, 8.5), sharex=True,
+                                  gridspec_kw={"height_ratios": [2, 1], "hspace": 0.05})
+    xs = np.linspace(*x_show, 300)
+    f_xs = np.polyval(fit["coef"], xs)
+    ax.plot(xs, f_xs, "-" if not with_lines else "--", color="black" if not with_lines else "gray",
+            linewidth=2 if not with_lines else 1.5,
+            label=rf"$f(x)$, fitted to all {fit['n_runs']} runs combined", zorder=2)
+    axr.axhline(0.0, color="black", linewidth=1.5)
+    n = len(per_run)
+    for i, (pr, color) in enumerate(zip(per_run, colors)):
+        ok = pr["ok"]
+        name = pr.get("name", f"Run {pr.get('run')}")
+        x = xc[ok] + 0.004 * (i - (n - 1) / 2)              # small offsets so the runs do not hide each other
+        model = np.polyval(fit["coef"], xc[ok])
+        if with_lines and "model" in pr:                 # B6/B7: a model value per x bin (averaged over the jets)
+            model = pr["model"][ok]
+            ax.plot(xc[ok], model, "-", color=color, linewidth=1.8, zorder=2)
+            label = rf"{name}: $\chi^{{2}}/N$ = {pr['chi2_m']:.0f}/{pr['ndf_m']}"
+        elif with_lines and "coef" in pr:                # B5: the entry's own shape f_c(x)
+            model = np.polyval(pr["coef"], xc[ok])
+            hw = 0.5 * (xc[1] - xc[0])                   # drawn over the entry's own points: unconstrained outside
+            xo = np.linspace(xc[ok].min() - hw, xc[ok].max() + hw, 300)
+            ax.plot(xo, np.polyval(pr["coef"], xo), "-", color=color, linewidth=1.8, zorder=2)
+            label = rf"{name}: $\chi^{{2}}/\mathrm{{ndf}}$ = {pr['chi2_own']:.0f}/{pr['ndf'] - BASELINE_DEG - 1}"
+        elif with_lines:
+            model = model + pr["a"] + pr["b"] * xc[ok]
+            ax.plot(xs, f_xs + pr["a"] + pr["b"] * xs, "-", color=color, linewidth=1.8, zorder=2)
+            label = (rf"{name}: $a$ = {pr['a']:+.2f}, $b$ = {pr['b']:+.2f} ns, "
+                     rf"$\chi^{{2}}/\mathrm{{ndf}}$ = {pr['chi2_line']:.0f}/{pr['ndf'] - 2}")
+        else:
+            label = rf"{name}: $\chi^{{2}}/\mathrm{{ndf}}$ = {pr['chi2']:.0f}/{pr['ndf']}"
+        ax.errorbar(x, pr["mean"][ok], yerr=pr["err"][ok], fmt="o", color=color, markersize=4, capsize=0, linewidth=1.0,
+                    label=label, zorder=3)
+        axr.errorbar(x, pr["mean"][ok] - model, yerr=pr["err"][ok], fmt="o", color=color,
+                     markersize=4, capsize=0, linewidth=1.0, zorder=3)
+    ax.set_xlim(*x_show)
+    ax.set_ylim(*ylim)
+    axr.set_ylim(-rlim, rlim)
+    ax.set_ylabel(ylabel)
+    if with_lines and note is None:
+        note = r"lines: $f(x) + a_{\mathrm{run}} + b_{\mathrm{run}}\,x$, $a$ and $b$ fitted per run"
+    if note is not None:
+        ax.text(0.03, 0.30 + 0.045 * max(0, len(per_run) - 3), note,
+                transform=ax.transAxes, ha="left", va="bottom", fontsize=11)
+    axr.set_ylabel(res_label if not with_lines or "coef" in per_run[0] or "model" in per_run[0]
+                   else r"Run $-$ model [ns]")
+    axr.set_xlabel(FRAC_LABEL)
+    ax.legend(loc="lower left", fontsize=11, frameon=False)
+    ax.text(0.97, 0.97, timing_info(meta["eta_max"]), transform=ax.transAxes, ha="right", va="top", fontsize=12)
+    h_runs, h_lumi = header if header is not None else ([pr["run"] for pr in per_run], None)
+    add_header(ax, h_runs, meta["r"], h_lumi)
+    plt.subplots_adjust(left=0.13, right=0.97, bottom=0.10, top=0.95)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def make_baseline(loaded, t_sum, runs, lumi, args, bdir):
+    """The baseline: f(x) of degree BASELINE_DEG fitted to the run-combined 15-40 GeV profile (B1), and the profiles of
+    the example runs against it (B2), which show the run dependence it misses.
+
+    The profiles come from the TProfile2D moments (exact means), summed over the centrality classes and the 15-40 GeV
+    pT bins. A run's bin error is the pooled time RMS of the bin over sqrt(jets of the run in the bin), as in the model fit.
+    Needs the per-run p2_mom, so it runs before the cells are built.
+    """
+    ex_runs = [r for r in args.example_runs if r in loaded]
+    if len(ex_runs) < len(args.example_runs):
+        print(f"Warning: example run(s) not loaded, skipped: {sorted(set(args.example_runs) - set(ex_runs))}")
+    results = {}
+    for r_tag in args.radii:
+        ref = loaded[runs[0]][r_tag]
+        xc = 0.5 * (ref["p2_xedges"][:-1] + ref["p2_xedges"][1:])
+        sel = pt_bins_in(ref["p2_ptedges"])
+        momk = np.stack([loaded[r][r_tag]["p2_mom"][:, :, sel].sum(axis=2) for r in runs])    # (n_runs, 4, n_cent, n_x)
+        mom_r = momk.sum(axis=2)                                                              # (n_runs, 4, n_x)
+        pooled = mom_r.sum(axis=0)
+        mean, err, neff = profile_from_moments(pooled)
+        fit = fit_baseline(mean, err, neff, xc, args.min_cell_entries)
+        fit["n_runs"] = len(runs)
+        print(f"{r_tag}: baseline f(x) (degree {BASELINE_DEG}) on the combined {TIMING_PT[0]}-{TIMING_PT[1]} GeV profile: "
+              f"chi2/ndf = {fit['chi2']:.0f}/{fit['ndf']}, x range {fit['x_range'][0]:.3f}-{fit['x_range'][1]:.3f}, "
+              f"coefficients (x^0..x^{BASELINE_DEG}) " + " ".join(f"{c:+.4f}" for c in fit["coef"][::-1]))
+        plot_baseline(t_sum[r_tag], ref["t_xedges"], ref["t_yedges"], xc, (mean, err), fit, runs, r_tag, lumi,
+                      bdir / f"baseline_{timing_hist_name(r_tag)}.png", time_ylim=args.time_ylim, save_pdf=args.save_pdf)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sigma = np.sqrt(np.clip(pooled[2] / pooled[0] - mean ** 2, 0, None))
+        in_range = (xc >= fit["x_range"][0]) & (xc <= fit["x_range"][1])
+        f_x = np.polyval(fit["coef"], xc)
+        lines = fit_run_lines(mom_r, xc, f_x, sigma, in_range, BASELINE_MIN_RUN_JETS)
+        good = np.isfinite(lines["a"])
+        wr = np.where(good, mom_r[:, 0].sum(1), 0.0)
+        print(f"{r_tag}: baseline lines (f fixed) for {good.sum()}/{len(runs)} runs "
+              f"({wr.sum() / mom_r[:, 0].sum():.4f} of the {TIMING_PT[0]}-{TIMING_PT[1]} GeV jets); jet-weighted mean "
+              f"a = {np.average(lines['a'][good], weights=wr[good]):+.4f}, b = {np.average(lines['b'][good], weights=wr[good]):+.4f} ns")
+        # B9: the baseline's per-run lines vs run, as D2, and their table
+        rows_l = [{"run": run, "jets": float(wr[i]), "n_bins": int(lines["ok"][i].sum()),
+                   "a": float(lines["a"][i]), "b": float(lines["b"][i]), "a_err": float(lines["a_err"][i]),
+                   "b_err": float(lines["b_err"][i]), "chi2": float(lines["chi2"][i])}
+                  for i, run in enumerate(runs) if good[i]]
+        write_csv(rows_l, list(rows_l[0].keys()), bdir / f"baseline_lines_{r_tag}_iternf.csv")
+        note_l = (r"Baseline: $f(x) + a_{\mathrm{run}} + b_{\mathrm{run}}\,x$, $f$ fixed, "
+                  rf"raw $p_{{T}}$ {TIMING_PT[0]}–{TIMING_PT[1]} GeV")
+        lumi_l = lumi if good.all() else None             # the luminosity label only when every run has a line
+        plot_lines_runs(rows_l, r_tag, lumi_l, bdir / f"baseline_lines_{r_tag}_iternf.png", args.save_pdf, note=note_l)
+        for lo, hi in args.zoom_runs:
+            plot_lines_runs(rows_l, r_tag, lumi_l, bdir / f"baseline_lines_{r_tag}_iternf_runs{lo}_{hi}.png",
+                            args.save_pdf, run_range=(lo, hi), note=note_l)
+        per_run = []
+        for run in ex_runs:
+            i = runs.index(run)
+            m, ok = mom_r[i], lines["ok"][i]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                rm = m[1] / m[0]
+                re_ = sigma / np.sqrt(np.where(m[3] > 0, m[0] ** 2 / m[3], 0.0))
+            d = rm[ok] - f_x[ok]
+            chi2 = float(((d / re_[ok]) ** 2).sum())
+            a, b = lines["a"][i], lines["b"][i]
+            per_run.append({"run": run, "mean": rm, "err": re_, "ok": ok, "chi2": chi2, "ndf": int(ok.sum()),
+                            "a": float(a), "b": float(b), "chi2_line": float(lines["chi2"][i])})
+            print(f"{r_tag}: run {run}: {m[0].sum():.0f} jets at {TIMING_PT[0]}-{TIMING_PT[1]} GeV, run - f(x) "
+                  f"chi2/ndf = {chi2:.0f}/{ok.sum()}; with its line a = {a:+.3f} +- {lines['a_err'][i]:.3f}, "
+                  f"b = {b:+.3f} +- {lines['b_err'][i]:.3f} ns: chi2/ndf = {lines['chi2'][i]:.1f}/{ok.sum() - 2}")
+
+        # B4: per centrality class, the profile of t - a_run - b_run x pooled over the runs, against f(x)
+        def corrected(ln):
+            """Per class, moments of t - a_run - b_run x summed over the runs with a line: (4, n_cent, n_x)."""
+            gd = np.isfinite(ln["a"])
+            g = gd.astype(float)[:, None, None]
+            L = np.where(gd[:, None], ln["a"][:, None] + ln["b"][:, None] * xc[None, :], 0.0)[:, None, :]
+            s0, s1, s2, sw2 = (momk[:, i] * g for i in range(4))                   # (n_runs, n_cent, n_x)
+            return np.stack([s0.sum(0), (s1 - L * s0).sum(0), (s2 - 2 * L * s1 + L ** 2 * s0).sum(0), sw2.sum(0)])
+        corr = corrected(lines)
+        pt_sum = sum(loaded[r][r_tag]["p2_mom"][0][:, sel].sum(-1) for r in runs)  # (n_cent, n_pt in range)
+        pc = 0.5 * (ref["p2_ptedges"][:-1] + ref["p2_ptedges"][1:])[sel]
+        per_cent = []
+        for k, cmom in enumerate([corr[:, k] for k in range(len(CENT_CLASSES))] + [corr.sum(axis=1)]):
+            cm, ce, cn = profile_from_moments(cmom)
+            ok = in_range & (cmom[0] >= args.min_cell_entries) & np.isfinite(cm) & np.isfinite(ce) & (ce > 0)
+            d = cm[ok] - f_x[ok]
+            chi2 = float(((d / ce[ok]) ** 2).sum())
+            name = cent_label(k) if k < len(CENT_CLASSES) else "0–60% (all classes)"
+            per_cent.append({"name": name, "mean": cm, "err": ce, "ok": ok, "chi2": chi2, "ndf": int(ok.sum())})
+            mpt = (f", <raw pT> = {(pt_sum[k] * pc).sum() / pt_sum[k].sum():.2f} GeV" if k < len(CENT_CLASSES)
+                   else f", <raw pT> = {(pt_sum.sum(0) * pc).sum() / pt_sum.sum():.2f} GeV")
+            print(f"{r_tag}: {name}: {cmom[0].sum():.0f} jets{mpt}; t - a - b x vs f(x): chi2/ndf = {chi2:.0f}/{ok.sum()}, "
+                  f"mean {np.average(d, weights=cmom[0][ok]):+.3f} ns")
+
+        # B5: each class with its own f_c(x) (degree BASELINE_DEG), fitted to its corrected profile with the lines fixed
+        nK = len(CENT_CLASSES)
+        for k in range(nK):
+            e = per_cent[k]
+            ok = e["ok"]
+            e["coef"] = np.polyfit(xc[ok], e["mean"][ok], BASELINE_DEG, w=1.0 / e["err"][ok])
+            e["chi2_own"] = float((((e["mean"][ok] - np.polyval(e["coef"], xc[ok])) / e["err"][ok]) ** 2).sum())
+            print(f"{r_tag}: {e['name']}: own f_c(x): chi2/ndf = {e['chi2_own']:.0f}/{ok.sum() - BASELINE_DEG - 1}, "
+                  f"jet-weighted |class - f_c| = {np.average(np.abs(e['mean'][ok] - np.polyval(e['coef'], xc[ok])), weights=corr[0, k][ok]):.4f} ns")
+        # check: refit the lines with f_c in place (cells = class x bins), then f_c again; the lines should barely move
+        with np.errstate(divide="ignore", invalid="ignore"):
+            raw = momk.sum(axis=0)                                                   # (4, n_cent, n_x)
+            sig_k = np.sqrt(np.clip(raw[2] / raw[0] - (raw[1] / raw[0]) ** 2, 0, None))
+        lines2 = fit_run_lines(momk.reshape(len(runs), 4, -1), np.tile(xc, nK),
+                               np.concatenate([np.polyval(per_cent[k]["coef"], xc) for k in range(nK)]),
+                               sig_k.ravel(), np.tile(in_range, nK), BASELINE_MIN_RUN_JETS)
+        both = good & np.isfinite(lines2["a"])
+        corr2 = corrected(lines2)
+        chi2_re = []
+        for k in range(nK):
+            cm, ce, _ = profile_from_moments(corr2[:, k])
+            ok = per_cent[k]["ok"]
+            c2 = np.polyfit(xc[ok], cm[ok], BASELINE_DEG, w=1.0 / ce[ok])
+            chi2_re.append(float((((cm[ok] - np.polyval(c2, xc[ok])) / ce[ok]) ** 2).sum()))
+        print(f"{r_tag}: lines refit with f_c: RMS change of a / b = {np.std(lines2['a'][both] - lines['a'][both]):.4f} / "
+              f"{np.std(lines2['b'][both] - lines['b'][both]):.4f} ns (mean {np.mean(lines2['a'][both] - lines['a'][both]):+.4f} / "
+              f"{np.mean(lines2['b'][both] - lines['b'][both]):+.4f}); f_c chi2 then " + ", ".join(f"{c:.0f}" for c in chi2_re))
+
+        # B6/B7: pT bins, classes pooled. Moments of t - a_run - b_run x per (class, pT bin, x) over the runs with a line
+        # (the lines of B4, fixed), and the raw moments for the pooled cell RMS
+        nP, nx = int(sel.sum()), len(xc)
+        acc, raw3 = np.zeros((4, nK, nP, nx)), np.zeros((3, nK, nP, nx))
+        for i, r in enumerate(runs):
+            if not good[i]:
+                continue
+            m = loaded[r][r_tag]["p2_mom"][:, :, sel]                              # (4, n_cent, n_pt, n_x)
+            Lr = lines["a"][i] + lines["b"][i] * xc
+            acc[0] += m[0]
+            acc[1] += m[1] - Lr * m[0]
+            acc[2] += m[2] - 2 * Lr * m[1] + Lr ** 2 * m[0]
+            acc[3] += m[3]
+            raw3 += m[:3]
+        pt_c = 0.5 * (ref["p2_ptedges"][:-1] + ref["p2_ptedges"][1:])[sel]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig = np.sqrt(np.clip(raw3[2] / raw3[0] - (raw3[1] / raw3[0]) ** 2, 0, None))
+            y = acc[1] / acc[0]
+            neff = np.where(acc[3] > 0, acc[0] ** 2 / acc[3], 0.0)
+        use = (acc[0] >= args.min_cell_entries) & in_range[None, None, :] & (sig > 0) & np.isfinite(y)
+        # smooth f_c(x, pT), the final model's form, fitted to the pooled cell means: with the lines fixed this is the
+        # same optimum as the per-run fit (error sigma_cell / sqrt(n) per run-cell)
+        kk, pp, xx = np.meshgrid(np.arange(nK), pt_c, xc, indexing="ij")
+        X = design({"k": kk.ravel(), "pt": pp.ravel(), "x": xx.ravel()}, "x_pt_cent", BASELINE_DEG, args.deg_pt, nK)
+        u = use.ravel()
+        w = np.where(use, neff / np.where(sig > 0, sig, 1.0) ** 2, 0.0)
+        sw = np.sqrt(w.ravel()[u])
+        c_pt, *_ = np.linalg.lstsq(X[u] * sw[:, None], y.ravel()[u] * sw, rcond=None)
+        s_pt = (X @ c_pt).reshape(use.shape)
+        s_x = np.broadcast_to(np.stack([np.polyval(per_cent[k]["coef"], xc) for k in range(nK)])[:, None, :], use.shape)
+        a0 = np.where(use, acc, 0.0)
+        # the simpler alternative: a separate quartic per (class, pT bin), fitted to that class and bin's profile
+        s_bin = np.zeros(use.shape)
+        bin_fits = []                                                              # [class][pT bin] for the per-class plot
+        for k in range(nK):
+            bin_fits.append([])
+            for lo, hi in PT_SPLIT:
+                psel = (pt_c >= lo) & (pt_c < hi)
+                bm, be, _ = profile_from_moments(a0[:, k, psel].sum(axis=1))
+                ok = in_range & (a0[0, k, psel].sum(0) >= args.min_cell_entries) & np.isfinite(bm) & np.isfinite(be) & (be > 0)
+                deg = min(BASELINE_DEG, int(ok.sum()) - 2)
+                if deg < BASELINE_DEG:
+                    print(f"Warning: {r_tag} {cent_label(k)} {lo}-{hi} GeV: {ok.sum()} x bins, degree {max(deg, 0)} instead of {BASELINE_DEG}")
+                e = {"mean": bm, "err": be, "ok": ok, "coef": None, "deg": deg, "chi2": np.nan}
+                bin_fits[k].append(e)
+                if deg < 0:
+                    continue
+                e["coef"] = np.polyfit(xc[ok], bm[ok], deg, w=1.0 / be[ok])
+                e["chi2"] = float((((bm[ok] - np.polyval(e["coef"], xc[ok])) / be[ok]) ** 2).sum())
+                s_bin[k][psel] = np.polyval(e["coef"], xc)[None, :]
+        n_bin_par = nK * len(PT_SPLIT) * (BASELINE_DEG + 1)
+        for nm, s, npar in (("f_c(x)", s_x, nK * (BASELINE_DEG + 1)), ("quartic per (class, pT bin)", s_bin, n_bin_par),
+                            ("f_c(x, pT)", s_pt, X.shape[1])):
+            ch = float((w * np.where(use, y - s, 0.0) ** 2).sum())
+            print(f"{r_tag}: {nm} on the (class, pT, x) cells, 15-40 GeV: chi2/ndf = {ch:.0f}/{int(use.sum()) - npar} "
+                  f"= {ch / (use.sum() - npar):.2f}")
+        per_pt = {"x": [], "bin": [], "xpt": []}
+        for (lo, hi), color in zip(PT_SPLIT, PT_SPLIT_COLORS):
+            psel = (pt_c >= lo) & (pt_c < hi)
+            A = a0[:, :, psel].sum(axis=(1, 2))                                       # (4, n_x)
+            pm, pe, _ = profile_from_moments(A)
+            ok = in_range & (A[0] >= args.min_cell_entries) & np.isfinite(pm) & np.isfinite(pe) & (pe > 0)
+            n_c = a0[0][:, psel]
+            mpt = (pt_sum[:, psel[:]] * pt_c[psel]).sum() / pt_sum[:, psel].sum()
+            for key, s in (("x", s_x), ("bin", s_bin), ("xpt", s_pt)):
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    mod = (n_c * s[:, psel]).sum(axis=(0, 1)) / n_c.sum(axis=(0, 1))   # the model averaged over the jets
+                d = pm[ok] - mod[ok]
+                ch = float(((d / pe[ok]) ** 2).sum())
+                per_pt[key].append({"name": rf"${lo} \leq p_{{T}} < {hi}$ GeV", "mean": pm, "err": pe, "ok": ok,
+                                    "model": mod, "chi2_m": ch, "ndf_m": int(ok.sum())})
+                print(f"{r_tag}: raw pT {lo}-{hi} GeV ({A[0].sum():.0f} jets, <pT> = {mpt:.2f} GeV): data - <{key}> "
+                      f"chi2/N = {ch:.0f}/{ok.sum()}, jet-weighted mean {np.average(d, weights=A[0][ok]):+.4f} ns, "
+                      f"|mean| {np.average(np.abs(d), weights=A[0][ok]):.4f} ns")
+
+        xw = 0.5 * (xc[1] - xc[0])
+        span = lambda m: (float(xc[m].min() - xw), float(xc[m].max() + xw))
+        shown = np.any([pr["ok"] for pr in per_run], axis=0) if per_run else in_range
+        x_cent = span(np.any([pc_["ok"] for pc_ in per_cent], axis=0))
+        x_pt = span(np.any([e["ok"] for e in per_pt["x"]], axis=0))
+        per_pt["by_class"] = bin_fits
+        results[r_tag] = (xc, fit, per_run, span(shown), per_cent, x_cent, per_pt, x_pt)
+
+    # shared y ranges across radii; the residual range from the points with small errors, so sparse edges do not set it
+    def ranges(sets):
+        curves = [np.polyval(fit["coef"], np.linspace(*xs, 300)) for _, fit, _, xs in sets]
+        res = [np.abs(e["mean"][e["ok"]] - np.polyval(fit["coef"], xc[e["ok"]]))[e["err"][e["ok"]] < 0.1]
+               for xc, fit, es, _ in sets for e in es]
+        rl = max(0.5, 1.25 * max((r.max() for r in res if len(r)), default=0.5))
+        return (min(c.min() for c in curves) - rl - 1.8, max(c.max() for c in curves) + rl + 2.2), rl
+
+    if ex_runs:
+        ylim, rlim = ranges([(xc, fit, pr, xs) for xc, fit, pr, xs, *_ in results.values()])
+        for r_tag, (xc, fit, per_run, x_show, *_) in results.items():
+            plot_baseline_runs(xc, fit, per_run, x_show, r_tag, ylim, rlim,
+                               bdir / f"baseline_runs_{timing_hist_name(r_tag)}.png", args.save_pdf)
+            plot_baseline_runs(xc, fit, per_run, x_show, r_tag, ylim, rlim,
+                               bdir / f"baseline_runs_lines_{timing_hist_name(r_tag)}.png", args.save_pdf, with_lines=True)
+    ylim_c, rlim_c = ranges([(xc, fit, pcs, xs) for xc, fit, _, _, pcs, xs, *_ in results.values()])
+    if ex_runs:
+        rlim_c = max(rlim_c, rlim)                  # same residual scale as B2/B3 when it is larger
+        ylim_c = (min(ylim_c[0], ylim[0]), max(ylim_c[1], ylim[1]))
+    # pT bins: residual range from data - <f_c(x)>, at least the centrality plots' range
+    res_p = [np.abs(e["mean"] - e["model"])[e["ok"] & (e["err"] < 0.1)] for *_, pp, _ in results.values() for e in pp["x"]]
+    rlim_p = max(rlim_c, 1.25 * max((r.max() for r in res_p if len(r)), default=0.5))
+    low_p = min(np.nanmin(e["mean"][e["ok"]]) for *_, pp, _ in results.values() for e in pp["x"])
+    ylim_p = (min(ylim_c[0], low_p - 0.5), ylim_c[1])
+    for r_tag, (xc, fit, _, _, per_cent, x_cent, per_pt, x_pt) in results.items():
+        ylab = r"$t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$ [ns]"
+        plot_baseline_runs(xc, fit, per_pt["x"], x_pt, r_tag, ylim_p, rlim_p,
+                           bdir / f"baseline_pt_{timing_hist_name(r_tag)}.png", args.save_pdf, with_lines=True,
+                           header=(runs, lumi), colors=PT_SPLIT_COLORS, ylabel=ylab,
+                           res_label=r"Data $-\ \langle f_{c}(x)\rangle$ [ns]",
+                           note=r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs and classes combined" "\n"
+                                r"lines: $f_{c}(x)$ averaged over the jets of each $p_{T}$ bin")
+        by_class = per_pt["by_class"]                                         # [class][pT bin]
+        fc_coef = [per_cent[k]["coef"] for k in range(len(CENT_CLASSES))]
+        cent_names = [cent_label(k) for k in range(len(CENT_CLASSES))]
+        pt_names = [rf"${lo} \leq p_{{T}} < {hi}$ GeV" for lo, hi in PT_SPLIT]
+        plot_baseline_grid(xc, by_class, cent_names, pt_names, PT_SPLIT_COLORS, x_pt, r_tag, rlim_p, runs, lumi,
+                           bdir / f"baseline_pt_fcbin_{timing_hist_name(r_tag)}.png", args.save_pdf,
+                           entry_coef=[[e["coef"] for e in row] for row in by_class], fitted=True,
+                           lines_txt=rf"lines: degree-{BASELINE_DEG} $f(x)$ per (class, $p_{{T}}$ bin)")
+        plot_baseline_grid(xc, by_class, cent_names, pt_names, PT_SPLIT_COLORS, x_pt, r_tag, rlim_p, runs, lumi,
+                           bdir / f"baseline_pt_fcx_{timing_hist_name(r_tag)}.png", args.save_pdf,
+                           panel_coef=fc_coef, panel_curve_names=[rf"$f_{{c}}(x)$ of {c}, all $p_{{T}}$" for c in cent_names],
+                           res_label=r"Data $-\ f_{c}(x)$ [ns]",
+                           lines_txt=rf"line: $f_{{c}}(x)$, degree {BASELINE_DEG}, fitted per class on 15–40 GeV")
+        plot_baseline_grid(xc, [list(col) for col in zip(*by_class)], pt_names, cent_names, CENT_COLORS, x_pt, r_tag,
+                           rlim_p, runs, lumi, bdir / f"baseline_pt_fcx_bypt_{timing_hist_name(r_tag)}.png", args.save_pdf,
+                           entry_coef=[fc_coef for _ in PT_SPLIT], res_label=r"Data $-\ f_{c}(x)$ [ns]",
+                           lines_txt=rf"lines: $f_{{c}}(x)$ of each class, degree {BASELINE_DEG}, fitted on 15–40 GeV")
+        plot_baseline_runs(xc, fit, per_pt["xpt"], x_pt, r_tag, ylim_p, rlim_p,
+                           bdir / f"baseline_pt_fcpt_{timing_hist_name(r_tag)}.png", args.save_pdf, with_lines=True,
+                           header=(runs, lumi), colors=PT_SPLIT_COLORS, ylabel=ylab,
+                           res_label=r"Data $-\ \langle f_{c}(x, p_{T})\rangle$ [ns]",
+                           note=r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs and classes combined" "\n"
+                                rf"lines: $f_{{c}}(x, p_{{T}})$ (degree {BASELINE_DEG} in $x$, {args.deg_pt} in "
+                                r"$\ln p_{T}$), averaged over the jets")
+    for r_tag, (xc, fit, _, _, per_cent, x_cent, *_) in results.items():
+        plot_baseline_runs(xc, fit, per_cent, x_cent, r_tag, ylim_c, rlim_c,
+                           bdir / f"baseline_cent_{timing_hist_name(r_tag)}.png", args.save_pdf,
+                           header=(runs, lumi), colors=CENT_COLORS + ("black",),
+                           ylabel=r"$t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$ [ns]",
+                           res_label=r"Class $-\ f(x)$ [ns]",
+                           note=r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs combined" "\n"
+                                r"$a_{\mathrm{run}}, b_{\mathrm{run}}$: fitted per run with $f(x)$ fixed")
+        plot_baseline_runs(xc, fit, per_cent[:len(CENT_CLASSES)], x_cent, r_tag, ylim_c, rlim_c,
+                           bdir / f"baseline_cent_fc_{timing_hist_name(r_tag)}.png", args.save_pdf, with_lines=True,
+                           header=(runs, lumi), colors=CENT_COLORS,
+                           ylabel=r"$t - t_{0} - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$ [ns]",
+                           res_label=r"Class $-\ f_{c}(x)$ [ns]",
+                           note=r"points: $t - a_{\mathrm{run}} - b_{\mathrm{run}}\,x$, all runs combined" "\n"
+                                rf"lines: $f_{{c}}(x)$, degree {BASELINE_DEG}, fitted per class")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Plot 3: the model ladder
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -810,8 +1320,12 @@ def plot_chi2_runs(rows, r_tag, src, lumi, output_path, save_pdf):
     plt.close(fig)
 
 
-def plot_lines_runs(rows, r_tag, lumi, output_path, save_pdf, run_range=None):
-    """D2: the per-run lines a and b vs run (the correction table). run_range zooms and uses the run number as x."""
+def plot_lines_runs(rows, r_tag, lumi, output_path, save_pdf, run_range=None,
+                    note=r"Correction: $a_{\mathrm{run}} + b_{\mathrm{run}}\,x$ (fitted on raw $p_{T}$ 10–60 GeV)"):
+    """D2: the per-run lines a and b vs run (the correction table). run_range zooms and uses the run number as x.
+
+    note: the label of what the lines are (top right). Also used for the baseline's lines (B9).
+    """
     hep.style.use("ATLAS")
     if run_range is not None:
         rows = [r for r in rows if run_range[0] <= r["run"] <= run_range[1]]
@@ -833,8 +1347,7 @@ def plot_lines_runs(rows, r_tag, lumi, output_path, save_pdf, run_range=None):
         ax.set_ylim(lo - pad, hi + pad)
         ax.text(0.01, 0.95, f"RMS over runs = {np.nanstd(y):.3f} ns, median error = {np.nanmedian(e):.4f} ns",
                 transform=ax.transAxes, ha="left", va="top", fontsize=12)
-    axes[0].text(0.99, 0.95, r"Correction: $a_{\mathrm{run}} + b_{\mathrm{run}}\,x$ (fitted on raw $p_{T}$ 10–60 GeV)",
-                 transform=axes[0].transAxes, ha="right", va="top", fontsize=12)
+    axes[0].text(0.99, 0.95, note, transform=axes[0].transAxes, ha="right", va="top", fontsize=12)
     if run_range is None:
         setup_run_axis(axes[1], runs)
     else:
@@ -1055,6 +1568,10 @@ def main():
                         help="y-axis range of the combined timing plot (default: full histogram range)")
     parser.add_argument("--zoom-runs", nargs=2, type=int, action="append", default=[], metavar=("RUNMIN", "RUNMAX"),
                         help="Also make the per-run line plot (D2) zoomed to this run range, vs run number (repeatable)")
+    parser.add_argument("--example-runs", nargs="+", type=int, default=list(EXAMPLE_RUNS),
+                        help="Runs whose profiles are compared with the baseline f(x) (default: %(default)s)")
+    parser.add_argument("--baseline-only", action="store_true",
+                        help="Make only the baseline plots (timing/baseline/) and stop before the model fits")
     parser.add_argument("--no-ladder", action="store_true", help="Skip the model ladder (L1-L5)")
     parser.add_argument("--no-scan", action="store_true", help="Skip the degree scan (D4)")
     parser.add_argument("--no-stability", action="store_true", help="Skip the line stability test (D8)")
@@ -1153,6 +1670,12 @@ def main():
                     out / "pt" / f"combined_{pt_hist_name(r_tag)}.png", pt_max=args.pt_max, save_pdf=args.save_pdf)
 
     if args.no_timing:
+        return
+
+    # ---- The baseline (before the cells are built, which free the per-run profile moments)
+    make_baseline(loaded, t_sum, runs, lumi, args, out / "timing" / "baseline")
+    tick("baseline")
+    if args.baseline_only:
         return
 
     src = args.line_source
