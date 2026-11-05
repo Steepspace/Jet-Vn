@@ -205,6 +205,13 @@ class JetAnalysisv3
       TH2 *h2TimeRawPtCorr{nullptr};
       std::array<TProfile2D *, n_timing_cent> p2TimeOHCalFracRawPtCorr_cent{};
       TH1 *hCorrStatus{nullptr};
+
+      // Jet time alone (no MBD t0), filled with the same jets as the t - t0 hists above, so per cell
+      // mean(t) - mean(t - t0) = mean(t0) of those jets; and t vs t0 at raw pT 15 - 40 GeV
+      std::array<TH2 *, n_timing_pt> h2TimeOHCalFracJet{};
+      TH2 *h2TimeRawPtJet{nullptr};
+      std::array<TProfile2D *, n_timing_cent> p2TimeOHCalFracRawPtJet_cent{};
+      TH2 *h2TimeT0{nullptr};
       size_t r_idx{0};  // 0: R = 0.2, 1: R = 0.3 (the model's row)
     };
     TimingHistSet timing_iternf_r02;
@@ -1267,6 +1274,31 @@ void JetAnalysisv3::init_hists()
         m_profiles2D[cname] = std::make_unique<TProfile2D>(cname.c_str(), ctitle.c_str(), 60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
       }
 
+      // Jet time alone (no MBD t0), suffix _tjet: same binning and the same jets as the t - t0 hists (t0 finite, and
+      // |t - t0| < 25 ns for the profiles), so they differ only by t0. Plus t vs t0 at raw pT 15 - 40 GeV.
+      for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+      {
+        auto [lo, hi] = m_timing_pt_ranges[i];
+        std::string name = std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}_tjet", r, static_cast<int>(lo), static_cast<int>(hi));
+        std::string title = std::format("Leading Jet, raw p_{{T}} {} - {} GeV; OHCal Energy Fraction; Jet t [ns]", static_cast<int>(lo), static_cast<int>(hi));
+        m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), 60, -0.25, 1.25, 100, -25, 25);
+      }
+
+      std::string pjname = std::format("h2LeadJetTimeRawPt_{}_iternf_tjet", r);
+      m_hists2D[pjname] = std::make_unique<TH2F>(pjname.c_str(), "Leading Jet; Jet raw p_{T} [GeV]; Jet t [ns]", 90, 10, 100, 100, -25, 25);
+
+      for (const auto &[clo, chi] : m_timing_cent_ranges)
+      {
+        std::string cname = std::format("{}_cent_{}_{}_tjet", p2name, static_cast<int>(clo), static_cast<int>(chi));
+        std::string ctitle = std::format("Leading Jet, {} - {}%, |t - t_{{0}}| < 25 ns; OHCal Energy Fraction; Jet raw p_{{T}} [GeV]; Jet t [ns]",
+                                         static_cast<int>(clo), static_cast<int>(chi));
+        m_profiles2D[cname] = std::make_unique<TProfile2D>(cname.c_str(), ctitle.c_str(), 60, -0.25, 1.25, n_pt, m_timing_profile_pt_edges.data());
+      }
+
+      std::string ttname = std::format("h2LeadJetTimeT0_{}_iternf_pt{}_{}", r, static_cast<int>(m_timing_pt_ranges[0].first), static_cast<int>(m_timing_pt_ranges[0].second));
+      std::string tttitle = std::format("Leading Jet, raw p_{{T}} {} - {} GeV; MBD t_{{0}} [ns]; Jet t [ns]", static_cast<int>(m_timing_pt_ranges[0].first), static_cast<int>(m_timing_pt_ranges[0].second));
+      m_hists2D[ttname] = std::make_unique<TH2F>(ttname.c_str(), tttitle.c_str(), 250, -25, 25, 100, -25, 25);
+
       // Corrected versions: jet t - MBD t0 - timing model, same binning and selection as the uncorrected ones
       if (m_has_timing_corr)
       {
@@ -1426,6 +1458,19 @@ void JetAnalysisv3::init_hists()
         auto [clo, chi] = m_timing_cent_ranges[i];
         set->p2TimeOHCalFracRawPt_cent[i] = m_profiles2D[std::format("{}_cent_{}_{}", p2name, static_cast<int>(clo), static_cast<int>(chi))].get();
       }
+
+      for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
+      {
+        auto [lo, hi] = m_timing_pt_ranges[i];
+        set->h2TimeOHCalFracJet[i] = m_hists2D[std::format("h2LeadJetTimeOHCalFrac_{}_iternf_pt{}_{}_tjet", r, static_cast<int>(lo), static_cast<int>(hi))].get();
+      }
+      set->h2TimeRawPtJet = m_hists2D[std::format("h2LeadJetTimeRawPt_{}_iternf_tjet", r)].get();
+      for (size_t i = 0; i < m_timing_cent_ranges.size(); ++i)
+      {
+        auto [clo, chi] = m_timing_cent_ranges[i];
+        set->p2TimeOHCalFracRawPtJet_cent[i] = m_profiles2D[std::format("{}_cent_{}_{}_tjet", p2name, static_cast<int>(clo), static_cast<int>(chi))].get();
+      }
+      set->h2TimeT0 = m_hists2D[std::format("h2LeadJetTimeT0_{}_iternf_pt{}_{}", r, static_cast<int>(m_timing_pt_ranges[0].first), static_cast<int>(m_timing_pt_ranges[0].second))].get();
 
       set->r_idx = (std::string_view(r) == "r02") ? 0 : 1;
       if (m_has_timing_corr)
@@ -1679,6 +1724,7 @@ void JetAnalysisv3::process_jets()
         h.hStatusRawPt->Fill(1.5);
         const double dt = t - m_event_data.t0;
         h.h2TimeRawPt->Fill(lead_pt, dt);
+        h.h2TimeRawPtJet->Fill(lead_pt, t);
 
         if (h.hCorrStatus)
         {
@@ -1707,6 +1753,7 @@ void JetAnalysisv3::process_jets()
           if (cls >= 0)
           {
             h.p2TimeOHCalFracRawPt_cent[static_cast<size_t>(cls)]->Fill(frac, lead_pt, dt);
+            h.p2TimeOHCalFracRawPtJet_cent[static_cast<size_t>(cls)]->Fill(frac, lead_pt, t);
             if (std::isfinite(dt_corr))
             {
               h.p2TimeOHCalFracRawPtCorr_cent[static_cast<size_t>(cls)]->Fill(frac, lead_pt, dt_corr);
@@ -1740,12 +1787,14 @@ void JetAnalysisv3::process_jets()
     h.hStatus->Fill(1.5);
 
     const double dt = t - m_event_data.t0;
+    h.h2TimeT0->Fill(m_event_data.t0, t);
     for (size_t i = 0; i < m_timing_pt_ranges.size(); ++i)
     {
       const auto [lo, hi] = m_timing_pt_ranges[i];
       if (lead_pt >= lo && lead_pt < hi)
       {
         h.h2TimeOHCalFrac[i]->Fill(frac, dt);
+        h.h2TimeOHCalFracJet[i]->Fill(frac, t);
         if (std::isfinite(dt_corr))
         {
           h.h2TimeOHCalFracCorr[i]->Fill(frac, dt_corr);
