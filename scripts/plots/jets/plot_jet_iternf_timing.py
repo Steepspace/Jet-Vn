@@ -18,6 +18,10 @@
 3. The OHCal fraction distributions of the same leading jets (timing/ohcal_frac/), from the jet counts of the same
    profiles (fBinEntries): per centrality class and raw pT bin, per run (<x> and RMS next to a_run, b_run), and per
    block of runs. They show whether the x the timing depends on changes with run, pT or centrality.
+4. When the production has the jet-time-alone hists (*_tjet, the same jets as t - t0) and t vs t0 (timing/tjet_check/):
+   satellite collisions in t0 and the slope of t vs t0, the per-run means of t - t0, t and t0, the per-run lines
+   refitted on t (their t0 part), and the per-class mean t0 vs x. They show which part of the run and centrality
+   dependence of t - t0 comes from the MBD t0.
 
 A bin's error in a run is sigma_x / sqrt(n_run,x), with sigma_x the time RMS of the bin pooled over all runs.
 """
@@ -102,6 +106,14 @@ def profile_name(r_tag, cent):
     return f"p2LeadJetTimeOHCalFracRawPt_{r_tag}_iternf_cent_{cent[0]}_{cent[1]}"
 
 
+def t0_hist_name(r_tag):
+    return f"h2LeadJetTimeT0_{r_tag}_iternf_pt{TIMING_PT[0]}_{TIMING_PT[1]}"
+
+
+def centers(e):
+    return 0.5 * (e[:-1] + e[1:])
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Loading
 # ---------------------------------------------------------------------------------------------------------------------
@@ -129,7 +141,7 @@ def profile2d_moments(p):
     return np.stack([np.asarray(a, dtype=np.float64).reshape(shape)[1:-1, 1:-1] for a in arrays])
 
 
-CACHE_VERSION = 2   # bump when load_run's output changes, so old caches are not reused (2: the *_corr hists)
+CACHE_VERSION = 3   # bump when load_run's output changes, so old caches are not reused (2: *_corr, 3: *_tjet)
 
 
 def cache_key(tasks, pt_radii, t_radii, lumi_paths):
@@ -162,6 +174,8 @@ def load_run(task):
     t_mom, t_filled and t_flow are not used any more. When the file has the timing-corrected hists (Jet-Anav3 run with
     the correction), also: corr_run (2, 4) the raw pT 15-40 GeV moments of t - t0 and of the corrected time (profiles,
     classes summed), corr_status, rawpt_edges, and under "sums" the hists that main sums over runs while streaming.
+    When it has the jet-time-alone hists (*_tjet, and t vs t0): tjet_mom (4, n_cent, n_x) the raw pT 15-40 GeV
+    moments of t, t0_mom (3, n_t0) jets, sum t, sum t^2 per t0 bin, t0_edges, and under "sums_tjet" the pooled TH2s.
     """
     run, file_path, pt_radii, t_radii = task
     data = {}
@@ -211,6 +225,22 @@ def load_run(task):
                                  "rawpt": h_rp.values().astype(np.float64),
                                  "rawpt_corr": rf[f"h2LeadJetTimeRawPt_{r_tag}_iternf_corr"].values().astype(np.float64),
                                  "p2_corr": np.stack(p2c, axis=1)},               # (4, n_cent, n_pt, n_x)
+                    })
+                # the jet time alone (same jets as t - t0) and t vs t0, when present
+                j_name = timing_hist_name(r_tag) + "_tjet"
+                if j_name in keys:
+                    pt_e = d["p2_ptedges"]
+                    sel = (pt_e[:-1] >= TIMING_PT[0]) & (pt_e[1:] <= TIMING_PT[1])
+                    p2j = np.stack([profile2d_moments(rf[profile_name(r_tag, c) + "_tjet"]) for c in CENT_CLASSES], axis=1)
+                    h_tt = rf[t0_hist_name(r_tag)]
+                    v = h_tt.values().astype(np.float64)                  # (n_t0, n_t), within the axes
+                    tc = centers(h_tt.axes[1].edges())
+                    d.update({
+                        "tjet_mom": p2j[:, :, sel].sum(axis=2),          # (4, n_cent, n_x)
+                        "t0_mom": np.stack([v.sum(1), v @ tc, v @ tc ** 2]),
+                        "t0_edges": h_tt.axes[0].edges(),
+                        "tt0_tedges": h_tt.axes[1].edges(),
+                        "sums_tjet": {"th2_tjet": rf[j_name].values().astype(np.float64), "t0_2d": v},
                     })
     except (KeyError, OSError, StopIteration) as e:
         print(f"Warning: run {run}: {e}, skipping")
@@ -984,8 +1014,9 @@ def moments_mean_sd(m):
     return mean, sd, err
 
 
-def plot_corr_th2(hu, hc, xe, te, xc, prof_u, prof_c, runs, r_tag, lumi, output_path, ylim, save_pdf=False):
-    """C1: the raw pT 15-40 GeV TH2 of t - t0 and of the corrected time, with their profiles."""
+def plot_corr_th2(hu, hc, xe, te, xc, prof_u, prof_c, runs, r_tag, lumi, output_path, ylim, save_pdf=False,
+                  labels=(r"$t - t_{0}$", CORR_LABEL_SHORT), ylabel=TIME_LABEL):
+    """C1: the raw pT 15-40 GeV TH2 of t - t0 and of the corrected time, with their profiles (T2: of t - t0 and t)."""
     hep.style.use("ATLAS")
     meta = RADII[r_tag]
     fig, (a0, a1, cax) = plt.subplots(1, 3, figsize=(17, 7), gridspec_kw={"wspace": 0.04, "width_ratios": [1, 1, 0.04]})
@@ -994,7 +1025,7 @@ def plot_corr_th2(hu, hc, xe, te, xc, prof_u, prof_c, runs, r_tag, lumi, output_
     axes = np.array([a0, a1])
     vmax = max(hu.max(), hc.max())
     box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3)
-    for ax, h, (m, e), lab in ((axes[0], hu, prof_u, r"$t - t_{0}$"), (axes[1], hc, prof_c, CORR_LABEL_SHORT)):
+    for ax, h, (m, e), lab in ((axes[0], hu, prof_u, labels[0]), (axes[1], hc, prof_c, labels[1])):
         z = np.where(h > 0, h, np.nan)
         pcm = ax.pcolormesh(xe, te, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=vmax), rasterized=True)
         ok = np.isfinite(m)
@@ -1005,7 +1036,7 @@ def plot_corr_th2(hu, hc, xe, te, xc, prof_u, prof_c, runs, r_tag, lumi, output_
         ax.set_ylim(*ylim)
         ax.set_xlabel(FRAC_LABEL)
         ax.text(0.03, 0.97, lab, transform=ax.transAxes, ha="left", va="top", fontsize=15, bbox=box)
-    axes[0].set_ylabel(TIME_LABEL)
+    axes[0].set_ylabel(ylabel)
     axes[0].legend(loc="lower left", fontsize=12, frameon=True, framealpha=0.8, edgecolor="none")
     axes[1].text(0.97, 0.97, timing_info(meta["eta_max"]), transform=axes[1].transAxes, ha="right", va="top",
                  fontsize=12, bbox=box)
@@ -1167,6 +1198,361 @@ def corr_checks(loaded, cs, th2_uncorr, runs, r_tag, lumi, Mr, cdir, args):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# The jet time alone (Jet-Anav3 *_tjet hists: t without the MBD t0, same jets as t - t0) and t vs t0
+# ---------------------------------------------------------------------------------------------------------------------
+
+T0_MAIN = 2.5                                     # |t0| < T0_MAIN [ns]: main-bunch collisions; outside: satellites
+T0_WINDOWS = (("early", rf"$t_{{0}} < -{T0_MAIN:g}$ ns", -np.inf, -T0_MAIN, "#2166ac"),
+              ("main", rf"$|t_{{0}}| < {T0_MAIN:g}$ ns", -T0_MAIN, T0_MAIN, "black"),
+              ("late", rf"$t_{{0}} > {T0_MAIN:g}$ ns", T0_MAIN, np.inf, "#b2182b"))
+T0_REBIN = 2                                      # t0 bins merged for the mean t per t0 bin (0.2 ns -> 0.4 ns)
+T0_MIN_BIN_JETS = 100                             # min jets in a merged t0 bin for its mean t to be drawn and fitted
+T0_FIT_RANGE = 8                                  # |t0| < T0_FIT_RANGE [ns]: range of the t vs t0 slope fits
+DT_COLOR, T_COLOR, T0_COLOR = "#377eb8", "#4daf4a", "#984ea3"
+TJET_LABEL = r"$t$ (no $t_{0}$)"
+
+
+def t_given_t0(n, st, st2, t0c, rebin=1, min_jets=0):
+    """The mean jet t per t0 bin, merged by rebin: (jet-weighted t0 of the bin, mean t, error, ok), from the jets,
+    sum t and sum t^2 per t0 bin."""
+    k = len(t0c) // rebin * rebin
+    r = lambda a: a[:k].reshape(-1, rebin).sum(1)
+    n_, st_, st2_ = r(n), r(st), r(st2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        c = r(t0c * n) / n_
+        mean = st_ / n_
+        err = np.sqrt(np.clip(st2_ / n_ - mean ** 2, 0, None) / n_)
+    return c, mean, err, (n_ >= min_jets) & np.isfinite(mean) & (err > 0)
+
+
+def hist_mean_rms(h, e):
+    c = centers(e)
+    n = h.sum()
+    m = (h * c).sum() / n
+    return m, np.sqrt(max((h * c ** 2).sum() / n - m ** 2, 0.0))
+
+
+def plot_t_vs_t0(t0e, te, H, wins, fit, runs, r_tag, lumi, output_path, save_pdf=False):
+    """T1: jet t vs MBD t0 at raw pT 15-40 GeV: the t0 distribution with the main-bunch and satellite windows, the
+    TH2 with the mean t per t0 bin and its line fit, and the mean t - t0 per t0 bin."""
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    t0c, tc = centers(t0e), centers(te)
+    n0 = H.sum(1)
+    fig, axes = plt.subplots(1, 3, figsize=(21, 7), gridspec_kw={"wspace": 0.3})
+    xl = (-12, 12)
+
+    ax = axes[0]
+    gap_steps(ax, n0 / (n0.sum() * np.diff(t0e)), t0e, color="black", linewidth=1.6)
+    for w in wins:
+        if w["key"] != "main":
+            ax.axvspan(max(xl[0], t0e[0]) if w["key"] == "early" else T0_MAIN,
+                       -T0_MAIN if w["key"] == "early" else min(xl[1], t0e[-1]), color=w["color"], alpha=0.1, linewidth=0)
+    ax.set_yscale("log")
+    ax.set_ylim(top=ax.get_ylim()[1] * 30)
+    ax.set_xlim(*xl)
+    ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dt_{0}}$ [ns$^{-1}$]")
+    ax.text(0.03, 0.97, "\n".join(rf"{w['label']}: {100 * w['frac']:.1f}%, $\langle t_{{0}} \rangle$ = {w['t0']:+.2f} ns"
+                                  for w in wins), transform=ax.transAxes, ha="left", va="top", fontsize=11)
+
+    ax = axes[1]
+    z = np.where(H > 0, H, np.nan)
+    pcm = ax.pcolormesh(t0e, te, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
+    fig.colorbar(pcm, ax=ax, pad=0.02).set_label("Counts")
+    c, mean, err, ok = fit["points"]
+    ax.errorbar(c[ok], mean[ok], yerr=err[ok], fmt="o", color="black", markersize=3, capsize=0, label=r"Mean $t$")
+    xs = np.linspace(-T0_FIT_RANGE, T0_FIT_RANGE, 2)
+    ax.plot(xs, fit["c0"] + fit["slope"] * xs, "-", color="#e41a1c", linewidth=2,
+            label=rf"Fit: slope {fit['slope']:.3f} $\pm$ {fit['slope_err']:.3f}")
+    m = wins[1]
+    ax.plot(xs, m["t"] + (xs - m["t0"]), "--", color="#e7298a", linewidth=1.5, label="Slope 1")
+    ax.set_xlim(*xl)
+    ax.set_ylim(-12, 12)
+    ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    ax.set_ylabel(r"Jet $t$ [ns]")
+    ax.legend(loc="upper left", fontsize=11, frameon=True, framealpha=0.8, edgecolor="none")
+
+    ax = axes[2]
+    ax.errorbar(c[ok], mean[ok] - c[ok], yerr=err[ok], fmt="o", color="black", markersize=3, capsize=0,
+                label=r"Mean $t - t_{0}$")
+    ax.plot(xs, fit["c0"] + (fit["slope"] - 1) * xs, "-", color="#e41a1c", linewidth=2, label="From the fit")
+    ax.set_xlim(*xl)
+    ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    ax.set_ylabel(TIME_LABEL)
+    ax.legend(loc="upper right", fontsize=11, frameon=False)
+    ax.text(0.03, 0.03, timing_info(meta["eta_max"]), transform=ax.transAxes, ha="left", va="bottom", fontsize=10)
+    add_header(ax, runs, meta["r"], lumi)
+    plt.subplots_adjust(left=0.06, right=0.98, bottom=0.12, top=0.93)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_time_dists(te, h_dt, h_t, t0e, H, wins, runs, r_tag, lumi, output_path, save_pdf=False):
+    """T3: unit-area distributions at raw pT 15-40 GeV. Left: t - t0, t and t0 of all jets. Right: per t0 window, t
+    and t - t0 (from the bin centres of the t vs t0 TH2)."""
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    t0c, tc = centers(t0e), centers(te)
+    fig, axes = plt.subplots(1, 2, figsize=(17, 7), sharey=True, gridspec_kw={"wspace": 0.04})
+    dens = lambda h, e: h / (h.sum() * np.diff(e))
+    stat = lambda h, e: r"$\mu$ = {:+.2f}, RMS = {:.2f} ns".format(*hist_mean_rms(h, e))
+    ax = axes[0]
+    for h, e, color, lab in ((h_dt, te, DT_COLOR, r"$t - t_{0}$"), (h_t, te, T_COLOR, TJET_LABEL),
+                             (H.sum(1), t0e, T0_COLOR, r"MBD $t_{0}$")):
+        gap_steps(ax, dens(h, e), e, color=color, linewidth=1.8, label=f"{lab}: {stat(h, e)}")
+    ax.text(0.03, 0.97, "All jets", transform=ax.transAxes, ha="left", va="top", fontsize=16)
+    ax = axes[1]
+    for w in wins:
+        hw = H[w["sel"]]
+        h_tw = hw.sum(0)
+        h_dw = np.histogram((tc[None, :] - t0c[w["sel"], None]).ravel(), bins=te, weights=hw.ravel())[0]
+        gap_steps(ax, dens(h_tw, te), te, color=w["color"], linewidth=1.8, label=f"{w['label']}, $t$: {stat(h_tw, te)}")
+        gap_steps(ax, dens(h_dw, te), te, color=w["color"], linewidth=1.5, linestyle="--",
+                  label=f"{w['label']}, $t - t_{{0}}$: {stat(h_dw, te)}")
+    ax.text(0.03, 0.97, r"Per $t_{0}$ window ($t - t_{0}$ from bin centres)", transform=ax.transAxes, ha="left",
+            va="top", fontsize=14)
+    for ax in axes:
+        ax.set_yscale("log")
+        ax.set_xlim(-15, 15)
+        ax.set_xticks([-10, -5, 0, 5, 10])                       # no clash of the edge labels between the panels
+        ax.set_xlabel("Time [ns]")
+        ax.legend(loc="lower center", fontsize=10, frameon=False)
+    axes[0].set_ylim(1e-7, 30)
+    axes[0].set_ylabel(r"$\frac{1}{N}\frac{dN}{dt}$ [ns$^{-1}$]")
+    axes[1].text(0.97, 0.88, timing_info(meta["eta_max"]), transform=axes[1].transAxes, ha="right", va="top", fontsize=10)
+    add_header(axes[1], runs, meta["r"], lumi)
+    plt.subplots_adjust(left=0.08, right=0.98, bottom=0.12, top=0.93)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_run_rows(runs, rows, r_tag, lumi, output_path, note=None, save_pdf=False):
+    """Rows of per-run values vs run (the run index), sharing the run axis. rows[i]: dict ylabel, series
+    [(y, err or None, color, label or None)], text (top left), zero (draw y = 0, default True)."""
+    hep.style.use("ATLAS")
+    n = len(rows)
+    height = 2.6 * n + 1.6
+    fig, axes = plt.subplots(n, 1, figsize=(13, height), sharex=True, gridspec_kw={"hspace": 0.06})
+    idx = np.arange(len(runs))
+    ms = 2 if len(runs) >= 500 else 4
+    for ax, row in zip(axes, rows):
+        for y, e, color, label in row["series"]:
+            if e is None:
+                ax.plot(idx, y, "o", color=color, markersize=ms, label=label)
+            else:
+                ax.errorbar(idx, y, yerr=e, fmt="o", color=color, markersize=ms, capsize=0, linewidth=0.6, label=label)
+        if row.get("zero", True):
+            ax.axhline(0.0, color="gray", linestyle="--", linewidth=1)
+        allv = np.concatenate([s[0] for s in row["series"]])
+        lo, hi = np.nanpercentile(allv, 0.5), np.nanpercentile(allv, 99.5)
+        pad = 0.3 * (hi - lo) if hi > lo else 0.1
+        ax.set_ylim(lo - pad, hi + 2 * pad)                  # room at the top for the text
+        ax.set_ylabel(row["ylabel"], fontsize=16)
+        if row.get("text"):
+            ax.text(0.01, 0.95, row["text"], transform=ax.transAxes, ha="left", va="top", fontsize=11)
+        if any(s[3] for s in row["series"]):
+            ax.legend(loc="upper right", ncol=len(row["series"]), frameon=False, fontsize=11, markerscale=2.5)
+    if note:
+        axes[0].text(0.99, 0.95, note, transform=axes[0].transAxes, ha="right", va="top", fontsize=11)
+    setup_run_axis(axes[-1], runs)
+    add_header(axes[0], runs, RADII[r_tag]["r"], lumi)
+    plt.subplots_adjust(left=0.10, right=0.98, bottom=1.1 / height, top=1 - 0.45 / height)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_cent_tjet(xc, Pdt, Pt, rms_t0, runs, r_tag, lumi, output_path, min_jets, save_pdf=False):
+    """T6: per centrality class at raw pT 15-40 GeV (runs pooled, no lines removed), the mean of t - t0, of t and of
+    t0 = <t> - <t - t0> vs x. The error of t0 is its pooled RMS / sqrt(n)."""
+    hep.style.use("ATLAS")
+    meta = RADII[r_tag]
+    fig, axes = plt.subplots(1, 3, figsize=(20, 7), gridspec_kw={"wspace": 0.25})
+    for k in range(len(CENT_CLASSES)):
+        md, _, ed = moments_mean_sd(Pdt[:, k])
+        mt, _, et = moments_mean_sd(Pt[:, k])
+        n = Pdt[0, k]
+        ok = (n >= min_jets) & np.isfinite(md) & np.isfinite(mt)
+        tot_d, tot_t = moments_mean_sd(Pdt[:, k].sum(-1))[0], moments_mean_sd(Pt[:, k].sum(-1))[0]
+        with np.errstate(divide="ignore"):
+            e0 = rms_t0 / np.sqrt(n)
+        for ax, m, e, tot in zip(axes, (md, mt, mt - md), (ed, et, e0), (tot_d, tot_t, tot_t - tot_d)):
+            ax.errorbar(xc[ok], m[ok], yerr=e[ok], fmt="o", color=CENT_COLORS[k], markersize=3.5, capsize=0,
+                        linewidth=1.0, label=rf"{cent_label(k)}: mean {tot:+.2f} ns")
+    for ax, lab in zip(axes, (r"$t - t_{0}$", TJET_LABEL, r"$t_{0} = \langle t \rangle - \langle t - t_{0} \rangle$")):
+        ax.text(0.04, 0.96, lab, transform=ax.transAxes, ha="left", va="top", fontsize=16)
+        ax.set_xlim(-0.3, 1.3)
+        ax.set_xlabel(FRAC_LABEL)
+        ax.set_ylabel("Mean [ns]")
+        lo, hi = ax.get_ylim()
+        ax.set_ylim(lo - 0.35 * (hi - lo), hi + 0.25 * (hi - lo))
+        ax.legend(loc="lower left", fontsize=11, frameon=False)
+    axes[2].text(0.97, 0.96, rf"runs pooled, x bins with $\geq {min_jets:g}$ jets" "\n"
+                 rf"raw ${TIMING_PT[0]} \leq p_{{T}} < {TIMING_PT[1]}$ GeV, $|t - t_{{0}}| < 25$ ns",
+                 transform=axes[2].transAxes, ha="right", va="top", fontsize=11)
+    add_header(axes[2], runs, meta["r"], lumi)
+    plt.subplots_adjust(left=0.06, right=0.98, bottom=0.12, top=0.93)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def tjet_checks(loaded, js, th2_dt, runs, r_tag, src, lumi, Pr, lines, jdir, args):
+    """Is the run dependence of t - t0 from the jet or from the MBD t0, and how do satellite collisions enter?
+
+    From the jet-time-alone hists (same jets as t - t0) and t vs t0 of one radius, at raw pT 15-40 GeV:
+    T1 t vs t0 (satellite windows, slope), T2 the TH2s of t - t0 and t vs x, T3 the time distributions, T4 per run the
+    means of t - t0, t and t0 and the satellite fractions, T5 (line-source radius only) the per-run lines refitted on t
+    and their t0 part, T6 per class the mean t - t0, t and t0 vs x. Writes per_run_tjet_<r>_iternf.csv.
+
+    js: the jet-time-alone hists summed over runs; th2_dt: the t - t0 TH2 at 15-40 GeV summed over runs;
+    Pr: prepare_radius of this radius; lines: the per-run lines of the line source (fitted on t - t0)."""
+    ref = loaded[runs[0]][r_tag]
+    xc = centers(ref["p2_xedges"])
+    t0e, tte = ref["t0_edges"], ref["tt0_tedges"]
+    t0c, ttc = centers(t0e), centers(tte)
+    name = f"{r_tag}_iternf"
+    nK = len(CENT_CLASSES)
+
+    Mdt = Pr["momk"]                                                   # (n_runs, 4, n_cent, n_x): t - t0
+    Mt = np.stack([loaded[r][r_tag]["tjet_mom"] for r in runs])       # (n_runs, 4, n_cent, n_x): t, same jets
+    T0 = np.stack([loaded[r][r_tag]["t0_mom"] for r in runs])         # (n_runs, 3, n_t0): jets, sum t, sum t^2
+    if not np.array_equal(Mdt[:, 0], Mt[:, 0]):
+        print(f"Warning: {r_tag}: the t and t - t0 profiles do not have the same jets per cell")
+
+    # ---- pooled t vs t0: the satellite windows and the slope
+    H = js["t0_2d"]
+    n0, st, st2 = H.sum(1), H @ ttc, H @ ttc ** 2
+    wins = []
+    for key, lab, lo, hi, color in T0_WINDOWS:
+        s = (t0c >= lo) & (t0c < hi)
+        wins.append({"key": key, "label": lab, "sel": s, "color": color, "frac": n0[s].sum() / n0.sum(),
+                     "t0": n0[s] @ t0c[s] / n0[s].sum(), "t": st[s].sum() / n0[s].sum()})
+    c, mean, err, ok = t_given_t0(n0, st, st2, t0c, T0_REBIN, T0_MIN_BIN_JETS)
+    sel = ok & (np.abs(c) < T0_FIT_RANGE)
+    coef, cov = np.polyfit(c[sel], mean[sel], 1, w=1 / err[sel], cov="unscaled")
+    chi2 = float((((mean[sel] - np.polyval(coef, c[sel])) / err[sel]) ** 2).sum())
+    sm = ok & (np.abs(c) < T0_MAIN)
+    fit = {"slope": coef[0], "c0": coef[1], "slope_err": np.sqrt(cov[0, 0]), "points": (c, mean, err, ok)}
+    e_, m_, l_ = wins
+    print(f"{r_tag}: t vs t0 at raw pT {TIMING_PT[0]}-{TIMING_PT[1]} GeV ({n0.sum():.0f} jets): "
+          + "; ".join(f"{w['key']} {100 * w['frac']:.1f}%, <t0> {w['t0']:+.2f}, <t> {w['t']:+.2f}, "
+                      f"<t - t0> {w['t'] - w['t0']:+.2f} ns" for w in wins))
+    print(f"{r_tag}: slope of t vs t0: between the satellite peaks {(l_['t'] - e_['t']) / (l_['t0'] - e_['t0']):.3f}; "
+          f"fit |t0| < {T0_FIT_RANGE} ns {fit['slope']:.3f} +- {fit['slope_err']:.3f} (chi2/ndf {chi2:.0f}/{sel.sum() - 2}); "
+          f"main bunch only {np.polyfit(c[sm], mean[sm], 1, w=1 / err[sm])[0]:.3f}")
+
+    # ---- per run: the means of t - t0 and t (profiles, exact), t0 (their difference), satellite fractions, slope
+    md, _, ed = moments_mean_sd(Mdt.sum(axis=(2, 3)).T)
+    mt, _, et = moments_mean_sd(Mt.sum(axis=(2, 3)).T)
+    m0 = mt - md
+    N = Mdt[:, 0].sum(axis=(1, 2))
+    nr = T0[:, 0]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        frac = {w["key"]: nr[:, w["sel"]].sum(1) / nr.sum(1) for w in wins}
+        ms = wins[1]["sel"]
+        t0_main = nr[:, ms] @ t0c[ms] / nr[:, ms].sum(1)
+        rms_t0_run = np.sqrt(np.clip(nr @ t0c ** 2 / nr.sum(1) - (nr @ t0c / nr.sum(1)) ** 2, 0, None))
+        e0 = rms_t0_run / np.sqrt(N)
+        fs = np.abs(t0c) < T0_FIT_RANGE
+        x, nn, sy = t0c[fs], nr[:, fs], T0[:, 1][:, fs]
+        S0, Sx, Sxx, Sy, Sxy = nn.sum(1), nn @ x, nn @ x ** 2, sy.sum(1), sy @ x
+        slope_run = (S0 * Sxy - Sx * Sy) / (S0 * Sxx - Sx ** 2)
+    a, b = lines["a"], lines["b"]
+    good = np.isfinite(a) & (N >= X_MIN_RUN_JETS)
+    rho = lambda u, v: float(np.corrcoef(u[good], v[good])[0, 1])
+    wmean = lambda v: float(np.average(v[good], weights=N[good]))
+    asym = frac["late"] - frac["early"]
+    print(f"{r_tag}: per run ({good.sum()} runs with a line and >= {X_MIN_RUN_JETS} jets), RMS over runs and "
+          f"correlation with a_run, b_run ({src} lines, fitted on t - t0):")
+    for lab, v in (("<t - t0>", md), ("<t>", mt), ("<t0>", m0), ("<t0> main bunch", t0_main),
+                   ("early fraction", frac["early"]), ("late fraction", frac["late"]), ("late - early", asym),
+                   ("slope t vs t0", slope_run)):
+        print(f"    {lab:16s} RMS {np.std(v[good]):.4f}, rho(a) {rho(v, a):+.2f}, rho(b) {rho(v, b):+.2f}")
+    print(f"{r_tag}: per run, <t0> vs late - early satellite fraction: rho {rho(m0, asym):+.2f}, "
+          f"slope {np.polyfit(asym[good], m0[good], 1)[0]:+.2f} ns")
+
+    rows_csv = [{"run": r, "jets": float(N[i]), "mean_dt": float(md[i]), "mean_dt_err": float(ed[i]),
+                 "mean_t": float(mt[i]), "mean_t_err": float(et[i]), "mean_t0": float(m0[i]), "mean_t0_err": float(e0[i]),
+                 "t0_main": float(t0_main[i]), "f_early": float(frac["early"][i]), "f_main": float(frac["main"][i]),
+                 "f_late": float(frac["late"][i]), "slope_t_t0": float(slope_run[i]), "a": float(a[i]), "b": float(b[i])}
+                for i, r in enumerate(runs)]
+
+    # ---- the per-run lines refitted on t alone (line source only); their t0 part is lines(t) - lines(t - t0)
+    lt = None
+    if r_tag == src:
+        mom_t = Mt.sum(axis=2)                                           # (n_runs, 4, n_x)
+        pooled = mom_t.sum(0)
+        pm, pe, neff = profile_from_moments(pooled)
+        okf = Pr["in_range"] & np.isfinite(pm) & np.isfinite(pe) & (pe > 0) & (neff >= args.min_cell_entries)
+        fit_t = fit_poly(xc, pm, pe, okf)
+        print(f"{r_tag}: t alone: f(x) on the combined profile chi2/ndf = {fit_t['chi2']:.0f}/{fit_t['ndf']} "
+              f"(t - t0: {Pr['fit']['chi2']:.0f}/{Pr['fit']['ndf']})")
+        lt = run_lines({"mom_r": mom_t, "xc": xc, "f_x": np.polyval(fit_t["coef"], xc), "in_range": Pr["in_range"],
+                        "sigma": np.sqrt(np.clip(pooled[2] / pooled[0] - pm ** 2, 0, None))}, runs)
+        a0, b0 = lt["a"] - a, lt["b"] - b
+        for k, (vd, vt, v0) in (("a", (a, lt["a"], a0)), ("b", (b, lt["b"], b0))):
+            print(f"{r_tag}: {k}_run RMS over runs: from t - t0 {np.std(vd[good]):.3f}, from t {np.nanstd(vt[good]):.3f}, "
+                  f"t0 part {np.nanstd(v0[good]):.3f} ns; rho(t - t0, t) {rho(vd, vt):+.2f}, rho(t - t0, t0 part) "
+                  f"{rho(vd, v0):+.2f}")
+        print(f"{r_tag}: t0 part of a_run vs <t0>: rho {rho(a0, m0):+.2f}, vs late - early fraction {rho(a0, asym):+.2f}; "
+              f"of b_run vs <t0>: rho {rho(b0, m0):+.2f}")
+        for row, i in zip(rows_csv, range(len(runs))):
+            row.update({"a_t": float(lt["a"][i]), "b_t": float(lt["b"][i])})
+    keys = list(rows_csv[0].keys())
+    write_csv(rows_csv, keys, jdir / f"per_run_tjet_{name}.csv")
+
+    # ---- plots
+    plot_t_vs_t0(t0e, tte, H, wins, fit, runs, r_tag, lumi, jdir / f"T1_t_vs_t0_{name}.png", args.save_pdf)
+    pdt, pt_ = Mdt.sum(axis=(0, 2)), Mt.sum(axis=(0, 2))                # (4, n_x)
+    plot_corr_th2(th2_dt, js["th2_tjet"], ref["t_xedges"], ref["t_yedges"], xc, profile_from_moments(pdt)[:2],
+                  profile_from_moments(pt_)[:2], runs, r_tag, lumi, jdir / f"T2_{timing_hist_name(r_tag)}_tjet.png",
+                  args.time_ylim or (-10, 10), args.save_pdf, labels=(r"$t - t_{0}$", TJET_LABEL), ylabel="Jet time [ns]")
+    plot_time_dists(ref["t_yedges"], th2_dt.sum(0), js["th2_tjet"].sum(0), t0e, H, wins, runs, r_tag, lumi,
+                    jdir / f"T3_time_dists_{name}.png", args.save_pdf)
+    dev = lambda v: v - wmean(v)
+    rt = lambda v: rf"RMS over runs {np.std(v[good]):.3f} ns; correlation with $a_{{\mathrm{{run}}}}$ {rho(v, a):+.2f}, " \
+                   rf"with $b_{{\mathrm{{run}}}}$ {rho(v, b):+.2f}"
+    rows = [{"ylabel": r"$\Delta\langle t - t_{0} \rangle$ [ns]", "series": [(dev(md), ed, DT_COLOR, None)], "text": rt(md)},
+            {"ylabel": r"$\Delta\langle t \rangle$ [ns]", "series": [(dev(mt), et, T_COLOR, None)], "text": rt(mt)},
+            {"ylabel": r"$\Delta\langle t_{0} \rangle$ [ns]", "series": [(dev(m0), e0, T0_COLOR, None)], "text": rt(m0)},
+            {"ylabel": "Satellite fraction", "zero": False,
+             "series": [(frac["early"], None, wins[0]["color"], wins[0]["label"]),
+                        (frac["late"], None, wins[2]["color"], wins[2]["label"])],
+             "text": rf"late $-$ early: correlation with $\langle t_{{0}} \rangle$ {rho(asym, m0):+.2f}, "
+                     rf"with $a_{{\mathrm{{run}}}}$ {rho(asym, a):+.2f}"},
+            {"ylabel": r"Slope of $t$ vs $t_{0}$", "series": [(slope_run, None, "black", None)], "zero": False,
+             "text": rf"$|t_{{0}}| < {T0_FIT_RANGE}$ ns; median {np.nanmedian(slope_run[good]):.3f}, "
+                     rf"RMS over runs {np.nanstd(slope_run[good]):.3f}"}]
+    note = (rf"Leading jet, raw ${TIMING_PT[0]} \leq p_{{T}} < {TIMING_PT[1]}$ GeV; $\Delta$: minus the mean over runs; "
+            rf"$a$, $b$ {lines_from_text(r_tag, src)}")
+    plot_run_rows(runs, rows, r_tag, lumi, jdir / f"T4_run_means_{name}.png", note, args.save_pdf)
+    if lt is not None:
+        rl = lambda vd, v: rf"RMS over runs {np.nanstd(v[good]):.3f} ns; correlation with the $t - t_{{0}}$ line {rho(vd, v):+.2f}"
+        rows = [{"ylabel": r"$a_{\mathrm{run}}$, $t - t_{0}$ [ns]", "series": [(a, lines["a_err"], DT_COLOR, None)],
+                 "text": rf"RMS over runs {np.std(a[good]):.3f} ns (the correction)"},
+                {"ylabel": r"$a_{\mathrm{run}}$, $t$ [ns]", "series": [(lt["a"], lt["a_err"], T_COLOR, None)],
+                 "text": rl(a, lt["a"])},
+                {"ylabel": r"$a_{\mathrm{run}}$, $t_{0}$ part [ns]", "series": [(a0, None, T0_COLOR, None)],
+                 "text": rl(a, a0)},
+                {"ylabel": r"$b_{\mathrm{run}}$, $t - t_{0}$ [ns]", "series": [(b, lines["b_err"], DT_COLOR, None)],
+                 "text": rf"RMS over runs {np.std(b[good]):.3f} ns (the correction)"},
+                {"ylabel": r"$b_{\mathrm{run}}$, $t$ [ns]", "series": [(lt["b"], lt["b_err"], T_COLOR, None)],
+                 "text": rl(b, lt["b"])},
+                {"ylabel": r"$b_{\mathrm{run}}$, $t_{0}$ part [ns]", "series": [(b0, None, T0_COLOR, None)],
+                 "text": rl(b, b0)}]
+        plot_run_rows(runs, rows, r_tag, lumi, jdir / f"T5_lines_t_{name}.png",
+                      r"$a_{\mathrm{run}} + b_{\mathrm{run}}\,x$ fitted per run on $t - t_{0}$ and on $t$ (own $f(x)$); "
+                      r"$t_{0}$ part = $t$ line $-$ $t - t_{0}$ line", args.save_pdf)
+    pooled_rms_t0 = hist_mean_rms(n0, t0e)[1]
+    plot_cent_tjet(xc, Mdt.sum(0), Mt.sum(0), pooled_rms_t0, runs, r_tag, lumi, jdir / f"T6_cent_profiles_{name}.png",
+                   args.min_cell_entries, args.save_pdf)
+    for k in range(nK):
+        tot_d = moments_mean_sd(Mdt[:, :, k].sum(axis=(0, 2)))[0]
+        tot_t = moments_mean_sd(Mt[:, :, k].sum(axis=(0, 2)))[0]
+        print(f"{r_tag}: {cent_label(k)}: <t - t0> {tot_d:+.3f}, <t> {tot_t:+.3f}, <t0> {tot_t - tot_d:+.3f} ns")
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -1176,7 +1562,7 @@ def main():
                     "(quartic per centrality class, per-run line) at raw pT 15-40 GeV, built step by step."
     )
     parser.add_argument("-f", "--file", type=Path,
-                        default=Path("/sphenix/user/anarde/sEPD-Study/jetAnav3/11-03-26/test.list"),
+                        default=Path("/sphenix/user/anarde/sEPD-Study/jetAnav3/11-05-26/test.list"),
                         help="List of Jet-Anav3 merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path,
                         default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
@@ -1245,12 +1631,13 @@ def main():
         with cache_path.open("rb") as f:
             cached = pickle.load(f)
         loaded, t_sum, lumi, c_sum = cached["loaded"], cached["t_sum"], cached["lumi"], cached["c_sum"]
+        j_sum = cached["j_sum"]
         runs = sorted(loaded)
     else:
         # Stream the results so only one full 2D per radius (the sum) is kept in memory
         n_jobs = max(1, min(args.jobs, len(tasks)))
         print(f"Reading {len(tasks)} runs with {n_jobs} worker(s)")
-        loaded, t_sum, c_sum = {}, {}, {}
+        loaded, t_sum, c_sum, j_sum = {}, {}, {}, {}
         ex = concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
         for run, d in (ex.map(load_run, tasks, chunksize=8) if ex else map(load_run, tasks)):
             if d is None:
@@ -1262,6 +1649,11 @@ def main():
                     cs["n_runs"] += 1
                     for k, v in d[r_tag].pop("sums").items():
                         cs[k] = cs.get(k, 0) + v
+                js = j_sum.setdefault(r_tag, {"n_runs": 0})
+                if "sums_tjet" in d[r_tag]:                # the jet-time-alone hists, summed over runs
+                    js["n_runs"] += 1
+                    for k, v in d[r_tag].pop("sums_tjet").items():
+                        js[k] = js.get(k, 0) + v
             loaded[run] = d
         if ex:
             ex.shutdown()
@@ -1286,7 +1678,7 @@ def main():
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = cache_path.with_suffix(".tmp")
             with tmp.open("wb") as f:
-                pickle.dump({"loaded": loaded, "t_sum": t_sum, "lumi": lumi, "c_sum": c_sum}, f,
+                pickle.dump({"loaded": loaded, "t_sum": t_sum, "lumi": lumi, "c_sum": c_sum, "j_sum": j_sum}, f,
                             protocol=pickle.HIGHEST_PROTOCOL)
             tmp.replace(cache_path)                       # atomic: an interrupted write never leaves a broken cache
             print(f"Saved the input cache: {cache_path} ({cache_path.stat().st_size / 1e6:.0f} MB)")
@@ -1417,6 +1809,18 @@ def main():
         else:
             corr_checks(loaded, c_sum[r_tag], t_sum[r_tag], runs, r_tag, lumi, M[r_tag], out / "timing" / "corr_check", args)
     tick("correction checks")
+
+    # ---- The jet time alone (*_tjet) and t vs t0, when every run has them
+    for r_tag in args.radii:
+        n_j = j_sum.get(r_tag, {}).get("n_runs", 0)
+        if n_j == 0:
+            print(f"{r_tag}: no jet-time-alone hists in the inputs, skipping the t0 checks")
+        elif n_j < len(runs):
+            print(f"Warning: {r_tag}: only {n_j}/{len(runs)} runs have the jet-time-alone hists, skipping the t0 checks")
+        else:
+            tjet_checks(loaded, j_sum[r_tag], t_sum[r_tag], runs, r_tag, src, lumi, P[r_tag], lines,
+                        out / "timing" / "tjet_check", args)
+    tick("t0 checks")
 
 
 if __name__ == "__main__":
