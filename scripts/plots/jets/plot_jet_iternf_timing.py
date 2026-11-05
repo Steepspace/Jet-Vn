@@ -15,6 +15,9 @@
      fixed). This is the model; each radius has its own f and f_c.
    The model has no pT dependence: its residuals in raw pT bins (15-20, 20-30, 30-40 GeV) are plotted as its known
    limitation. Each step has a plot of what it misses and of its closure (timing/baseline/).
+3. The OHCal fraction distributions of the same leading jets (timing/ohcal_frac/), from the jet counts of the same
+   profiles (fBinEntries): per centrality class and raw pT bin, per run (<x> and RMS next to a_run, b_run), and per
+   block of runs. They show whether the x the timing depends on changes with run, pT or centrality.
 
 A bin's error in a run is sigma_x / sqrt(n_run,x), with sigma_x the time RMS of the bin pooled over all runs.
 """
@@ -59,6 +62,14 @@ EXAMPLE_RUNS = (75143, 73841, 78470)
 EXAMPLE_COLORS = ("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#ff7f00", "#a65628")
 PT_SPLIT = ((15, 20), (20, 30), (30, 40))         # raw pT bins of the pT residual plots [GeV]; they partition TIMING_PT
 PT_SPLIT_COLORS = ("#1b7837", "#e08214", "#762a83")
+# OHCal fraction distributions (timing/ohcal_frac/): raw pT bins of the profiles [GeV], on their bin edges
+X_PT_BINS = ((10, 15),) + PT_SPLIT + ((40, 60),)
+X_PT_COLORS = ("#999999",) + PT_SPLIT_COLORS + ("#2166ac",)
+# First runs of the blocks in b_run (baseline_lines_r03_iternf): the x distributions are compared between the run
+# ranges they bound (--x-run-blocks)
+X_RUN_BLOCKS = (67701, 68335, 69129, 73816, 75256, 77680)
+X_MIN_BIN_JETS = 20                               # min jets in an x bin for its ratio to be drawn
+X_MIN_RUN_JETS = 1000                             # min jets of a run at 15-40 GeV for the <x>-line correlations
 
 # Event selection shared by all histograms. In iter_is_noflow mode calo v2 = 0 and there is no flow failure,
 # so the |Calo v2| and flow failure cuts of hJetPtv3 are not applied.
@@ -765,6 +776,198 @@ def write_correction_csv(path, M, src):
 
 
 # ---------------------------------------------------------------------------------------------------------------------
+# OHCal fraction distributions: the jet counts (fBinEntries) of the per-class timing profiles
+# ---------------------------------------------------------------------------------------------------------------------
+
+def x_info(r_tag):
+    return (f"{EVENT_INFO}\n"
+            rf"Leading jet: $|\eta| < {RADII[r_tag]['eta_max']:g}$, Energy > 0" "\n"
+            r"$t$, $t_{0}$ finite, $|t - t_{0}| < 25$ ns")
+
+
+def x_moments(n, xc):
+    """From jets per x bin n (..., n_x): jets, mean x, RMS of x and the error on the mean (bin centres)."""
+    N = n.sum(-1)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        m = (n * xc).sum(-1) / N
+        rms = np.sqrt(np.clip((n * xc ** 2).sum(-1) / N - m ** 2, 0, None))
+        return N, m, rms, rms / np.sqrt(N)
+
+
+def density(n, xe):
+    """Unit-area density per unit x and its statistical error, from jets per x bin n (unit weights)."""
+    N = n.sum()
+    if N <= 0:
+        return np.zeros_like(n), np.zeros_like(n)
+    s = N * np.diff(xe)
+    return n / s, np.sqrt(n) / s
+
+
+def gap_steps(ax, d, xe, **kw):
+    """A step line of d over the bins xe with gaps at empty bins (no drops to the bottom of a log axis)."""
+    ax.plot(np.repeat(xe, 2)[1:-1], np.repeat(np.where(d > 0, d, np.nan), 2), **kw)
+
+
+def x_text(n, xc):
+    N, m, _, _ = x_moments(n, xc)
+    return rf"$\langle x \rangle$ = {m:.3f}, ${sci(N)}$ jets"
+
+
+def plot_x_dists(xe, panels, runs, r_tag, lumi, output_path, ratio_label, save_pdf=False):
+    """Unit-area OHCal fraction distributions, one panel each; below, each entry over the panel's reference.
+
+    panels[i]: dict title, ref (label, jets per x bin) and entries [(label, jets per x bin, color)]. Ratios are drawn
+    in bins with >= X_MIN_BIN_JETS jets; their errors are the entry's statistical error only.
+    """
+    hep.style.use("ATLAS")
+    nP = len(panels)
+    fig, axes = plt.subplots(2, nP, figsize=(5.2 * nP + 1.0, 9), sharex=True, sharey="row", squeeze=False,
+                             gridspec_kw={"height_ratios": [2, 1], "hspace": 0.05, "wspace": 0.04})
+    xc = 0.5 * (xe[:-1] + xe[1:])
+    tops, devs = [], []
+    for i, p in enumerate(panels):
+        ax, axr = axes[0, i], axes[1, i]
+        ref_lab, ref_n = p["ref"]
+        rd, _ = density(ref_n, xe)
+        gap_steps(ax, rd, xe, color="black", linewidth=1.5, linestyle="--", label=f"{ref_lab}: {x_text(ref_n, xc)}", zorder=3)
+        axr.axhline(1.0, color="black", linewidth=1.5, linestyle="--")
+        tops.append(rd.max())
+        for lab, n, color in p["entries"]:
+            if n.sum() <= 0:
+                continue
+            d, e = density(n, xe)
+            gap_steps(ax, d, xe, color=color, linewidth=1.6, label=f"{lab}: {x_text(n, xc)}", zorder=2)
+            ok = (n >= X_MIN_BIN_JETS) & (rd > 0)
+            r, re_ = d[ok] / rd[ok], e[ok] / rd[ok]
+            axr.errorbar(xc[ok], r, yerr=re_, fmt="o", color=color, markersize=3, capsize=0, linewidth=1.0)
+            devs.append(np.abs(r - 1)[re_ < 0.05])
+            tops.append(d.max())
+        ax.legend(loc="lower center", fontsize=10, frameon=False)
+        ax.text(0.04, 0.96, p["title"], transform=ax.transAxes, ha="left", va="top", fontsize=16)
+        axr.set_xlabel(FRAC_LABEL, fontsize=16)
+    top = max(tops)
+    axes[0, 0].set_yscale("log")
+    axes[0, 0].set_ylim(top * 1e-8, top * 300)      # room below the distributions for the legends, above for the text
+    rl = min(1.0, max(0.1, 1.3 * max((d.max() for d in devs if len(d)), default=0.1)))
+    axes[1, 0].set_ylim(1 - rl, 1 + rl)
+    axes[0, 0].set_xlim(xe[0], xe[-1])
+    axes[1, 0].xaxis.set_major_locator(MaxNLocator(nbins=6, prune="both"))
+    axes[0, 0].set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
+    axes[1, 0].set_ylabel(ratio_label)
+    axes[0, -1].text(0.96, 0.96, x_info(r_tag), transform=axes[0, -1].transAxes, ha="right", va="top", fontsize=10)
+    add_header(axes[0, -1], runs, RADII[r_tag]["r"], lumi)
+    plt.subplots_adjust(left=0.07 if nP > 2 else 0.10, right=0.98, bottom=0.09, top=0.95)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_x_runs(runs, mk, ek, rk, lines, rho, r_tag, src, lumi, output_path, save_pdf=False):
+    """X3: per run at raw pT 15-40 GeV, <x> and RMS(x) per centrality class, and the run lines a_run, b_run."""
+    hep.style.use("ATLAS")
+    idx = np.arange(len(runs))
+    fig, axes = plt.subplots(4, 1, figsize=(13, 13), sharex=True, gridspec_kw={"hspace": 0.06})
+    ms = 2 if len(runs) >= 500 else 4
+
+    def robust_ylim(ax, y, pad=0.25):
+        lo, hi = np.nanpercentile(y, 0.5), np.nanpercentile(y, 99.5)
+        ax.set_ylim(lo - pad * (hi - lo), hi + pad * (hi - lo))
+
+    for k in range(len(CENT_CLASSES)):
+        axes[0].errorbar(idx, mk[:, k], yerr=ek[:, k], fmt="o", color=CENT_COLORS[k], markersize=ms, capsize=0,
+                         linewidth=0.6, label=cent_label(k))
+        axes[1].plot(idx, rk[:, k], "o", color=CENT_COLORS[k], markersize=ms)
+    robust_ylim(axes[0], mk)
+    robust_ylim(axes[1], rk)
+    axes[0].set_ylabel(r"$\langle x \rangle$")
+    axes[1].set_ylabel(r"RMS of $x$")
+    axes[0].legend(loc="upper left", ncol=3, frameon=False, fontsize=13, markerscale=2.5)
+    axes[0].text(0.99, 0.95, rf"Leading jet, raw ${TIMING_PT[0]} \leq p_{{T}} < {TIMING_PT[1]}$ GeV, "
+                 r"$|t - t_{0}| < 25$ ns", transform=axes[0].transAxes, ha="right", va="top", fontsize=12)
+    for ax, key, label in ((axes[2], "a", r"$a_{\mathrm{run}}$ [ns]"), (axes[3], "b", r"$b_{\mathrm{run}}$ [ns]")):
+        y, e = lines[key], lines[f"{key}_err"]
+        ax.axhline(0.0, color="gray", linestyle="--", linewidth=1)
+        ax.errorbar(idx, y, yerr=e, fmt="o", color="black", markersize=ms, capsize=0, linewidth=0.6)
+        robust_ylim(ax, y)
+        ax.set_ylabel(label)
+        ax.text(0.01, 0.95, rf"correlation with $\langle x \rangle$ (all classes): $\rho$ = {rho[key]:+.2f}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=12)
+    axes[2].text(0.99, 0.95, r"$a_{\mathrm{run}}, b_{\mathrm{run}}$ " + lines_from_text(r_tag, src),
+                 transform=axes[2].transAxes, ha="right", va="top", fontsize=12)
+    setup_run_axis(axes[3], runs)
+    add_header(axes[0], runs, RADII[r_tag]["r"], lumi)
+    plt.subplots_adjust(left=0.09, right=0.98, bottom=0.11, top=0.96)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def ohcal_frac_checks(loaded, runs, r_tag, lines, src, lumi, xdir, ex_runs, args):
+    """The OHCal fraction x of the leading jets of the timing profiles of one radius, from their jet counts: by raw pT
+    bin and centrality class (X1, X2), per run next to the run lines (X3), and per block of runs and example run (X4).
+    Also writes per_run_x_<r>_iternf.csv."""
+    ref = loaded[runs[0]][r_tag]
+    xe, pte = ref["p2_xedges"], ref["p2_ptedges"]
+    xc = 0.5 * (xe[:-1] + xe[1:])
+    nK = len(CENT_CLASSES)
+    name = f"{r_tag}_iternf"
+    jets = np.stack([loaded[r][r_tag]["p2_mom"][0] for r in runs])                 # (n_runs, n_cent, n_pt, n_x)
+    by = {pt: jets[:, :, pt_bins_in(pte, pt)].sum(axis=2) for pt in X_PT_BINS + (TIMING_PT,)}   # (n_runs, n_cent, n_x)
+    tot = {pt: v.sum(0) for pt, v in by.items()}                                     # (n_cent, n_x)
+
+    # jets outside the x axis (the 15-40 GeV TH2, all t), which the profiles do not keep
+    flow = sum(loaded[r][r_tag]["t_flow"] for r in runs)
+    filled = sum(loaded[r][r_tag]["t_filled"] for r in runs)
+    print(f"{r_tag}: x distributions: of {filled:.0f} leading jets at raw pT {TIMING_PT[0]}-{TIMING_PT[1]} GeV, "
+          f"{flow[0] / filled:.2e} have x < {xe[0]:g} and {flow[1] / filled:.2e} have x > {xe[-1]:g} (not shown)")
+    for pt in X_PT_BINS:
+        N, m, rms, _ = x_moments(tot[pt], xc)
+        print(f"{r_tag}: raw pT {pt[0]}-{pt[1]} GeV: " + ", ".join(
+            f"{cent_label(k)} {N[k]:.0f} jets <x> {m[k]:.3f} RMS {rms[k]:.3f}" for k in range(nK)))
+
+    # X1: per class, the pT bins over the class's 15-40 GeV; X2: per pT bin, the classes over all classes
+    panels = [{"title": cent_label(k), "ref": (pt_label(TIMING_PT), tot[TIMING_PT][k]),
+               "entries": [(pt_label(pt), tot[pt][k], c) for pt, c in zip(X_PT_BINS, X_PT_COLORS)]} for k in range(nK)]
+    plot_x_dists(xe, panels, runs, r_tag, lumi, xdir / f"X1_by_pt_{name}.png",
+                 rf"Bin / {TIMING_PT[0]}–{TIMING_PT[1]} GeV", args.save_pdf)
+    panels = [{"title": pt_label(pt), "ref": ("0–60%", tot[pt].sum(0)),
+               "entries": [(cent_label(k), tot[pt][k], CENT_COLORS[k]) for k in range(nK)]} for pt in X_PT_BINS]
+    plot_x_dists(xe, panels, runs, r_tag, lumi, xdir / f"X2_by_cent_{name}.png", "Class / 0–60%", args.save_pdf)
+
+    # X3: per run at 15-40 GeV, next to the run lines
+    n15 = by[TIMING_PT]
+    _, mk, rk, ek = x_moments(n15, xc)                                               # (n_runs, n_cent)
+    Na, ma, ra, ea = x_moments(n15.sum(axis=1), xc)                                  # (n_runs,)
+    good = np.isfinite(lines["a"]) & (Na >= X_MIN_RUN_JETS)
+    rho = {k: float(np.corrcoef(ma[good], lines[k][good])[0, 1]) for k in ("a", "b")}
+    print(f"{r_tag}: <x> per run at {TIMING_PT[0]}-{TIMING_PT[1]} GeV ({good.sum()} runs with a line and >= "
+          f"{X_MIN_RUN_JETS} jets): RMS over runs {np.std(ma[good]):.4f} (median error {np.median(ea[good]):.4f}); "
+          f"correlation with a_run {rho['a']:+.2f}, with b_run {rho['b']:+.2f}")
+    plot_x_runs(runs, mk, ek, rk, lines, rho, r_tag, src, lumi, xdir / f"X3_runs_{name}.png", args.save_pdf)
+    write_csv([{"run": r, "jets": float(Na[i]), "mean_x": float(ma[i]), "mean_x_err": float(ea[i]),
+                "rms_x": float(ra[i]), **{f"mean_x_{lo}_{hi}": float(mk[i, k]) for k, (lo, hi) in enumerate(CENT_CLASSES)},
+                "a": float(lines["a"][i]), "b": float(lines["b"][i])} for i, r in enumerate(runs)],
+              ["run", "jets", "mean_x", "mean_x_err", "rms_x"] + [f"mean_x_{lo}_{hi}" for lo, hi in CENT_CLASSES]
+              + ["a", "b"], xdir / f"per_run_x_{name}.csv")
+
+    # X4: blocks of runs (bounded by the b_run blocks) and the example runs, over all runs (15-40 GeV, all classes)
+    ra_ = np.array(runs)
+    bounds = [ra_[0]] + sorted(b for b in args.x_run_blocks if ra_[0] < b <= ra_[-1]) + [ra_[-1] + 1]
+    groups = [(lo, hi) for lo, hi in zip(bounds[:-1], bounds[1:]) if np.any((ra_ >= lo) & (ra_ < hi))]
+    colors = plt.cm.viridis(np.linspace(0, 0.9, len(groups)))
+    all15 = n15.sum(axis=(0, 1))
+    entries = []
+    for (lo, hi), c in zip(groups, colors):
+        sel = (ra_ >= lo) & (ra_ < hi)
+        entries.append((f"{ra_[sel].min()}–{ra_[sel].max()} ({sel.sum()})", n15[sel].sum(axis=(0, 1)), c))
+        N, m, rms, _ = x_moments(entries[-1][1], xc)
+        print(f"{r_tag}: runs {ra_[sel].min()}-{ra_[sel].max()} ({sel.sum()} runs): {N:.0f} jets, <x> {m:.3f}, RMS {rms:.3f}")
+    panels = [{"title": "Blocks of runs (runs)", "ref": ("All runs", all15), "entries": entries}]
+    if ex_runs:
+        panels.append({"title": "Example runs", "ref": ("All runs", all15),
+                       "entries": [(f"Run {r}", n15[runs.index(r)].sum(0), c) for r, c in zip(ex_runs, EXAMPLE_COLORS)]})
+    plot_x_dists(xe, panels, runs, r_tag, lumi, xdir / f"X4_run_blocks_{name}.png", "Runs / all runs", args.save_pdf)
+
+
+# ---------------------------------------------------------------------------------------------------------------------
 # Checks of the corrected hists (Jet-Anav3 run with the correction: t - t0 - model in the *_corr hists)
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -1000,6 +1203,9 @@ def main():
                         help="Also make the per-run line plot zoomed to this run range, vs run number (repeatable)")
     parser.add_argument("--no-pt", action="store_true", help="Skip the raw pT plot")
     parser.add_argument("--no-timing", action="store_true", help="Skip the timing model")
+    parser.add_argument("--no-x-dist", action="store_true", help="Skip the OHCal fraction distributions (timing/ohcal_frac/)")
+    parser.add_argument("--x-run-blocks", nargs="*", type=int, default=list(X_RUN_BLOCKS),
+                        help="First runs of the blocks of runs whose x distributions are compared (default: %(default)s)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1),
                         help="Parallel workers for reading the runs (default: %(default)s)")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF versions in addition to PNG")
@@ -1194,6 +1400,12 @@ def main():
                   lines_txt=rf"lines: $f_{{c}}(x)$ of each class, degree {FIT_DEG}, fitted on "
                             rf"{TIMING_PT[0]}–{TIMING_PT[1]} GeV", save_pdf=args.save_pdf)
     tick("plots")
+
+    # ---- The OHCal fraction distributions of the same jets (the lines of the line source for every radius)
+    if not args.no_x_dist:
+        for r_tag in args.radii:
+            ohcal_frac_checks(loaded, runs, r_tag, lines, src, lumi, out / "timing" / "ohcal_frac", ex_runs, args)
+        tick("OHCal fraction distributions")
 
     # ---- The corrected hists of the production (Jet-Anav3 with the correction), when every run has them
     for r_tag in args.radii:
