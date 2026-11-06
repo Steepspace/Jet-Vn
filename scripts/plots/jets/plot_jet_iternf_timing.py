@@ -27,6 +27,7 @@ A bin's error in a run is sigma_x / sqrt(n_run,x), with sigma_x the time RMS of 
 """
 
 import argparse
+import textwrap
 import concurrent.futures
 import csv
 import hashlib
@@ -36,8 +37,10 @@ from pathlib import Path
 import pickle
 import sys
 import time
+import warnings
 import numpy as np
 import uproot
+from scipy.optimize import OptimizeWarning, curve_fit
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -141,7 +144,7 @@ def profile2d_moments(p):
     return np.stack([np.asarray(a, dtype=np.float64).reshape(shape)[1:-1, 1:-1] for a in arrays])
 
 
-CACHE_VERSION = 3   # bump when load_run's output changes, so old caches are not reused (2: *_corr, 3: *_tjet)
+CACHE_VERSION = 4   # bump when the cached inputs change, so old caches are not reused (2: *_corr, 3: *_tjet, 4: t0_qa)
 
 
 def cache_key(tasks, pt_radii, t_radii, lumi_paths):
@@ -248,6 +251,18 @@ def load_run(task):
     return run, data
 
 
+def load_t0_qa(task):
+    """The MB MBD t0 distribution of a run (Event QA hT0Corrected): (run, (values, edges)), or (run, None)."""
+    run, path = task
+    try:
+        with uproot.open(path) as rf:
+            h = rf["hT0Corrected"]
+            return run, (h.values().astype(np.float64), h.axis().edges())
+    except (KeyError, OSError) as e:
+        print(f"Warning: run {run}: no hT0Corrected in {path} ({e})")
+        return run, None
+
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Profiles and fits
 # ---------------------------------------------------------------------------------------------------------------------
@@ -335,7 +350,7 @@ def chi2_label(d, err, n_par=0):
 # ---------------------------------------------------------------------------------------------------------------------
 
 def add_header(ax, runs, r_jet, lumi, x=1.0, extra=""):
-    text = rf"{len(runs)} runs ({min(runs)}–{max(runs)}), $R = {r_jet:g}$"
+    text = rf"{len(runs)} runs ({min(runs)}–{max(runs)})" + (rf", $R = {r_jet:g}$" if r_jet is not None else "")
     if lumi is not None:
         text += rf", $\mathcal{{L}} = {lumi / 1e3:.2f}\ \mathrm{{nb}}^{{-1}}$"   # lumi is in ub^-1
     ax.text(x, 1.01, text + extra, transform=ax.transAxes, ha="right", va="bottom", fontsize=13)
@@ -1329,11 +1344,12 @@ def plot_time_dists(te, h_dt, h_t, t0e, H, wins, runs, r_tag, lumi, output_path,
 
 def plot_run_rows(runs, rows, r_tag, lumi, output_path, note=None, save_pdf=False):
     """Rows of per-run values vs run (the run index), sharing the run axis. rows[i]: dict ylabel, series
-    [(y, err or None, color, label or None)], text (top left), zero (draw y = 0, default True)."""
+    [(y, err or None, color, label or None)], text (top left), zero (draw y = 0, default True), hlines (extra red dashed lines)."""
     hep.style.use("ATLAS")
     n = len(rows)
     height = 2.6 * n + 1.6
-    fig, axes = plt.subplots(n, 1, figsize=(13, height), sharex=True, gridspec_kw={"hspace": 0.06})
+    fig, axes = plt.subplots(n, 1, figsize=(13, height), sharex=True, squeeze=False, gridspec_kw={"hspace": 0.06})
+    axes = axes[:, 0]
     idx = np.arange(len(runs))
     ms = 2 if len(runs) >= 500 else 4
     for ax, row in zip(axes, rows):
@@ -1344,10 +1360,15 @@ def plot_run_rows(runs, rows, r_tag, lumi, output_path, note=None, save_pdf=Fals
                 ax.errorbar(idx, y, yerr=e, fmt="o", color=color, markersize=ms, capsize=0, linewidth=0.6, label=label)
         if row.get("zero", True):
             ax.axhline(0.0, color="gray", linestyle="--", linewidth=1)
-        allv = np.concatenate([s[0] for s in row["series"]])
-        lo, hi = np.nanpercentile(allv, 0.5), np.nanpercentile(allv, 99.5)
-        pad = 0.3 * (hi - lo) if hi > lo else 0.1
-        ax.set_ylim(lo - pad, hi + 2 * pad)                  # room at the top for the text
+        for yl in row.get("hlines", []):
+            ax.axhline(yl, color="#e41a1c", linestyle="--", linewidth=1.3)
+        if "ylim" in row:
+            ax.set_ylim(*row["ylim"])
+        else:
+            allv = np.concatenate([s[0] for s in row["series"]])
+            lo, hi = np.nanpercentile(allv, 0.5), np.nanpercentile(allv, 99.5)
+            pad = 0.3 * (hi - lo) if hi > lo else 0.1
+            ax.set_ylim(lo - pad, hi + 2 * pad)              # room at the top for the text
         ax.set_ylabel(row["ylabel"], fontsize=16)
         if row.get("text"):
             ax.text(0.01, 0.95, row["text"], transform=ax.transAxes, ha="left", va="top", fontsize=11)
@@ -1356,7 +1377,7 @@ def plot_run_rows(runs, rows, r_tag, lumi, output_path, note=None, save_pdf=Fals
     if note:
         axes[0].text(0.99, 0.95, note, transform=axes[0].transAxes, ha="right", va="top", fontsize=11)
     setup_run_axis(axes[-1], runs)
-    add_header(axes[0], runs, RADII[r_tag]["r"], lumi)
+    add_header(axes[0], runs, RADII[r_tag]["r"] if r_tag is not None else None, lumi)
     plt.subplots_adjust(left=0.10, right=0.98, bottom=1.1 / height, top=1 - 0.45 / height)
     save_fig(fig, output_path, save_pdf)
     plt.close(fig)
@@ -1479,6 +1500,7 @@ def tjet_checks(loaded, js, th2_dt, runs, r_tag, src, lumi, Pr, lines, jdir, arg
 
     # ---- the per-run lines refitted on t alone (line source only); their t0 part is lines(t) - lines(t - t0)
     lt = None
+    res = {"m0": m0}
     if r_tag == src:
         mom_t = Mt.sum(axis=2)                                           # (n_runs, 4, n_x)
         pooled = mom_t.sum(0)
@@ -1490,6 +1512,7 @@ def tjet_checks(loaded, js, th2_dt, runs, r_tag, src, lumi, Pr, lines, jdir, arg
         lt = run_lines({"mom_r": mom_t, "xc": xc, "f_x": np.polyval(fit_t["coef"], xc), "in_range": Pr["in_range"],
                         "sigma": np.sqrt(np.clip(pooled[2] / pooled[0] - pm ** 2, 0, None))}, runs)
         a0, b0 = lt["a"] - a, lt["b"] - b
+        res["a0"] = a0
         for k, (vd, vt, v0) in (("a", (a, lt["a"], a0)), ("b", (b, lt["b"], b0))):
             print(f"{r_tag}: {k}_run RMS over runs: from t - t0 {np.std(vd[good]):.3f}, from t {np.nanstd(vt[good]):.3f}, "
                   f"t0 part {np.nanstd(v0[good]):.3f} ns; rho(t - t0, t) {rho(vd, vt):+.2f}, rho(t - t0, t0 part) "
@@ -1550,6 +1573,312 @@ def tjet_checks(loaded, js, th2_dt, runs, r_tag, src, lumi, Pr, lines, jdir, arg
         tot_d = moments_mean_sd(Mdt[:, :, k].sum(axis=(0, 2)))[0]
         tot_t = moments_mean_sd(Mt[:, :, k].sum(axis=(0, 2)))[0]
         print(f"{r_tag}: {cent_label(k)}: <t - t0> {tot_d:+.3f}, <t> {tot_t:+.3f}, <t0> {tot_t - tot_d:+.3f} ns")
+    return res
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# The MBD t0 per run (timing/mbd_t0/): main-bunch and satellite peaks of the MB events (Event QA hT0Corrected),
+# and the runs whose main peak is off zero (outliers). Not about jets, apart from the a_run correlations printed.
+# ---------------------------------------------------------------------------------------------------------------------
+
+T0_PEAK_HALF = 0.8          # ns: each peak is fitted with a Gaussian within this distance of its highest bin
+T0_PEAK_MIN = 1000          # min entries in a t0 window for its peak to be fitted
+# Min fraction of a satellite for its fitted position to be trusted: below it, the tail of the main peak pulls the
+# fit toward the main peak (the apparent shift grows as the fraction falls; a joint 3-Gaussian fit does not fix it,
+# the peaks are not Gaussian). Smaller satellites are drawn in gray and left out of the stability numbers.
+T0_PEAK_MIN_FRAC = 0.16
+# Good MBD t0 in a run: the fitted main-bunch peak within +-T0_MAIN_CUT of zero. The runs form one peak from -0.08 to
+# +0.17 ns (median +0.035, robust RMS 0.012) and the mis-calibrated runs sit at -0.36 ns and below, so the cut falls
+# in the gap. The satellites and the peak width are fitted and plotted, but not cut on.
+T0_MAIN_CUT = 0.25
+MB_T0_INFO = r"MB, $|z| < 10$ cm, 0–60%"     # the hT0Corrected selection of the Event QA
+
+
+def fit_t0_peaks(h, e):
+    """Per t0 window (T0_WINDOWS): the fraction of entries and a Gaussian fit of its peak (amplitude per bin, mu,
+    error of mu, sigma), within T0_PEAK_HALF of the highest bin. A peak whose highest bin is closer than T0_PEAK_HALF
+    to the window edge is not fitted (nan): it is the tail of the main peak, not a satellite peak."""
+    c = centers(e)
+    tot = h.sum()
+    out = {}
+    for key, _, lo, hi, _ in T0_WINDOWS:
+        w = (c >= lo) & (c < hi)
+        out.update({f"{key}_frac": h[w].sum() / tot if tot > 0 else np.nan, f"{key}_amp": np.nan,
+                    f"{key}_mu": np.nan, f"{key}_mu_err": np.nan, f"{key}_sigma": np.nan})
+        if h[w].sum() < T0_PEAK_MIN:
+            continue
+        mode = c[w][np.argmax(h[w])]
+        if mode - lo < T0_PEAK_HALF or hi - mode < T0_PEAK_HALF:
+            continue
+        s = (np.abs(c - mode) < T0_PEAK_HALF) & (h > 0)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", OptimizeWarning)
+                p, cov = curve_fit(lambda x, n, mu, sg: n * np.exp(-0.5 * ((x - mu) / sg) ** 2), c[s], h[s],
+                                   p0=(h[s].max(), mode, 0.7), sigma=np.sqrt(h[s]), absolute_sigma=True)
+        except (RuntimeError, ValueError):
+            continue
+        out.update({f"{key}_amp": float(p[0]), f"{key}_mu": float(p[1]), f"{key}_mu_err": float(np.sqrt(cov[1, 1])),
+                    f"{key}_sigma": float(abs(p[2]))})
+    return out
+
+
+def run_ranges(runs, sel, max_gap=3):
+    """The selected runs as ranges of neighbouring runs in the list (gaps of up to max_gap runs joined)."""
+    idx = np.flatnonzero(sel)
+    if not len(idx):
+        return "none"
+    groups, start = [], idx[0]
+    for i, j in zip(idx[:-1], idx[1:]):
+        if j - i > max_gap:
+            groups.append((start, i))
+            start = j
+    groups.append((start, idx[-1]))
+    return ", ".join(f"{runs[a]}" if a == b else f"{runs[a]}-{runs[b]} ({int(sel[a:b + 1].sum())})" for a, b in groups)
+
+
+def plot_t0_dists(dists, runs, info, output_path, save_pdf=False):
+    """M3: pooled MBD t0 distributions (unit area): dists [(label, values, edges, color)], info the selection text."""
+    hep.style.use("ATLAS")
+    fig, ax = plt.subplots(figsize=(10, 7))
+    for lab, h, e, color in dists:
+        c = centers(e)
+        m, _ = hist_mean_rms(h, e)
+        fr = "/".join(f"{100 * h[(c >= lo) & (c < hi)].sum() / h.sum():.1f}" for _, _, lo, hi, _ in T0_WINDOWS)
+        gap_steps(ax, h / (h.sum() * np.diff(e)), e, color=color, linewidth=1.8,
+                  label=rf"{lab}: early/main/late {fr}%, $\mu$ = {m:+.2f} ns")
+    for x in (-T0_MAIN, T0_MAIN):
+        ax.axvline(x, color="gray", linestyle=":", linewidth=1)
+    ax.set_yscale("log")
+    ax.set_ylim(1e-4, 30)
+    ax.set_xlim(-10, 10)
+    ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dt_{0}}$ [ns$^{-1}$]")
+    ax.legend(loc="upper left", fontsize=15, frameon=True, facecolor="white", framealpha=0.9, edgecolor="none")
+    ax.text(0.97, 0.76, f"{info}\n" + rf"main bunch: $|t_{{0}}| < {T0_MAIN:g}$ ns",
+            transform=ax.transAxes, ha="right", va="top", fontsize=15)
+    ax.text(0.0, 1.01, rf"{len(runs)} runs ({min(runs)}–{max(runs)})", transform=ax.transAxes, ha="left", va="bottom",
+            fontsize=13)
+    plt.subplots_adjust(left=0.13, right=0.97, bottom=0.12, top=0.94)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_t0_outliers(title, panels, output_path, save_pdf=False):
+    """M4: outlier runs of the MBD t0 main peak. Per panel, one run's t0 distribution (unit area) with its fitted peaks
+    (dotted lines at the fitted positions, colored Gaussians) and a gray line at t0 = 0 to see the shift.
+    panels: [(run, values, edges, fit dict, text)]."""
+    hep.style.use("ATLAS")
+    nc = len(panels)
+    fig, axes = plt.subplots(1, nc, figsize=(6.4 * nc, 6), sharey=True, squeeze=False, gridspec_kw={"wspace": 0.05})
+    for ax, (run, h, e, fit, text) in zip(axes[0], panels):
+        N, bw = h.sum(), np.diff(e)
+        gap_steps(ax, h / (N * bw), e, color="black", linewidth=1.6, label=f"Run {run}")
+        ax.axvline(0, color="gray", linestyle="--", linewidth=1.3)
+        for key, _, _, _, color in T0_WINDOWS:
+            if np.isfinite(fit[f"{key}_mu"]):
+                mu, sg = fit[f"{key}_mu"], fit[f"{key}_sigma"]
+                ax.axvline(mu, color="black", linestyle=":", linewidth=1.2)
+                xs = np.linspace(mu - 2 * sg, mu + 2 * sg, 100)
+                ax.plot(xs, fit[f"{key}_amp"] * np.exp(-0.5 * ((xs - mu) / sg) ** 2) / (N * bw[0]), "-",
+                        color=color if color != "black" else "#ff7f00", linewidth=1.8)
+        ax.text(0.03, 0.97, text, transform=ax.transAxes, ha="left", va="top", fontsize=14,
+                zorder=5, bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", pad=2))
+        ax.legend(loc="lower center", fontsize=14, frameon=False)
+        ax.set_yscale("log")
+        ax.set_ylim(1e-6, 3000)                                   # room below the distributions for the legend
+        ax.set_xlim(-10, 10)
+        ax.set_xticks([-7.5, -5, -2.5, 0, 2.5, 5, 7.5])            # no clash of the edge labels between the panels
+        ax.set_xlabel(r"MBD $t_{0}$ [ns]")
+    axes[0, 0].set_ylabel(r"$\frac{1}{N}\frac{dN}{dt_{0}}$ [ns$^{-1}$]")
+    axes[0, 0].text(0.0, 1.02, f"{title}\n{MB_T0_INFO}; " + rf"Gaussian fits within $\pm${T0_PEAK_HALF:g} ns of each peak "
+                    "(dashed gray: $t_{0}$ = 0); $\Delta\mu$: satellite $-$ main-peak $\mu$", transform=axes[0, 0].transAxes, ha="left", va="bottom", fontsize=15)
+    plt.subplots_adjust(left=0.07 if nc > 1 else 0.14, right=0.98, bottom=0.13, top=0.88)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_t0_main(v, cut, notes, runs, lumi, output_path, save_pdf=False):
+    """M5: the per-run distribution of the fitted main-bunch t0 peak position (not median subtracted), with the cut at
+    +-cut ns and the outlier runs it flags filled red."""
+    hep.style.use("ATLAS")
+    fig, ax = plt.subplots(figsize=(10, 7))
+    bw = 0.01
+    lo = min(np.min(v), -2 * cut) - 5 * bw
+    hi = max(np.max(v), 2 * cut) + 5 * bw
+    edges = np.arange(np.floor(lo / bw) * bw, hi + bw, bw)
+    h, _ = np.histogram(v, edges)
+    inside = np.abs(v) <= cut
+    ax.stairs(h, edges, color="black", linewidth=1.4, label=f"{len(v)} runs")
+    hx, _ = np.histogram(v[~inside], edges)
+    if hx.any():
+        ax.stairs(hx, edges, color="#e41a1c", fill=True, alpha=0.5, label=f"outliers: {(~inside).sum()} runs")
+    for x in (-cut, cut):
+        ax.axvline(x, color="#e41a1c", linestyle="--", linewidth=1.5)
+    ax.axvline(0, color="gray", linestyle=":", linewidth=1)
+    ax.set_yscale("log")
+    ax.set_ylim(0.5, h.max() * 40)
+    ax.set_xlim(edges[0], edges[-1])
+    ax.set_xlabel(r"Main-bunch MBD $t_{0}$ peak $\mu$ [ns]")
+    ax.set_ylabel(f"Runs / {bw * 1000:g} ps")
+    rob = 1.4826 * np.median(np.abs(v - np.median(v)))
+    ax.legend(loc="upper right", fontsize=15, frameon=False)
+    ax.text(0.03, 0.97, rf"Outlier: $|\mu| > {cut:g}$ ns; {(~inside).sum()} of {len(v)} runs" + "\n"
+            + rf"median {np.median(v):+.3f} ns, robust RMS {rob:.3f} ns" + "\n"
+            + rf"good runs: [{np.min(v[inside]):+.3f}, {np.max(v[inside]):+.3f}] ns"
+            + ("".join("\n" + n for n in notes)) + "\n"
+            + rf"{MB_T0_INFO};" "\n" rf"Gaussian fit within $\pm${T0_PEAK_HALF:g} ns of the peak",
+            transform=ax.transAxes, ha="left", va="top", fontsize=14, zorder=5,
+            bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", pad=3))
+    add_header(ax, runs, None, lumi)
+    plt.subplots_adjust(left=0.12, right=0.97, bottom=0.12, top=0.94)
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def mbd_t0_checks(t0_qa, loaded, runs, src, lumi, lines, tj, mdir, args):
+    """Is the main MBD t0 peak at zero, are the satellite peaks stable, and which runs have the main peak off zero?
+
+    Per run, Gaussian fits of the main-bunch and satellite peaks (fit_t0_peaks) of the MB t0 (Event QA hT0Corrected,
+    same production as the trees). Prints their stability and correlation with a_run (and its t0 part, tj). A run is
+    good when its main peak is within +-T0_MAIN_CUT of zero, else an outlier; nothing else is cut on. Writes
+    per_run_mbd_t0.csv, the good and outlier run lists and plots M1-M5. The leading-jet
+    events' main peak (h2LeadJetTimeT0 of the line source) is only printed against the MB one."""
+    runs_qa = [r for r in runs if r in t0_qa]
+    if not runs_qa:
+        print("No hT0Corrected in the Event QA files: skipping the MBD t0 checks")
+        return
+    if len(runs_qa) < len(runs):
+        print(f"Warning: hT0Corrected for only {len(runs_qa)}/{len(runs)} runs; the MBD t0 checks use those")
+    runs = runs_qa
+    fits = {r: fit_t0_peaks(*t0_qa[r]) for r in runs}
+    arr = lambda k, f=fits: np.array([f[r][k] for r in runs], float)
+    robust = lambda v: 1.4826 * np.nanmedian(np.abs(v - np.nanmedian(v)))
+    pct = lambda v, q: np.nanpercentile(v, q)
+    li = {r: i for i, r in enumerate(sorted(loaded))}
+    a = np.array([lines["a"][li[r]] for r in runs])
+    jets = np.array([lines["jets"][li[r]] for r in runs])
+    a0 = np.array([tj["a0"][li[r]] for r in runs]) if tj and "a0" in tj else None
+    corr = lambda u, v: float(np.corrcoef(u[np.isfinite(u) & np.isfinite(v)], v[np.isfinite(u) & np.isfinite(v)])[0, 1])
+    events = np.array([t0_qa[r][0].sum() for r in runs])
+
+    # ---- the peaks
+    m, sm = arr("main_mu"), arr("main_sigma")
+    print(f"MBD t0, MB events (hT0Corrected), {len(runs)} runs: main peak mu median {np.nanmedian(m):+.3f} ns, robust RMS "
+          f"over runs {robust(m):.3f}, 1-99% [{pct(m, 1):+.3f}, {pct(m, 99):+.3f}], median fit error "
+          f"{np.nanmedian(arr('main_mu_err')):.4f}; sigma median {np.nanmedian(sm):.3f} ns, 1-99% [{pct(sm, 1):.3f}, "
+          f"{pct(sm, 99):.3f}]; corr with a_run {corr(m, a):+.2f}" + (f", with its t0 part {corr(m, a0):+.2f}" if a0 is not None else ""))
+    spacing, meas, dev = {}, {}, {}
+    for k in ("early", "late"):
+        dv, fr = arr(f"{k}_mu") - m, arr(f"{k}_frac")
+        meas[k] = np.isfinite(dv) & (fr > T0_PEAK_MIN_FRAC)
+        spacing[k] = float(np.median(dv[meas[k]]))
+        dev[k] = dv - spacing[k]
+        small = np.isfinite(dv) & ~meas[k]
+        print(f"    {k} - main, {meas[k].sum()} runs with fraction > {T0_PEAK_MIN_FRAC}: median {spacing[k]:+.3f} ns, "
+              f"robust RMS {robust(dv[meas[k]]):.3f}, 5-95% [{pct(dv[meas[k]], 5):+.3f}, {pct(dv[meas[k]], 95):+.3f}]; "
+              f"fraction median {np.nanmedian(fr):.3f} [1-99%: {pct(fr, 1):.3f}, {pct(fr, 99):.3f}]; {small.sum()} runs "
+              f"at <= {T0_PEAK_MIN_FRAC} (position not trusted, median {k} - main there "
+              f"{np.median(dv[small]) if small.any() else np.nan:+.3f} ns)")
+    asym = arr("late_frac") - arr("early_frac")
+    if a0 is not None:
+        print(f"    late - early fraction: corr with a_run {corr(asym, a):+.2f}, with its t0 part {corr(asym, a0):+.2f}")
+    if all("t0_mom" in loaded[r][src] for r in runs):
+        jm = np.array([fit_t0_peaks(loaded[r][src]["t0_mom"][0], loaded[r][src]["t0_edges"])["main_mu"] for r in runs])
+        print(f"    main peak of the leading-jet events ({src}, raw pT {TIMING_PT[0]}-{TIMING_PT[1]} GeV) - MB: median "
+              f"{np.nanmedian(jm - m):+.3f} ns, robust RMS over runs {robust(jm - m):.3f}, corr {corr(jm, m):+.2f}")
+
+    # ---- good MBD t0: the main-bunch peak within +-T0_MAIN_CUT of zero; everything else is only shown
+    good = np.isfinite(m) & (np.abs(m) <= T0_MAIN_CUT)
+    out = ~good
+    print(f"MBD t0 main peak within +-{T0_MAIN_CUT} ns of zero: {good.sum()}/{len(runs)} runs; good runs span "
+          f"[{np.min(m[good]):+.3f}, {np.max(m[good]):+.3f}] ns"
+          + (f", nearest outlier {m[out][np.argmin(np.abs(m[out]))]:+.3f} ns" if out.any() else ""))
+    print(f"    outliers: {out.sum()} runs: {run_ranges(runs, out)}")
+    tot_j = np.nansum(jets)
+    print(f"    good: {np.nansum(jets[good]) / tot_j:.3f} of the 15-40 GeV leading jets, {events[good].sum() / events.sum():.3f} "
+          f"of the MB events; a_run RMS over the good runs {np.nanstd(a[good]):.3f} ns (all runs {np.nanstd(a):.3f})"
+          + (f", its t0 part {np.nanstd(a0[good]):.3f} ({np.nanstd(a0):.3f})" if a0 is not None else ""))
+    if out.any():
+        print("    outliers: main mu, a_run" + (", a_run from t alone (a_run + t0 part)" if a0 is not None else "") + ": "
+              + ", ".join(f"{runs[i]} {m[i]:+.2f}/{a[i]:+.2f}" + (f"/{a[i] + a0[i]:+.2f}" if a0 is not None else "")
+                          for i in np.flatnonzero(out)))
+
+    # ---- outputs
+    rows_csv = [{"run": r, "events": float(events[i]),
+                 **{f"{k}_{q}": fits[r][f"{k}_{q}"] for k, *_ in T0_WINDOWS for q in ("frac", "mu", "mu_err", "sigma")},
+                 "early_spacing": float(arr("early_mu")[i] - m[i]), "late_spacing": float(arr("late_mu")[i] - m[i]),
+                 "early_trusted": int(meas["early"][i]), "late_trusted": int(meas["late"][i]),
+                 "good": int(good[i])} for i, r in enumerate(runs)]
+    write_csv(rows_csv, list(rows_csv[0].keys()), mdir / "per_run_mbd_t0.csv")
+    for name, s in (("mbd_t0_good_runs.txt", good), ("mbd_t0_outlier_runs.txt", out)):
+        (mdir / name).write_text("".join(f"{r}\n" for r, keep in zip(runs, s) if keep))
+        print(f"Saved: {mdir / name} ({s.sum()} runs)")
+
+    # M1 (all rows) and M2 (the peak positions only), per run
+    note = rf"{MB_T0_INFO}; Gaussian fits within $\pm${T0_PEAK_HALF:g} ns of each peak"
+
+    def position_rows(sel, good_only):
+        """The peak-position rows (main, early - main, late - main) for the runs in sel."""
+        mm = m[sel]
+        main = [(np.where(good[sel], mm, np.nan), arr("main_mu_err")[sel], "black", None)]
+        if not good_only:
+            main.append((np.where(good[sel], np.nan, mm), None, "#e41a1c", rf"outlier, $|\mu| > {T0_MAIN_CUT:g}$ ns"))
+        what = "good runs only" if good_only else "all runs"
+        out_ = [{"ylabel": r"Main peak $\mu$ [ns]", "series": main,
+                 "ylim": ((-0.3, 0.4) if good_only else (min(-0.5, np.nanmin(mm) - 0.15), max(0.6, np.nanmax(mm) + 0.35))),
+                 "text": note + "\n" + rf"{what}: median {np.nanmedian(mm):+.3f}, robust RMS {robust(mm):.3f} ns"}]
+        for k, color in (("early", T0_WINDOWS[0][4]), ("late", T0_WINDOWS[2][4])):
+            dv, ms_ = (arr(f"{k}_mu") - m)[sel], meas[k][sel]
+            out_.append({"ylabel": rf"{k.capitalize()} $-$ main $\mu$ [ns]", "zero": False,
+                         "series": [(np.where(ms_, dv, np.nan), None, color, rf"fraction $>$ {T0_PEAK_MIN_FRAC:g}"),
+                                    (np.where(ms_, np.nan, dv), None, "gray", rf"fraction $\leq$ {T0_PEAK_MIN_FRAC:g}")],
+                         "ylim": ((spacing[k] - 0.3, spacing[k] + 0.3) if good_only else (spacing[k] - 0.6, spacing[k] + 0.6)),
+                         "text": rf"fraction $>$ {T0_PEAK_MIN_FRAC:g}: median {np.median(dv[ms_]):+.3f}, robust RMS "
+                                 rf"{robust(dv[ms_]):.3f} ns; gray: small satellite, fit pulled by the main peak"})
+        return out_
+
+    every = np.ones(len(runs), bool)
+    rows = position_rows(every, False)
+    top = dict(rows[0], hlines=[-T0_MAIN_CUT, T0_MAIN_CUT],
+               text=note + "\n" + rf"red dashed: outlier cut $\pm${T0_MAIN_CUT:g} ns; {out.sum()} of {len(runs)} runs outside")
+    plot_run_rows(runs, [top], None, lumi, mdir / "M2_t0_main_peak_runs.png", None, args.save_pdf)
+    plot_run_rows(runs, rows, None, lumi, mdir / "M2_t0_peak_positions_runs.png", None, args.save_pdf)
+    plot_run_rows([r for r, s_ in zip(runs, good) if s_], position_rows(good, True), None, lumi,
+                  mdir / "M2_t0_peak_positions_runs_good.png", None, args.save_pdf)
+    rows.append({"ylabel": "Satellite fraction", "zero": False,
+                 "series": [(arr(f"{k}_frac"), None, w[4], w[1]) for k, w in zip(("early", "late"), T0_WINDOWS[::2])]})
+    rows.append({"ylabel": r"Peak $\sigma$ [ns]", "zero": False,
+                 "series": [(arr(f"{w[0]}_sigma"), None, w[4], w[0]) for w in T0_WINDOWS]})
+    plot_run_rows(runs, rows, None, lumi, mdir / "M1_t0_peaks_runs.png", None, args.save_pdf)
+
+    # M3: pooled, all runs and the good runs
+    e = t0_qa[runs[0]][1]
+    h_all = sum(t0_qa[r][0] for r in runs)
+    h_gd = sum(t0_qa[r][0] for r, s in zip(runs, good) if s)
+    for fname, lab, hh, col in (("all", f"All {len(runs)} runs", h_all, "black"),
+                                ("good", f"{good.sum()} good runs", h_gd, "#2166ac")):
+        plot_t0_dists([(lab, hh, e, col)], runs, MB_T0_INFO, mdir / f"M3_t0_dist_{fname}.png", args.save_pdf)
+
+    # M4: the three outlier runs with the largest main-peak shift
+    if out.any():
+        order = np.flatnonzero(out)[np.argsort(-np.abs(m[out]))][:3]
+        panels = []
+        for i in order:
+            fit = fits[runs[i]]
+            sp = lambda k: (rf"{fit[f'{k}_mu'] - fit['main_mu']:+.2f} ns" if np.isfinite(fit[f"{k}_mu"]) else "not fitted")
+            text = (rf"Run {runs[i]}, ${sci(events[i])}$ events" "\n"
+                    rf"main: $\mu$ = {fit['main_mu']:+.3f} ns, $\sigma$ = {fit['main_sigma']:.2f} ns" "\n"
+                    rf"early: $\Delta\mu$ = {sp('early')} ({100 * fit['early_frac']:.0f}% of events)" "\n"
+                    rf"late: $\Delta\mu$ = {sp('late')} ({100 * fit['late_frac']:.0f}% of events)")
+            panels.append((runs[i], t0_qa[runs[i]][0], t0_qa[runs[i]][1], fit, text))
+        print("MBD t0: M4 shows the worst outliers " + ", ".join(f"{runs[i]} ({m[i]:+.3f} ns)" for i in order))
+        plot_t0_outliers(rf"Largest main-peak shifts of the {out.sum()} outlier runs ($|\mu| > {T0_MAIN_CUT:g}$ ns)", panels,
+                         mdir / "M4_t0_outliers.png", args.save_pdf)
+
+    # M5: the main-peak position per run, with the cut and the outliers it flags
+    plot_t0_main(m[np.isfinite(m)], T0_MAIN_CUT, [textwrap.fill(f"outliers: {run_ranges(runs, out)}", 44)] if out.any() else [],
+                 runs, lumi, mdir / "M5_t0_main_peak.png", args.save_pdf)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -1631,7 +1960,7 @@ def main():
         with cache_path.open("rb") as f:
             cached = pickle.load(f)
         loaded, t_sum, lumi, c_sum = cached["loaded"], cached["t_sum"], cached["lumi"], cached["c_sum"]
-        j_sum = cached["j_sum"]
+        j_sum, t0_qa = cached["j_sum"], cached["t0_qa"]
         runs = sorted(loaded)
     else:
         # Stream the results so only one full 2D per radius (the sum) is kept in memory
@@ -1674,11 +2003,20 @@ def main():
         else:
             print(f"Warning: no luminosity list at {args.lumi_list}, omitting the luminosity label")
 
+        # The MB MBD t0 distribution per run, from the same Event QA files (hT0Corrected)
+        t0_qa = {}
+        qa_tasks = [(r, lumi_files[r]) for r in runs if r in lumi_files and lumi_files[r].exists()] if t_radii else []
+        if qa_tasks:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as ex:
+                t0_qa = {r: v for r, v in ex.map(load_t0_qa, qa_tasks, chunksize=16) if v is not None}
+            print(f"Read hT0Corrected for {len(t0_qa)}/{len(runs)} runs")
+
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             tmp = cache_path.with_suffix(".tmp")
             with tmp.open("wb") as f:
-                pickle.dump({"loaded": loaded, "t_sum": t_sum, "lumi": lumi, "c_sum": c_sum, "j_sum": j_sum}, f,
+                pickle.dump({"loaded": loaded, "t_sum": t_sum, "lumi": lumi, "c_sum": c_sum, "j_sum": j_sum,
+                             "t0_qa": t0_qa}, f,
                             protocol=pickle.HIGHEST_PROTOCOL)
             tmp.replace(cache_path)                       # atomic: an interrupted write never leaves a broken cache
             print(f"Saved the input cache: {cache_path} ({cache_path.stat().st_size / 1e6:.0f} MB)")
@@ -1811,6 +2149,7 @@ def main():
     tick("correction checks")
 
     # ---- The jet time alone (*_tjet) and t vs t0, when every run has them
+    tj = {}
     for r_tag in args.radii:
         n_j = j_sum.get(r_tag, {}).get("n_runs", 0)
         if n_j == 0:
@@ -1818,9 +2157,13 @@ def main():
         elif n_j < len(runs):
             print(f"Warning: {r_tag}: only {n_j}/{len(runs)} runs have the jet-time-alone hists, skipping the t0 checks")
         else:
-            tjet_checks(loaded, j_sum[r_tag], t_sum[r_tag], runs, r_tag, src, lumi, P[r_tag], lines,
-                        out / "timing" / "tjet_check", args)
+                tj[r_tag] = tjet_checks(loaded, j_sum[r_tag], t_sum[r_tag], runs, r_tag, src, lumi, P[r_tag], lines,
+                                    out / "timing" / "tjet_check", args)
     tick("t0 checks")
+
+    # ---- The MBD t0 per run (MB events, Event QA hT0Corrected): peaks, stability, the outlier runs
+    mbd_t0_checks(t0_qa, loaded, runs, src, lumi, lines, tj.get(src), out / "timing" / "mbd_t0", args)
+    tick("MBD t0")
 
 
 if __name__ == "__main__":
