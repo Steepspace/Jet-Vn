@@ -152,6 +152,10 @@ target_link_libraries(Jet-Anav2 PRIVATE ${STANDALONE_MACRO_LIBS})
 add_executable(Jet-Anav3 macros/Jet-Anav3.C)
 target_link_libraries(Jet-Anav3 PRIVATE ${STANDALONE_MACRO_LIBS})
 
+# --- Jet Dijet (clean dijet control sample) ---
+add_executable(Jet-Dijet macros/Jet-Dijet.C)
+target_link_libraries(Jet-Dijet PRIVATE ${STANDALONE_MACRO_LIBS})
+
 # --- Jet JES (data+MC overlay) ---
 add_executable(Jet-JES macros/Jet-JES.C)
 target_link_libraries(Jet-JES PRIVATE ${STANDALONE_MACRO_LIBS})

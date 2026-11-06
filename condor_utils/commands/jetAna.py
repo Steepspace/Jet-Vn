@@ -37,6 +37,8 @@ def run_jet_jobs(args, version):
         for timing_file in (args.timing_fc_file, args.timing_lines_file):
             if timing_file:
                 manager.add_file_to_check(timing_file)
+    elif version == "jetDijet":
+        manager.add_file_to_check(args.calo_mbd_list)
     elif version == "jetJES":
         # p+p MC trees (Fun4All_PP_JES) have no Calo-MBD selection
         if not args.pp:
@@ -86,6 +88,12 @@ def run_jet_jobs(args, version):
         init_log['JES Z0 File'] = Path(args.jes_z0_file).resolve() if args.jes_z0_file else "Not Provided (Using stored eta-binned pt_calib)"
         init_log['Timing f_c File'] = Path(args.timing_fc_file).resolve() if args.timing_fc_file else "Not Provided (no timing correction)"
         init_log['Timing Lines File'] = Path(args.timing_lines_file).resolve() if args.timing_lines_file else "Not Provided (no timing correction)"
+    elif version == "jetDijet":
+        # the jets are cut in raw pT only
+        del init_log['Jet pT Min']
+        init_log['Calo-MBD List'] = Path(args.calo_mbd_list).resolve()
+        init_log['Jet Raw pT Min'] = f"{args.jet_pt_raw_min} GeV"
+        init_log['Sigma Cut'] = args.sigma_cut
     elif version == "jetJES":
         # the jet pT is not cut on, the response is filled for every matched truth jet
         del init_log['Jet pT Min']
@@ -159,7 +167,7 @@ def run_jet_jobs(args, version):
         run_map = {p.stem: str(p) for p in run_paths}
     elif version == "jetJES" and args.pp:
         run_map = {}
-    elif version in ("jetAnav3", "jetJES"):
+    elif version in ("jetAnav3", "jetDijet", "jetJES"):
         run_paths = [Path(l.strip()) for l in Path(args.calo_mbd_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
         run_map = {}
         for p in run_paths:
@@ -179,7 +187,7 @@ def run_jet_jobs(args, version):
                 qa_file = run_map[run_id]
             elif version == "jetJES" and args.pp:
                 qa_file = "none"
-            elif version in ("jetAnav3", "jetJES"):
+            elif version in ("jetAnav3", "jetDijet", "jetJES"):
                 qa_file = run_map.get(run_id) or run_map.get(run_id.lstrip('0'))
                 if not qa_file:
                     manager.logger.warning(f"Run {run_id} found in input trees but not in Calo-MBD list. Skipping.")
@@ -189,7 +197,7 @@ def run_jet_jobs(args, version):
                 chunk_file = files_dir / f'{tag}_part_{i}.list'
                 chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
 
-                if version in ("jetAna", "jetAnav3", "jetJES"):
+                if version in ("jetAna", "jetAnav3", "jetDijet", "jetJES"):
                     f_jobs.write(f"{chunk_file},{qa_file}{extra}\n")
                 else:
                     f_jobs.write(f"{chunk_file}\n")
@@ -207,6 +215,9 @@ def run_jet_jobs(args, version):
         # the timing correction files are read in place by the jobs: pass absolute paths
         timing_files = " ".join(str(Path(f).resolve()) if f else "none" for f in (args.timing_fc_file, args.timing_lines_file))
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow} {timing_files}"
+        queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
+    elif version == "jetDijet":
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output {args.jet_pt_raw_min} {args.sigma_cut}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetJES":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {1 if args.pp else 0}"
@@ -227,6 +238,9 @@ def jetAnav2_jobs(args):
 
 def jetAnav3_jobs(args):
     run_jet_jobs(args, "jetAnav3")
+
+def jetDijet_jobs(args):
+    run_jet_jobs(args, "jetDijet")
 
 def jetJES_jobs(args):
     run_jet_jobs(args, "jetJES")
@@ -276,6 +290,14 @@ def setup_jetAna_subparsers(subparsers):
     jetAnav3.add_argument('--timing-fc-file', type=str, default=None, help='Leading jet timing correction: f_c(x) per radius and centrality class (timing_correction_iternf.csv of plot_jet_iternf_timing.py). With --timing-lines-file, fills the *_corr timing hists. (Optional)')
     jetAnav3.add_argument('--timing-lines-file', type=str, default=None, help='Leading jet timing correction: per-run lines a_run, b_run (per_run_lines_r03_iternf.csv of plot_jet_iternf_timing.py). (Optional)')
     jetAnav3.set_defaults(func=jetAnav3_jobs)
+
+    jetDijet = subparsers.add_parser('jetDijet', help='jetDijet condor jobs (clean dijet control sample, iternf R = 0.2 / 0.3).')
+    add_common_args(jetDijet, "Dijet")
+    add_build_args(jetDijet)
+    jetDijet.add_argument('-i2', '--calo-mbd-list', '--event-qa-list', dest='calo_mbd_list', type=str, required=True, help='List of Calo-MBD / Event QA files.')
+    jetDijet.add_argument('--jet-pt-raw-min', type=float, default=7.0, help='Minimum raw jet pT, where the tree sample (calibrated pT >= 10 GeV) is complete. Default: 7 [GeV]')
+    jetDijet.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
+    jetDijet.set_defaults(func=jetDijet_jobs)
 
     jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay or p+p MC JES, all pT-hat samples of the input list in one submission).')
     add_common_args(jetJES, "JES")
