@@ -34,31 +34,33 @@ then
 
     echo "Fetching all DST files at once from: $input_list"
 
-    # Transfer all files in the list upfront
-    cut -d ',' -f 2 "$input_list" > dst_zdc.list
+    # Transfer all files in the list upfront: list lines are calofit,zdc,sepd
+    # DST_CALOFITTING is needed for MbdReco (MBD t0 for the ZdcReco satellite correction)
+    cut -d ',' -f 1,2 "$input_list" | tr ',' '\n' > dst_calofit_zdc.list
 
-    getinputfiles.pl --verbose --filelist dst_zdc.list || {
-        echo "Error: getinputfiles.pl failed for dst_zdc.list at $(date) on $(hostname)" >&2
+    getinputfiles.pl --verbose --filelist dst_calofit_zdc.list || {
+        echo "Error: getinputfiles.pl failed for dst_calofit_zdc.list at $(date) on $(hostname)" >&2
         mkdir -p "$submitDir/failures"
-        echo "getinputfiles failure (dst_zdc) for $input_list on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+        echo "getinputfiles failure (dst_calofit_zdc) for $input_list on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
         exit 1
     }
 
     ls -lah
 
-    # Loop over each line (DST file) in the input list to process them
-    while IFS= read -r current_dst || [[ -n "$current_dst" ]]; do
+    # Loop over each line (calofit,zdc DST pair) in the input list to process them
+    while IFS=',' read -r current_calofit current_zdc _ || [[ -n "$current_calofit" ]]; do
         # Skip empty lines
-        if [[ -z "$current_dst" ]]; then continue; fi
+        if [[ -z "$current_calofit" || -z "$current_zdc" ]]; then continue; fi
 
-        # Ensure we are just using the filename in case the list had full paths
-        local_file=$(basename "$current_dst")
+        # Ensure we are just using the filenames in case the list had full paths
+        local_calofit=$(basename "$current_calofit")
+        local_file=$(basename "$current_zdc")
 
         echo "--------------------------------------------------------"
-        echo "Processing: $local_file"
+        echo "Processing: $local_calofit + $local_file"
 
-        # Run the macro on the current local DST
-        root -b -l -q "$f4a_macro(\"$local_file\", \"output\", $nEvents, \"$dbtag\", $logInterval)"
+        # Run the macro on the current local DSTs
+        root -b -l -q "$f4a_macro(\"$local_calofit\", \"$local_file\", \"output\", $nEvents, \"$dbtag\", $logInterval)"
 
         root_exit=$?
         if [ $root_exit -ne 0 ]; then
@@ -68,7 +70,7 @@ then
             exit $root_exit
         fi
 
-    done < dst_zdc.list
+    done < "$input_list"
 
 else
     echo "condor scratch NOT set" >&2

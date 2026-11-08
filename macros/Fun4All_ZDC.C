@@ -24,15 +24,21 @@
 #include <caloreco/CaloTowerBuilder.h>
 #include <caloreco/CaloWaveformProcessing.h>
 
+#include <mbd/MbdReco.h>
+
 #include <zdcinfo/ZdcReco.h>
 
 #include <phool/recoConsts.h>
 
 R__LOAD_LIBRARY(libcalo_reco.so)
 R__LOAD_LIBRARY(libcalotrigger_io.so)
+R__LOAD_LIBRARY(libmbd.so)
 R__LOAD_LIBRARY(libzdcinfo.so)
 
-void Fun4All_ZDC(const std::string &infile_dst_zdc,
+// infile_dst_calofit: DST_CALOFITTING of the same run/segment, for MbdRawContainer -> MbdReco -> MbdOut t0,
+// used by the ZdcReco satellite-bunch correction (without it every event is corrected as main bunch, t0 = 0)
+void Fun4All_ZDC(const std::string &infile_dst_calofit,
+                 const std::string &infile_dst_zdc,
                  const std::filesystem::path& outDir = ".",
                  int nEvents = 100,
                  const std::string &dbtag = "newcdbtag",
@@ -44,6 +50,7 @@ void Fun4All_ZDC(const std::string &infile_dst_zdc,
 
   std::cout << "########################" << std::endl;
   std::cout << "Run Parameters" << std::endl;
+  std::cout << "input calofit: " << infile_dst_calofit << std::endl;
   std::cout << "input zdc: " << infile_dst_zdc << std::endl;
   std::cout << "Run: " << runnumber << std::endl;
   std::cout << "Segment: " << segment << std::endl;
@@ -61,6 +68,7 @@ void Fun4All_ZDC(const std::string &infile_dst_zdc,
   // conditions DB flags and timestamp
   rc->set_StringFlag("CDB_GLOBALTAG", dbtag);
   rc->set_uint64Flag("TIMESTAMP", runnumber);
+  rc->set_IntFlag("RUNNUMBER", runnumber);
   CDBInterface::instance()->Verbosity(Fun4AllBase::VERBOSITY_SOME);
 
   FlagHandler* flag = new FlagHandler();
@@ -76,7 +84,11 @@ void Fun4All_ZDC(const std::string &infile_dst_zdc,
   caZDC->set_funcfit_type(2);
   se->registerSubsystem(caZDC);
 
-  // ZDC Reconstruction--Calib Info
+  // MBD Reconstruction: MbdOut t0 for the ZdcReco satellite correction (must run before ZdcReco)
+  MbdReco* mbdreco = new MbdReco();
+  se->registerSubsystem(mbdreco);
+
+  // ZDC Reconstruction--Calib Info (satellite-bunch / run-period correction on by default, ZDC_SatelliteCorr from the CDB)
   ZdcReco* zdcreco = new ZdcReco();
   zdcreco->set_zdc1_cut(0.0);
   zdcreco->set_zdc2_cut(0.0);
@@ -107,6 +119,10 @@ void Fun4All_ZDC(const std::string &infile_dst_zdc,
   // out->AddNode("TOWERS_ZDC");
   out->AddNode("Zdcinfo");
   se->registerOutputManager(out);
+
+  Fun4AllInputManager* in_calofit = new Fun4AllDstInputManager("calofitting");
+  in_calofit->AddFile(infile_dst_calofit);
+  se->registerInputManager(in_calofit);
 
   Fun4AllInputManager* In = new Fun4AllDstInputManager("zdc");
   In->AddFile(infile_dst_zdc);
