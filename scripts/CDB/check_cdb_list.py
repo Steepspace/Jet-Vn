@@ -80,7 +80,8 @@ CDB_TYPES = [
     ("HCALOUT ZS Cross Calib", "HCALOUT_ZSCrossCalib"),
     ("HCALOUT ZS Cross Calib T0", "HCALOUT_ZSCrossCalibT0"),
     ("sEPD Calib", "SEPD_NMIP_CALIB"),
-    ("sEPD Event Plane", "SEPD_EventPlaneCalib")
+    ("sEPD Event Plane", "SEPD_EventPlaneCalib"),
+    ("ZDC Satellite Corr", "ZDC_SatelliteCorr")
 ]
 
 def check_run(args):
