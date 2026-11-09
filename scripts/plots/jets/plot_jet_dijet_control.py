@@ -64,6 +64,9 @@ FIT_MIN = np.pi / 4                                        # fit range: delta ph
 V2_MAX = 0.5
 MIN_FIT_DIJETS = 100                                       # fewer dijets at delta phi > 3pi/4: no fit (flat estimate used)
 MIN_TEMPLATE = 50                                          # fewer template dijets: the template of the lowest threshold
+# The panel of the annotated purity figure (explain/E2_...): (radius, class, pT_lead class, pT_sub threshold), one with
+# a visible background whose two estimates differ
+E2_PANEL = ("r02", (0, 20), (15, 20), 12)
 
 EVENT_INFO = (
     r"$|z| < 10$ cm & MB" "\n"
@@ -312,33 +315,104 @@ def plot_q1(inputs, runs, lumi, output_path, save_pdf=False):
     plt.close(fig)
 
 
+D1_YLABEL = r"$\frac{1}{N_{\mathrm{dijet}}}\frac{dN}{d\Delta\phi}$"
+MARKER_NOTE = r"Gray band: flat window; dashed: $\Delta\phi = 3\pi/4$; dotted: fit range start ($\pi/4$)"
+
+
+def one_line(text):
+    return text.replace("\n", ", ")
+
+
+def draw_d1(ax, D, c, lead, big=False):
+    """One D1 panel: unit-area delta phi distributions for the THR_PLOT thresholds."""
+    mark_regions(ax)
+    width = np.diff(D.de)
+    ymax = 0
+    for thr, col in zip(THR_PLOT, THR_COLORS):
+        if thr >= lead[1]:
+            continue
+        v = D.dphi(c, lead, thr)
+        if v.sum() < 20:
+            continue
+        d = v / v.sum() / width
+        ymax = max(ymax, d.max())
+        ax.stairs(d, D.de, color=col, linewidth=2.2 if big else 1.5,
+                  label=rf"$p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV: $N = {v.sum():.3g}$")
+    ax.set_yscale("log")
+    ax.set_xlim(0, np.pi)
+    if ymax > 0:
+        ax.set_ylim(top=ymax * (60 if big else 20))
+    ax.legend(loc="upper center" if big else "upper left", fontsize=13 if big else 9, ncol=1,
+              title=f"{cent_label(c)}, {lead_label(lead)}", title_fontsize=15 if big else 10)
+
+
+def draw_d2(ax, D, c, lead, thr, big=False, legend=False):
+    """One D2 panel: the purity fit of one (class, pT_lead class, threshold)."""
+    mark_regions(ax)
+    e = D.estimate(c, lead, thr)
+    v = e["v"]
+    ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=4 if big else 3, label="Data")
+    ax.axhline(e["b_flat"] / D.b2b.sum(), color="#377eb8", linestyle="--", linewidth=1.8, label="Flat bkg.")
+    txt = (rf"$N(\Delta\phi > 3\pi/4) = {e['n']:.4g}$" "\n"
+           rf"$P_{{\mathrm{{flat}}}} = {1 - e['b_flat'] / e['n']:.2f}$" if e["n"] > 0 else "no dijets")
+    if e["fit"] == "ok":
+        ax.plot(D.dc, e["bk"], color="#e41a1c", linewidth=1.8, label=r"Bkg. $B(1 + 2V_{2}\cos 2\Delta\phi)$")
+        ax.plot(D.dc, e["bk"] + e["sig"], color="#4daf4a", linewidth=1.8, label="Bkg. + 40–60% signal shape")
+        txt += (rf", $P_{{\mathrm{{fit}}}} = {1 - e['b_fit'] / e['n']:.2f}$" "\n"
+                rf"$V_{{2}} = {e['v2']:.3f}$, $\chi^{{2}}/\mathrm{{ndf}} = {e['chi2ndf']:.1f}$")
+    ax.text(0.03, 0.97, f"{cent_label(c)}, {lead_label(lead)}\n" + txt, transform=ax.transAxes,
+            fontsize=14 if big else 10, va="top")
+    ax.set_xlim(0, np.pi)
+    ax.set_ylim(0, (v + np.sqrt(v)).max() * (1.5 if big else 1.15) if v.max() > 0 else 1)
+    if legend:
+        ax.legend(loc="upper center" if big else "center left", fontsize=12 if big else 9,
+                  bbox_to_anchor=(0.58, 1.0) if big else None)
+    return e
+
+
+def draw_d3(ax, D, c, cut, target, band_only=False, big=False, legend=True):
+    """One D3 panel: purity vs pT_sub threshold of one class."""
+    thr = np.array(THR_SCAN)
+    comb = [D.combined(c, t) for t in thr]
+    pf = np.array([e["p_fit"] for e in comb])
+    pz = np.array([e["p_flat"] for e in comb])
+    ax.fill_between(thr, pf, pz, color="0.75", label=r"All $p_{T,\mathrm{lead}}$: fit to flat")
+    ax.plot(thr, pf, color="black", linewidth=2.5 if big else 2, label=r"All $p_{T,\mathrm{lead}}$: fit")
+    if not band_only:
+        for lead, col in zip(LEAD_CLS, LEAD_COLORS):
+            if lead[0] < 10 or lead[1] > 60:
+                continue
+            p = np.array([np.nan if t >= lead[1] else
+                          (lambda e: 1 - e["b_fit"] / e["n"] if e["fit"] == "ok" else np.nan)(D.estimate(c, lead, t))
+                          for t in thr])
+            ax.plot(thr, p, color=col, linewidth=1.4, marker="o", markersize=4 if big else 3, label=lead_label(lead))
+    ax.axhline(target, color="gray", linestyle="--")
+    if cut is not None:
+        ax.axvline(cut, color="#e41a1c", linestyle=":", linewidth=2)
+        ax.text(cut + 0.3, 0.03, rf"$p_{{T,\mathrm{{sub}}}} \geq {cut}$ GeV", color="#e41a1c", fontsize=15 if big else 12)
+    ax.text(0.96, 0.55, cent_label(c), transform=ax.transAxes, fontsize=20 if big else 18, ha="right", va="center")
+    ax.set_xlabel(r"$p_{T,\mathrm{sub}}$ threshold (raw) [GeV]")
+    ax.set_ylabel(r"Purity at $\Delta\phi > 3\pi/4$")
+    ax.set_xlim(thr[0], thr[-1])
+    ax.set_ylim(0, 1.05)
+    if legend:
+        ax.legend(loc="lower right", fontsize=12 if big else 9)
+
+
 def plot_d1(D, runs, lumi, output_path, save_pdf=False):
     """Rows: pT_lead ranges; columns: centrality classes; curves: pT_sub thresholds, per dijet."""
     hep.style.use("ATLAS")
     fig, axes = plt.subplots(len(LEAD_PLOT), len(CLASSES), figsize=(7 * len(CLASSES), 4.6 * len(LEAD_PLOT)), sharex=True)
-    width = np.diff(D.de)
     for i, lead in enumerate(LEAD_PLOT):
         for j, c in enumerate(CLASSES):
             ax = axes[i, j]
-            mark_regions(ax)
-            for thr, col in zip(THR_PLOT, THR_COLORS):
-                if thr >= lead[1]:
-                    continue
-                v = D.dphi(c, lead, thr)
-                if v.sum() < 20:
-                    continue
-                ax.stairs(v / v.sum() / width, D.de, color=col, linewidth=1.5,
-                          label=rf"$p_{{T,\mathrm{{sub}}}} \geq {thr}$: {v.sum():.3g}")
-            ax.set_yscale("log")
-            ax.set_xlim(0, np.pi)
-            ax.legend(loc="upper left", fontsize=9, title=f"{cent_label(c)}, {lead_label(lead)}", title_fontsize=10)
+            draw_d1(ax, D, c, lead)
             if i == len(LEAD_PLOT) - 1:
                 ax.set_xlabel(DPHI_LABEL)
             if j == 0:
-                ax.set_ylabel(r"$\frac{1}{N_{\mathrm{dijet}}}\frac{dN}{d\Delta\phi}$")
+                ax.set_ylabel(D1_YLABEL)
     add_header(axes[0, -1], runs, RADII[D.r_tag]["r"], lumi)
-    fig.text(0.01, 0.995, f"{EVENT_INFO.replace(chr(10), ', ')}; {jet_info(D.r_tag)}. Gray band: flat window; dashed: "
-             r"$3\pi/4$; dotted: fit range start", fontsize=11, va="top")
+    fig.text(0.01, 0.995, f"{one_line(EVENT_INFO)}; {jet_info(D.r_tag)}. {MARKER_NOTE}", fontsize=11, va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.985))
     save_fig(fig, output_path, save_pdf)
     plt.close(fig)
@@ -347,29 +421,12 @@ def plot_d1(D, runs, lumi, output_path, save_pdf=False):
 def plot_d2(D, thr, runs, lumi, output_path, save_pdf=False):
     """The purity fits at one pT_sub threshold, per pT_lead class (rows) and centrality class (columns)."""
     hep.style.use("ATLAS")
-    leads = [l for l in LEAD_CLS if l[1] > thr and l[0] >= 10 and l[1] <= 40]
+    leads = d2_leads(thr)
     fig, axes = plt.subplots(len(leads), len(CLASSES), figsize=(7 * len(CLASSES), 4.4 * len(leads)), sharex=True, squeeze=False)
     for i, lead in enumerate(leads):
         for j, c in enumerate(CLASSES):
             ax = axes[i, j]
-            mark_regions(ax)
-            e = D.estimate(c, lead, thr)
-            v = e["v"]
-            ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=3, label="Data")
-            ax.axhline(e["b_flat"] / D.b2b.sum(), color="#377eb8", linestyle="--", linewidth=1.5, label="Flat bkg.")
-            txt = (rf"$N(\Delta\phi > 3\pi/4) = {e['n']:.4g}$" "\n"
-                   rf"$P_{{\mathrm{{flat}}}} = {1 - e['b_flat'] / e['n']:.2f}$" if e["n"] > 0 else "no dijets")
-            if e["fit"] == "ok":
-                ax.plot(D.dc, e["bk"], color="#e41a1c", linewidth=1.5, label=r"Bkg. $B(1 + 2V_{2}\cos 2\Delta\phi)$")
-                ax.plot(D.dc, e["bk"] + e["sig"], color="#4daf4a", linewidth=1.5, label="Bkg. + 40–60% signal shape")
-                txt += (rf", $P_{{\mathrm{{fit}}}} = {1 - e['b_fit'] / e['n']:.2f}$" "\n"
-                        rf"$V_{{2}} = {e['v2']:.3f}$, $\chi^{{2}}/\mathrm{{ndf}} = {e['chi2ndf']:.1f}$")
-            ax.text(0.03, 0.97, f"{cent_label(c)}, {lead_label(lead)}\n" + txt, transform=ax.transAxes,
-                    fontsize=10, va="top")
-            ax.set_xlim(0, np.pi)
-            ax.set_ylim(bottom=0)
-            if i == 0 and j == 0:
-                ax.legend(loc="center left", fontsize=9)
+            draw_d2(ax, D, c, lead, thr, legend=(i == 0 and j == 0))
             if i == len(leads) - 1:
                 ax.set_xlabel(DPHI_LABEL)
             if j == 0:
@@ -386,33 +443,162 @@ def plot_d3(D, cuts, target, runs, lumi, output_path, save_pdf=False):
     """Purity vs pT_sub threshold per class: all pT_lead together (band: fit to flat), and per pT_lead class (fit)."""
     hep.style.use("ATLAS")
     fig, axes = plt.subplots(1, len(CLASSES), figsize=(7 * len(CLASSES), 6.5), sharey=True)
-    thr = np.array(THR_SCAN)
-    for ax, c in zip(axes, CLASSES):
-        comb = [D.combined(c, t) for t in thr]
-        pf = np.array([e["p_fit"] for e in comb])
-        pz = np.array([e["p_flat"] for e in comb])
-        ax.fill_between(thr, pf, pz, color="0.75", step=None, label="All $p_{T,\\mathrm{lead}}$: fit to flat")
-        ax.plot(thr, pf, color="black", linewidth=2, label="All $p_{T,\\mathrm{lead}}$: fit")
-        for lead, col in zip(LEAD_CLS, LEAD_COLORS):
-            if lead[0] < 10 or lead[1] > 60:
-                continue
-            p = np.array([np.nan if t >= lead[1] else
-                          (lambda e: 1 - e["b_fit"] / e["n"] if e["fit"] == "ok" else np.nan)(D.estimate(c, lead, t))
-                          for t in thr])
-            ax.plot(thr, p, color=col, linewidth=1.2, marker="o", markersize=3, label=lead_label(lead))
-        ax.axhline(target, color="gray", linestyle="--")
-        cut = cuts.get(c)
-        if cut is not None:
-            ax.axvline(cut, color="#e41a1c", linestyle=":")
-            ax.text(cut + 0.3, 0.03, rf"$p_{{T,\mathrm{{sub}}}} \geq {cut}$", color="#e41a1c", fontsize=12)
-        ax.text(0.96, 0.55, cent_label(c), transform=ax.transAxes, fontsize=18, ha="right", va="center")
-        ax.set_xlabel(r"$p_{T,\mathrm{sub}}$ threshold (raw) [GeV]")
-        ax.set_xlim(thr[0], thr[-1])
-        ax.set_ylim(0, 1.05)
-    axes[0].set_ylabel(r"Purity at $\Delta\phi > 3\pi/4$")
-    axes[0].legend(loc="lower right", fontsize=9)
+    for k, (ax, c) in enumerate(zip(axes, CLASSES)):
+        draw_d3(ax, D, c, cuts.get(c), target, legend=(k == 0))
+        if k > 0:
+            ax.set_ylabel("")
     add_header(axes[-1], runs, RADII[D.r_tag]["r"], lumi)
     fig.tight_layout()
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def d2_leads(thr):
+    return [l for l in LEAD_CLS if l[1] > thr and l[0] >= 10 and l[1] <= 40]
+
+
+# Single-panel figures (singles/): one panel, or one row of panels, per file, with the labels a slide needs
+# ---------------------------------------------------------------------------------------------------------------------
+
+def tag_c(c):
+    return f"cent{c[0]}_{c[1]}"
+
+
+def tag_l(lead):
+    return f"ptlead{lead[0]}_{lead[1]}"
+
+
+def save_single(fig, axes, D, runs, lumi, info, path, save_pdf):
+    add_header(axes[-1], runs, RADII[D.r_tag]["r"], lumi)
+    fig.text(0.01, 0.995, info, fontsize=12, va="top")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    save_fig(fig, path, save_pdf)
+    plt.close(fig)
+
+
+def new_fig(n):
+    hep.style.use("ATLAS")
+    fig, axes = plt.subplots(1, n, figsize=(9.5 * n, 7.5), squeeze=False)
+    return fig, axes[0]
+
+
+def plot_singles(D, cuts, target, d2_thresholds, runs, lumi, sdir, save_pdf=False):
+    r = D.r_tag
+    d1_info = f"{one_line(EVENT_INFO)}; {jet_info(r)}\n{MARKER_NOTE}"
+    # D1: every panel, and every row (the 3 classes at one pT_lead range)
+    for lead in LEAD_PLOT:
+        for c in CLASSES:
+            fig, axes = new_fig(1)
+            draw_d1(axes[0], D, c, lead, big=True)
+            axes[0].set_xlabel(DPHI_LABEL)
+            axes[0].set_ylabel(D1_YLABEL)
+            save_single(fig, axes, D, runs, lumi, d1_info, sdir / "D1" / f"D1_dphi_{r}_{tag_c(c)}_{tag_l(lead)}.png", save_pdf)
+        fig, axes = new_fig(len(CLASSES))
+        for ax, c in zip(axes, CLASSES):
+            draw_d1(ax, D, c, lead, big=True)
+            ax.set_xlabel(DPHI_LABEL)
+        axes[0].set_ylabel(D1_YLABEL)
+        save_single(fig, axes, D, runs, lumi, d1_info, sdir / "D1" / f"D1_dphi_{r}_row_{tag_l(lead)}.png", save_pdf)
+    # D2: every panel and every row of each threshold
+    for thr in d2_thresholds:
+        info = (rf"{jet_info(r)}, $p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV" "\n"
+                r"Fit over $\Delta\phi > \pi/4$; the 40–60% fit uses its own shape. " + MARKER_NOTE)
+        for lead in d2_leads(thr):
+            for c in CLASSES:
+                fig, axes = new_fig(1)
+                draw_d2(axes[0], D, c, lead, thr, big=True, legend=True)
+                axes[0].set_xlabel(DPHI_LABEL)
+                axes[0].set_ylabel("Dijets")
+                save_single(fig, axes, D, runs, lumi, info,
+                            sdir / "D2" / f"D2_fit_{r}_ptsub{thr}_{tag_c(c)}_{tag_l(lead)}.png", save_pdf)
+            fig, axes = new_fig(len(CLASSES))
+            for k, (ax, c) in enumerate(zip(axes, CLASSES)):
+                draw_d2(ax, D, c, lead, thr, big=True, legend=(k == 0))
+                ax.set_xlabel(DPHI_LABEL)
+            axes[0].set_ylabel("Dijets")
+            save_single(fig, axes, D, runs, lumi, info, sdir / "D2" / f"D2_fit_{r}_ptsub{thr}_row_{tag_l(lead)}.png", save_pdf)
+    # D3: every class, full and with only the all-pT_lead line and band
+    info = rf"{one_line(EVENT_INFO)}; {jet_info(r)}" "\n" rf"Dashed: purity target {target:g}; dotted: the chosen cut"
+    for c in CLASSES:
+        for band_only, suffix in ((False, ""), (True, "_bandonly")):
+            fig, axes = new_fig(1)
+            draw_d3(axes[0], D, c, cuts.get(c), target, band_only=band_only, big=True)
+            save_single(fig, axes, D, runs, lumi, info, sdir / "D3" / f"D3_purity_{r}_{tag_c(c)}{suffix}.png", save_pdf)
+
+
+# Explanation figures (explain/)
+# ---------------------------------------------------------------------------------------------------------------------
+
+def plot_e1_cartoon(output_path, save_pdf=False):
+    """Toy delta phi distributions: why a flat background estimate misses background under the back-to-back peak."""
+    hep.style.use("ATLAS")
+    x = np.linspace(0, np.pi, 721)
+    sig = 3.0 * np.exp(-0.5 * ((x - np.pi) / 0.25) ** 2)
+    b0, v2 = 1.0, 0.15
+    bk_flat = np.full_like(x, b0 * (1 - 2 * v2))          # the same level at pi/2 as the modulated one
+    bk_mod = b0 * (1 + 2 * v2 * np.cos(2 * x))
+    fig, axes = plt.subplots(1, 2, figsize=(19, 7.5), sharey=True)
+    b2b = x > B2B_MIN
+    for ax, bk, title in ((axes[0], bk_flat, "If the background were flat"),
+                          (axes[1], bk_mod, r"With flow modulation: $B(1 + 2V_{2}\cos 2\Delta\phi)$")):
+        ax.axvspan(*FLAT_WIN, color="0.9", zorder=0)
+        ax.axvline(B2B_MIN, color="gray", linestyle="--", linewidth=1)
+        ax.fill_between(x[b2b], 0, bk[b2b], color="#e41a1c", alpha=0.3, label="Background under the peak")
+        ax.plot(x, bk + sig, color="black", linewidth=2.5, label="Measured: signal + background")
+        ax.plot(x, bk, color="#e41a1c", linewidth=2, label="Background")
+        ax.plot(x, sig, color="#4daf4a", linewidth=2, linestyle="-.", label="Signal (back-to-back dijets)")
+        ax.axhline(bk_flat[0], color="#377eb8", linestyle="--", linewidth=2, label=r"Flat estimate: the level near $\pi/2$")
+        ax.set_title(title, fontsize=17)
+        ax.set_xlim(0, np.pi)
+        ax.set_ylim(0, 4.8)
+        ax.set_xlabel(DPHI_LABEL)
+        n = (bk + sig)[b2b].sum()
+        ax.text(0.03, 0.62, rf"Purity at $\Delta\phi > 3\pi/4$:" "\n"
+                rf"true: {1 - bk[b2b].sum() / n:.2f}" "\n" rf"flat estimate: {1 - bk_flat[b2b].sum() / n:.2f}",
+                transform=ax.transAxes, fontsize=15, va="top")
+    axes[0].set_ylabel("Dijets (arbitrary units)")
+    axes[0].legend(loc="upper left", fontsize=13)
+    fig.text(0.01, 0.995, r"Toy model (not data): Gaussian signal at $\pi$; background with the same level at $\pi/2$ in both "
+             r"panels ($V_{2} = 0.15$ on the right). Gray band: flat window; dashed: $3\pi/4$.", fontsize=12, va="top")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    save_fig(fig, output_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_e2_annotated(D, c, lead, thr, runs, lumi, output_path, save_pdf=False):
+    """One fit panel with the two background estimates under the peak shaded, and the purity arithmetic."""
+    hep.style.use("ATLAS")
+    e = D.estimate(c, lead, thr)
+    if e["fit"] != "ok":
+        print(f"Warning: no fit for the E2 panel {c} {lead} {thr}, skipping")
+        return
+    v = e["v"]
+    fig, ax = plt.subplots(figsize=(12, 8))
+    mark_regions(ax)
+    edges = D.de[np.r_[np.where(D.b2b)[0], np.where(D.b2b)[0][-1] + 1]]
+    bk_b2b = e["bk"][D.b2b]
+    flat = e["b_flat"] / D.b2b.sum()
+    ax.stairs(bk_b2b, edges, fill=True, color="#e41a1c", alpha=0.3, label=rf"$B_{{\mathrm{{fit}}}}$ = {e['b_fit']:.0f}: fit bkg. under the peak")
+    ax.stairs(np.full(D.b2b.sum(), flat), edges, fill=False, hatch="//", color="#377eb8", linewidth=0,
+              label=rf"$B_{{\mathrm{{flat}}}}$ = {e['b_flat']:.0f}: flat bkg. under the peak")
+    ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=4, label=rf"Data: $N(\Delta\phi > 3\pi/4)$ = {e['n']:.0f}")
+    ax.axhline(flat, color="#377eb8", linestyle="--", linewidth=1.8)
+    ax.plot(D.dc, e["bk"], color="#e41a1c", linewidth=2, label=rf"Bkg. $B(1 + 2V_{{2}}\cos 2\Delta\phi)$, $V_{{2}}$ = {e['v2']:.3f}")
+    ax.plot(D.dc, e["bk"] + e["sig"], color="#4daf4a", linewidth=2, label="Bkg. + 40–60% signal shape (the fit)")
+    ax.set_xlim(0, np.pi)
+    ax.set_ylim(0, (v + np.sqrt(v)).max() * 1.55)
+    ax.set_xlabel(DPHI_LABEL)
+    ax.set_ylabel("Dijets")
+    ax.legend(loc="upper left", fontsize=13)
+    ax.text(0.03, 0.52, rf"$P = 1 - B / N$" "\n"
+            rf"$P_{{\mathrm{{flat}}}} = 1 - {e['b_flat']:.0f} / {e['n']:.0f} = {1 - e['b_flat'] / e['n']:.2f}$" "\n"
+            rf"$P_{{\mathrm{{fit}}}} = 1 - {e['b_fit']:.0f} / {e['n']:.0f} = {1 - e['b_fit'] / e['n']:.2f}$" "\n"
+            rf"fit $\chi^{{2}}/\mathrm{{ndf}} = {e['chi2ndf']:.1f}$",
+            transform=ax.transAxes, fontsize=15, va="top")
+    add_header(ax, runs, RADII[D.r_tag]["r"], lumi)
+    fig.text(0.01, 0.995, rf"{cent_label(c)}, {lead_label(lead)}, $p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV; {jet_info(D.r_tag)}. "
+             + MARKER_NOTE, fontsize=11, va="top")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     save_fig(fig, output_path, save_pdf)
     plt.close(fig)
 
@@ -524,6 +710,8 @@ def main():
                         help="Fit purity the chosen pT_sub threshold must reach, per class (default: %(default)s)")
     parser.add_argument("--fit-thresholds", nargs="+", type=int, default=[10, 15],
                         help="pT_sub thresholds with D2 fit plots, besides the chosen cuts (default: %(default)s)")
+    parser.add_argument("--no-singles", action="store_true",
+                        help="Skip the single-panel figures (<r>/singles/D1, D2, D3: every panel and every row on its own)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1),
                         help="Parallel workers for reading the runs (default: %(default)s)")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF versions in addition to PNG")
@@ -566,6 +754,7 @@ def main():
 
     out = args.output_dir
     plot_q1(inputs, runs, lumi, out / "Q1_events.png", args.save_pdf)
+    plot_e1_cartoon(out / "explain" / "E1_dphi_cartoon.png", args.save_pdf)
 
     cut_rows = []
     for r_tag in args.radii:
@@ -588,13 +777,20 @@ def main():
                              "median_per_run": f"{np.median(rc):.1f}", "runs_ge10": f"{np.mean(rc >= 10):.4f}"})
 
         rdir = out / r_tag
+        d2_thresholds = sorted(set(args.fit_thresholds) | {t for t in cuts.values() if t is not None})
         plot_d1(D, runs, lumi, rdir / f"D1_dphi_{r_tag}.png", args.save_pdf)
-        for thr in sorted(set(args.fit_thresholds) | {t for t in cuts.values() if t is not None}):
+        for thr in d2_thresholds:
             plot_d2(D, thr, runs, lumi, rdir / f"D2_fits_{r_tag}_ptsub{thr}.png", args.save_pdf)
         plot_d3(D, cuts, args.purity_target, runs, lumi, rdir / f"D3_purity_{r_tag}.png", args.save_pdf)
         plot_d4(D, cuts, runs, lumi, rdir / f"D4_stats_{r_tag}.png", args.save_pdf)
         plot_d5(D, runs, lumi, rdir / f"D5_xj_{r_tag}.png", args.save_pdf)
         write_scan(D, rdir / f"purity_scan_{r_tag}.csv")
+        if not args.no_singles:
+            plot_singles(D, cuts, args.purity_target, d2_thresholds, runs, lumi, rdir / "singles", args.save_pdf)
+        if r_tag == E2_PANEL[0]:
+            plot_e2_annotated(D, *E2_PANEL[1:], runs, lumi,
+                              out / "explain" / f"E2_purity_explained_{r_tag}_{tag_c(E2_PANEL[1])}_{tag_l(E2_PANEL[2])}_ptsub{E2_PANEL[3]}.png",
+                              args.save_pdf)
         tick(r_tag)
 
     path = out / "dijet_cuts.csv"
