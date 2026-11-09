@@ -77,13 +77,36 @@ class JetDijet
   static constexpr std::array<double, 42> m_pt_edges = {
       7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
       31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42.5, 45, 50, 55, 60, 70, 80, 100};
+  // Raw pT_sub binning [GeV] of the pT_sub x delta phi hists, finer so the purity scan can place the pT_sub cut between
+  // whole GeV: 0.25 GeV from 7 to 30 GeV, 1 GeV to 40 GeV, then as m_pt_edges. Every m_pt_edges edge is also an edge here.
+  static constexpr size_t m_n_sub_fine = 92;  // (30 - 7) / 0.25
+  static constexpr size_t m_n_sub_mid = 10;   // 31 ... 40
+  static constexpr std::array<double, 8> m_sub_tail = {42.5, 45, 50, 55, 60, 70, 80, 100};
+  static constexpr std::array<double, 1 + m_n_sub_fine + m_n_sub_mid + 8> m_sub_edges = []
+  {
+    std::array<double, 1 + m_n_sub_fine + m_n_sub_mid + 8> e{};
+    size_t k = 0;
+    for (size_t i = 0; i <= m_n_sub_fine; ++i)
+    {
+      e[k++] = 7.0 + 0.25 * static_cast<double>(i);  // exact in binary
+    }
+    for (size_t i = 1; i <= m_n_sub_mid; ++i)
+    {
+      e[k++] = 30.0 + static_cast<double>(i);
+    }
+    for (double x : m_sub_tail)
+    {
+      e[k++] = x;
+    }
+    return e;
+  }();
   // Raw pT_lead classes [GeV] of the pT_sub x delta phi and x_J x delta phi hists (15, 20, 30, 40: the timing ranges)
   static constexpr std::array<int, 9> m_lead_edges = {7, 10, 15, 20, 25, 30, 40, 60, 100};
   static constexpr size_t m_n_lead = m_lead_edges.size() - 1;
-  // delta phi: pi / 72 wide, so pi/3, pi/2, 2pi/3 and 3pi/4 are bin edges
+  // delta phi: pi / 72 wide, so pi/3, pi/2, 2pi/3, 3pi/4 and 7pi/8 are bin edges
   static constexpr int m_bins_dphi = 72;
   static constexpr int m_bins_xj = 20;
-  static constexpr double m_dphi_b2b = 3 * std::numbers::pi / 4;
+  static constexpr double m_dphi_b2b = 7 * std::numbers::pi / 8;  // back-to-back cut of the timing-count hist (the plot script uses the same)
 
   struct JetData
   {
@@ -323,13 +346,14 @@ void JetDijet::init_hists()
 
         h.h2PtSubDphi[ic][il] = book<TH2D>(std::format("h2PtSubDphi_{}", ltag),
                                            std::format("{}; Raw p_{{T,sub}} [GeV]; #Delta#phi", label).c_str(),
-                                           n_pt, pt, m_bins_dphi, dphi_edges.data());
+                                           static_cast<int>(m_sub_edges.size()) - 1, m_sub_edges.data(),
+                                           m_bins_dphi, dphi_edges.data());
         h.h2XjDphi[ic][il] = book<TH2D>(std::format("h2XjDphi_{}", ltag),
                                         std::format("{}; x_{{J}} = p_{{T,sub}} / p_{{T,lead}}; #Delta#phi", label).c_str(),
                                         m_bins_xj, xj_edges.data(), m_bins_dphi, dphi_edges.data());
       }
       h.h2PtLeadPtSubTime[ic] = book<TH2D>(std::format("h2PtLeadPtSubTime_{}", tag),
-                                           std::format("Dijet, #Delta#phi > 3#pi/4, t_{{lead}}, t_{{sub}}, t_{{0}} finite ({}, {}); Raw p_{{T,lead}} [GeV]; Raw p_{{T,sub}} [GeV]", jet_label, cent_label).c_str(),
+                                           std::format("Dijet, #Delta#phi > 7#pi/8, t_{{lead}}, t_{{sub}}, t_{{0}} finite ({}, {}); Raw p_{{T,lead}} [GeV]; Raw p_{{T,sub}} [GeV]", jet_label, cent_label).c_str(),
                                            n_pt, pt, n_pt, pt);
     }
   }
