@@ -54,7 +54,9 @@ LEAD_CLS = ((7, 10), (10, 15), (15, 20), (20, 25), (25, 30), (30, 40), (40, 60),
 LEAD_PLOT = ((10, 15), (15, 20), (20, 30), (30, 40))      # pT_lead ranges of the D1 / D2 / D5 rows (unions of LEAD_CLS)
 LEAD_COLORS = ("#999999", "#1b7837", "#e08214", "#762a83", "#2166ac", "#b2182b", "#4d4d4d", "#000000")
 JET_PT_MIN = 7                                             # raw pT floor of the production [GeV]
-THR_SCAN = tuple(range(7, 31))                             # pT_sub thresholds scanned [GeV]
+THR_SCAN_MAX = 30                                          # pT_sub thresholds scanned: every bin edge of the pT_sub
+                                                           # axis from the 7 GeV floor to this [GeV] (0.25 GeV steps
+                                                           # from production 11-09-26, 1 GeV before)
 THR_PLOT = (7, 10, 12, 15, 20)                             # thresholds of the D1 curves
 THR_COLORS = ("#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3")
 PERIPH = (40, 60)                                          # the class whose signal shape is the template
@@ -193,6 +195,7 @@ class Dijets:
         ax = inputs["axes"]
         self.pe, self.de, self.xe = ax["pt"], ax["dphi"], ax["xj"]
         self.dc = 0.5 * (self.de[1:] + self.de[:-1])
+        self.thr_scan = tuple(float(e) for e in self.pe if JET_PT_MIN - 1e-9 <= e <= THR_SCAN_MAX + 1e-9)
         self.b2b = self.dc > B2B_MIN
         self.flat = (self.dc > FLAT_WIN[0]) & (self.dc < FLAT_WIN[1])
         self.fit_range = self.dc > FIT_MIN
@@ -272,7 +275,7 @@ class Dijets:
 
 
 def choose_cut(D, c, target):
-    for thr in THR_SCAN:
+    for thr in D.thr_scan:
         e = D.combined(c, thr)
         if e["n"] > 0 and e["p_fit"] >= target:
             return thr, e
@@ -337,7 +340,7 @@ def draw_d1(ax, D, c, lead, big=False):
         d = v / v.sum() / width
         ymax = max(ymax, d.max())
         ax.stairs(d, D.de, color=col, linewidth=2.2 if big else 1.5,
-                  label=rf"$p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV: $N = {v.sum():.3g}$")
+                  label=rf"$p_{{T,\mathrm{{sub}}}} \geq {thr:g}$ GeV: $N = {v.sum():.3g}$")
     ax.set_yscale("log")
     ax.set_xlim(0, np.pi)
     if ymax > 0:
@@ -372,7 +375,7 @@ def draw_d2(ax, D, c, lead, thr, big=False, legend=False):
 
 def draw_d3(ax, D, c, cut, target, band_only=False, big=False, legend=True):
     """One D3 panel: purity vs pT_sub threshold of one class."""
-    thr = np.array(THR_SCAN)
+    thr = np.array(D.thr_scan)
     comb = [D.combined(c, t) for t in thr]
     pf = np.array([e["p_fit"] for e in comb])
     pz = np.array([e["p_flat"] for e in comb])
@@ -385,11 +388,11 @@ def draw_d3(ax, D, c, cut, target, band_only=False, big=False, legend=True):
             p = np.array([np.nan if t >= lead[1] else
                           (lambda e: 1 - e["b_fit"] / e["n"] if e["fit"] == "ok" else np.nan)(D.estimate(c, lead, t))
                           for t in thr])
-            ax.plot(thr, p, color=col, linewidth=1.4, marker="o", markersize=4 if big else 3, label=lead_label(lead))
+            ax.plot(thr, p, color=col, linewidth=1.4, marker="o", markersize=2.5 if big else 1.5, label=lead_label(lead))
     ax.axhline(target, color="gray", linestyle="--")
     if cut is not None:
         ax.axvline(cut, color="#e41a1c", linestyle=":", linewidth=2)
-        ax.text(cut + 0.3, 0.03, rf"$p_{{T,\mathrm{{sub}}}} \geq {cut}$ GeV", color="#e41a1c", fontsize=15 if big else 12)
+        ax.text(cut + 0.3, 0.03, rf"$p_{{T,\mathrm{{sub}}}} \geq {cut:g}$ GeV", color="#e41a1c", fontsize=15 if big else 12)
     ax.text(0.96, 0.55, cent_label(c), transform=ax.transAxes, fontsize=20 if big else 18, ha="right", va="center")
     ax.set_xlabel(r"$p_{T,\mathrm{sub}}$ threshold (raw) [GeV]")
     ax.set_ylabel(r"Purity at $\Delta\phi > 7\pi/8$")
@@ -432,7 +435,7 @@ def plot_d2(D, thr, runs, lumi, output_path, save_pdf=False):
             if j == 0:
                 ax.set_ylabel("Dijets")
     add_header(axes[0, -1], runs, RADII[D.r_tag]["r"], lumi)
-    fig.text(0.01, 0.995, rf"{jet_info(D.r_tag)}, $p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV. Fit over $\Delta\phi > \pi/4$; "
+    fig.text(0.01, 0.995, rf"{jet_info(D.r_tag)}, $p_{{T,\mathrm{{sub}}}} \geq {thr:g}$ GeV. Fit over $\Delta\phi > \pi/4$; "
              "the 40–60% fit uses its own shape.", fontsize=11, va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.985))
     save_fig(fig, output_path, save_pdf)
@@ -501,7 +504,7 @@ def plot_singles(D, cuts, target, d2_thresholds, runs, lumi, sdir, save_pdf=Fals
         save_single(fig, axes, D, runs, lumi, d1_info, sdir / "D1" / f"D1_dphi_{r}_row_{tag_l(lead)}.png", save_pdf)
     # D2: every panel and every row of each threshold
     for thr in d2_thresholds:
-        info = (rf"{jet_info(r)}, $p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV" "\n"
+        info = (rf"{jet_info(r)}, $p_{{T,\mathrm{{sub}}}} \geq {thr:g}$ GeV" "\n"
                 r"Fit over $\Delta\phi > \pi/4$; the 40–60% fit uses its own shape. " + MARKER_NOTE)
         for lead in d2_leads(thr):
             for c in CLASSES:
@@ -510,13 +513,13 @@ def plot_singles(D, cuts, target, d2_thresholds, runs, lumi, sdir, save_pdf=Fals
                 axes[0].set_xlabel(DPHI_LABEL)
                 axes[0].set_ylabel("Dijets")
                 save_single(fig, axes, D, runs, lumi, info,
-                            sdir / "D2" / f"D2_fit_{r}_ptsub{thr}_{tag_c(c)}_{tag_l(lead)}.png", save_pdf)
+                            sdir / "D2" / f"D2_fit_{r}_ptsub{thr:g}_{tag_c(c)}_{tag_l(lead)}.png", save_pdf)
             fig, axes = new_fig(len(CLASSES))
             for k, (ax, c) in enumerate(zip(axes, CLASSES)):
                 draw_d2(ax, D, c, lead, thr, big=True, legend=(k == 0))
                 ax.set_xlabel(DPHI_LABEL)
             axes[0].set_ylabel("Dijets")
-            save_single(fig, axes, D, runs, lumi, info, sdir / "D2" / f"D2_fit_{r}_ptsub{thr}_row_{tag_l(lead)}.png", save_pdf)
+            save_single(fig, axes, D, runs, lumi, info, sdir / "D2" / f"D2_fit_{r}_ptsub{thr:g}_row_{tag_l(lead)}.png", save_pdf)
     # D3: every class, full and with only the all-pT_lead line and band
     info = rf"{one_line(EVENT_INFO)}; {jet_info(r)}" "\n" rf"Dashed: purity target {target:g}; dotted: the chosen cut"
     for c in CLASSES:
@@ -596,7 +599,7 @@ def plot_e2_annotated(D, c, lead, thr, runs, lumi, output_path, save_pdf=False):
             rf"fit $\chi^{{2}}/\mathrm{{ndf}} = {e['chi2ndf']:.1f}$",
             transform=ax.transAxes, fontsize=15, va="top")
     add_header(ax, runs, RADII[D.r_tag]["r"], lumi)
-    fig.text(0.01, 0.995, rf"{cent_label(c)}, {lead_label(lead)}, $p_{{T,\mathrm{{sub}}}} \geq {thr}$ GeV; {jet_info(D.r_tag)}. "
+    fig.text(0.01, 0.995, rf"{cent_label(c)}, {lead_label(lead)}, $p_{{T,\mathrm{{sub}}}} \geq {thr:g}$ GeV; {jet_info(D.r_tag)}. "
              + MARKER_NOTE, fontsize=11, va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     save_fig(fig, output_path, save_pdf)
@@ -607,7 +610,7 @@ def plot_d4(D, cuts, runs, lumi, output_path, save_pdf=False):
     """Statistics vs threshold: dijets (and times the fit purity), the median per run and the runs with >= 10 / 20."""
     hep.style.use("ATLAS")
     fig, axes = plt.subplots(1, 2, figsize=(16, 7))
-    thr = np.array(THR_SCAN)
+    thr = np.array(D.thr_scan)
     for c, col in zip(CLASSES, CLASS_COLORS):
         comb = [D.combined(c, t) for t in thr]
         n = np.array([e["n"] for e in comb])
@@ -665,9 +668,9 @@ def write_scan(D, path):
             "frac_nofit", "median_per_run"]
     rows = []
     for c in CLASSES + CENT10:
-        for thr in THR_SCAN:
+        for thr in D.thr_scan:
             comb = D.combined(c, thr)
-            rows.append({"cent_lo": c[0], "cent_hi": c[1], "lead_lo": "all", "lead_hi": "all", "pt_sub_min": thr,
+            rows.append({"cent_lo": c[0], "cent_hi": c[1], "lead_lo": "all", "lead_hi": "all", "pt_sub_min": f"{thr:g}",
                          "n_b2b": f"{comb['n']:.0f}", "p_flat": f"{comb['p_flat']:.4f}", "p_fit": f"{comb['p_fit']:.4f}",
                          "v2": "", "chi2ndf": "", "fit": "combined", "frac_nofit": f"{comb['frac_nofit']:.4f}",
                          "median_per_run": f"{np.median(D.run_counts(c, thr)):.1f}"})
@@ -675,7 +678,7 @@ def write_scan(D, path):
                 if lead[1] <= thr:
                     continue
                 e = D.estimate(c, lead, thr)
-                rows.append({"cent_lo": c[0], "cent_hi": c[1], "lead_lo": lead[0], "lead_hi": lead[1], "pt_sub_min": thr,
+                rows.append({"cent_lo": c[0], "cent_hi": c[1], "lead_lo": lead[0], "lead_hi": lead[1], "pt_sub_min": f"{thr:g}",
                              "n_b2b": f"{e['n']:.0f}",
                              "p_flat": f"{1 - e['b_flat'] / e['n']:.4f}" if e["n"] > 0 else "",
                              "p_fit": f"{1 - e['b_fit'] / e['n']:.4f}" if e["fit"] == "ok" else "",
@@ -696,7 +699,7 @@ def main():
     parser = argparse.ArgumentParser(description="Clean dijet control sample: delta phi, purity and statistics vs the "
                                                  "subleading jet pT threshold, per centrality class (Jet-Dijet output).")
     parser.add_argument("-f", "--file", type=Path,
-                        default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-06-26/test.list"),
+                        default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-09-26/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path,
                         default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
@@ -708,7 +711,7 @@ def main():
     parser.add_argument("--radii", nargs="+", choices=list(RADII), default=list(RADII), help="Jet radii (default: both)")
     parser.add_argument("--purity-target", type=float, default=0.9,
                         help="Fit purity the chosen pT_sub threshold must reach, per class (default: %(default)s)")
-    parser.add_argument("--fit-thresholds", nargs="+", type=int, default=[10, 15],
+    parser.add_argument("--fit-thresholds", nargs="+", type=float, default=[10, 15],
                         help="pT_sub thresholds with D2 fit plots, besides the chosen cuts (default: %(default)s)")
     parser.add_argument("--no-singles", action="store_true",
                         help="Skip the single-panel figures (<r>/singles/D1, D2, D3: every panel and every row on its own)")
@@ -765,22 +768,22 @@ def main():
             thr, e = choose_cut(D, c, args.purity_target)
             cuts[c] = thr
             if thr is None:
-                print(f"  {cent_label(c)}: none up to {THR_SCAN[-1]} GeV")
+                print(f"  {cent_label(c)}: none up to {D.thr_scan[-1]:g} GeV")
                 cut_rows.append({"radius": r_tag, "cent_lo": c[0], "cent_hi": c[1], "pt_sub_min": "", "n_b2b": "",
                                  "p_fit": "", "p_flat": "", "median_per_run": "", "runs_ge10": ""})
                 continue
             rc = D.run_counts(c, thr)
-            print(f"  {cent_label(c)}: pT_sub >= {thr} GeV, {e['n']:.0f} dijets, purity fit {e['p_fit']:.3f} / flat "
+            print(f"  {cent_label(c)}: pT_sub >= {thr:g} GeV, {e['n']:.0f} dijets, purity fit {e['p_fit']:.3f} / flat "
                   f"{e['p_flat']:.3f}, median {np.median(rc):.0f} per run, {np.mean(rc >= 10) * 100:.0f}% of runs with >= 10")
-            cut_rows.append({"radius": r_tag, "cent_lo": c[0], "cent_hi": c[1], "pt_sub_min": thr, "n_b2b": f"{e['n']:.0f}",
+            cut_rows.append({"radius": r_tag, "cent_lo": c[0], "cent_hi": c[1], "pt_sub_min": f"{thr:g}", "n_b2b": f"{e['n']:.0f}",
                              "p_fit": f"{e['p_fit']:.4f}", "p_flat": f"{e['p_flat']:.4f}",
                              "median_per_run": f"{np.median(rc):.1f}", "runs_ge10": f"{np.mean(rc >= 10):.4f}"})
 
         rdir = out / r_tag
-        d2_thresholds = sorted(set(args.fit_thresholds) | {t for t in cuts.values() if t is not None})
+        d2_thresholds = sorted({float(t) for t in args.fit_thresholds} | {t for t in cuts.values() if t is not None})
         plot_d1(D, runs, lumi, rdir / f"D1_dphi_{r_tag}.png", args.save_pdf)
         for thr in d2_thresholds:
-            plot_d2(D, thr, runs, lumi, rdir / f"D2_fits_{r_tag}_ptsub{thr}.png", args.save_pdf)
+            plot_d2(D, thr, runs, lumi, rdir / f"D2_fits_{r_tag}_ptsub{thr:g}.png", args.save_pdf)
         plot_d3(D, cuts, args.purity_target, runs, lumi, rdir / f"D3_purity_{r_tag}.png", args.save_pdf)
         plot_d4(D, cuts, runs, lumi, rdir / f"D4_stats_{r_tag}.png", args.save_pdf)
         plot_d5(D, runs, lumi, rdir / f"D5_xj_{r_tag}.png", args.save_pdf)
@@ -789,7 +792,7 @@ def main():
             plot_singles(D, cuts, args.purity_target, d2_thresholds, runs, lumi, rdir / "singles", args.save_pdf)
         if r_tag == E2_PANEL[0]:
             plot_e2_annotated(D, *E2_PANEL[1:], runs, lumi,
-                              out / "explain" / f"E2_purity_explained_{r_tag}_{tag_c(E2_PANEL[1])}_{tag_l(E2_PANEL[2])}_ptsub{E2_PANEL[3]}.png",
+                              out / "explain" / f"E2_purity_explained_{r_tag}_{tag_c(E2_PANEL[1])}_{tag_l(E2_PANEL[2])}_ptsub{E2_PANEL[3]:g}.png",
                               args.save_pdf)
         tick(r_tag)
 
