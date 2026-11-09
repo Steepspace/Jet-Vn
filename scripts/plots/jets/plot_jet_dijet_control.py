@@ -6,7 +6,7 @@ subleading raw pT (and of x_J) vs delta phi of the leading and subleading jets. 
 
 1. Q1: event QA (jets per event and the fraction of events with a dijet, vs centrality).
 2. D1: the delta phi distributions per pT_lead class and centrality, for several pT_sub thresholds.
-3. D2: the purity fits. The dijets at delta phi > 3pi/4 are signal (a real back-to-back pair) plus combinatorial
+3. D2: the purity fits. The dijets at delta phi > 7pi/8 are signal (a real back-to-back pair) plus combinatorial
    background (a subleading jet uncorrelated with the leading jet, mostly an underlying-event fluctuation). Two
    estimates of the background under the peak:
    - flat: the mean level at 5pi/12 < delta phi < 7pi/12, taken as flat (an upper bound on the purity, since the
@@ -40,7 +40,7 @@ from plot_jet_bkgsub_compare import save_fig
 from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header, sci
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2                                          # 2: back-to-back cut 7pi/8 (per-run counts)
 
 # (tag, R, |eta| acceptance of Jet-Dijet.C)
 RADII = {
@@ -58,11 +58,11 @@ THR_SCAN = tuple(range(7, 31))                             # pT_sub thresholds s
 THR_PLOT = (7, 10, 12, 15, 20)                             # thresholds of the D1 curves
 THR_COLORS = ("#000000", "#e41a1c", "#377eb8", "#4daf4a", "#984ea3")
 PERIPH = (40, 60)                                          # the class whose signal shape is the template
-B2B_MIN = 3 * np.pi / 4                                    # back-to-back cut
+B2B_MIN = 7 * np.pi / 8                                    # back-to-back cut
 FLAT_WIN = (5 * np.pi / 12, 7 * np.pi / 12)                # flat background window
 FIT_MIN = np.pi / 4                                        # fit range: delta phi > FIT_MIN
 V2_MAX = 0.5
-MIN_FIT_DIJETS = 100                                       # fewer dijets at delta phi > 3pi/4: no fit (flat estimate used)
+MIN_FIT_DIJETS = 100                                       # fewer dijets at delta phi > 7pi/8: no fit (flat estimate used)
 MIN_TEMPLATE = 50                                          # fewer template dijets: the template of the lowest threshold
 # The panel of the annotated purity figure (explain/E2_...): (radius, class, pT_lead class, pT_sub threshold), one with
 # a visible background whose two estimates differ
@@ -147,7 +147,7 @@ def cache_key(tasks, lumi_paths):
 
 
 def load_inputs(tasks, lumi_files, n_jobs):
-    """Sums the hists over runs; keeps per run the delta phi > 3pi/4 counts per (radius, cent, lead, pT_sub bin)."""
+    """Sums the hists over runs; keeps per run the delta phi > 7pi/8 counts per (radius, cent, lead, pT_sub bin)."""
     axes = read_axes(tasks[0][1])
     b2b_bin = int(np.searchsorted(axes["dphi"], B2B_MIN - 1e-9))
     total, per_run, runs = {}, {r: [] for r in RADII}, []
@@ -189,7 +189,7 @@ class Dijets:
         self.r_tag = r_tag
         self.S = inputs["total"][r_tag]["S"]                   # (cent, lead, pT_sub, dphi)
         self.X = inputs["total"][r_tag]["X"]                   # (cent, lead, x_J, dphi)
-        self.per_run = inputs["per_run"][r_tag]                # (run, cent, lead, pT_sub), delta phi > 3pi/4
+        self.per_run = inputs["per_run"][r_tag]                # (run, cent, lead, pT_sub), delta phi > 7pi/8
         ax = inputs["axes"]
         self.pe, self.de, self.xe = ax["pt"], ax["dphi"], ax["xj"]
         self.dc = 0.5 * (self.de[1:] + self.de[:-1])
@@ -218,7 +218,7 @@ class Dijets:
         return None
 
     def estimate(self, c, lead, thr):
-        """Purity estimates of one (class, pT_lead class, threshold). Background counts under delta phi > 3pi/4."""
+        """Purity estimates of one (class, pT_lead class, threshold). Background counts under delta phi > 7pi/8."""
         key = (c, lead, thr)
         if key in self._cache:
             return self._cache[key]
@@ -267,7 +267,7 @@ class Dijets:
         return {"n": n, "p_flat": p(b_flat), "p_fit": p(b_fit), "frac_nofit": n_nofit / n if n > 0 else np.nan}
 
     def run_counts(self, c, thr):
-        """Dijets at delta phi > 3pi/4 with pT_sub >= thr per run (all pT_lead classes)."""
+        """Dijets at delta phi > 7pi/8 with pT_sub >= thr per run (all pT_lead classes)."""
         return self.per_run[:, cent_idx(c)][:, :, :, self.pt_sel(thr)].sum(axis=(1, 2, 3))
 
 
@@ -316,7 +316,7 @@ def plot_q1(inputs, runs, lumi, output_path, save_pdf=False):
 
 
 D1_YLABEL = r"$\frac{1}{N_{\mathrm{dijet}}}\frac{dN}{d\Delta\phi}$"
-MARKER_NOTE = r"Gray band: flat window; dashed: $\Delta\phi = 3\pi/4$; dotted: fit range start ($\pi/4$)"
+MARKER_NOTE = r"Gray band: flat window; dashed: $\Delta\phi = 7\pi/8$; dotted: fit range start ($\pi/4$)"
 
 
 def one_line(text):
@@ -353,7 +353,7 @@ def draw_d2(ax, D, c, lead, thr, big=False, legend=False):
     v = e["v"]
     ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=4 if big else 3, label="Data")
     ax.axhline(e["b_flat"] / D.b2b.sum(), color="#377eb8", linestyle="--", linewidth=1.8, label="Flat bkg.")
-    txt = (rf"$N(\Delta\phi > 3\pi/4) = {e['n']:.4g}$" "\n"
+    txt = (rf"$N(\Delta\phi > 7\pi/8) = {e['n']:.4g}$" "\n"
            rf"$P_{{\mathrm{{flat}}}} = {1 - e['b_flat'] / e['n']:.2f}$" if e["n"] > 0 else "no dijets")
     if e["fit"] == "ok":
         ax.plot(D.dc, e["bk"], color="#e41a1c", linewidth=1.8, label=r"Bkg. $B(1 + 2V_{2}\cos 2\Delta\phi)$")
@@ -392,7 +392,7 @@ def draw_d3(ax, D, c, cut, target, band_only=False, big=False, legend=True):
         ax.text(cut + 0.3, 0.03, rf"$p_{{T,\mathrm{{sub}}}} \geq {cut}$ GeV", color="#e41a1c", fontsize=15 if big else 12)
     ax.text(0.96, 0.55, cent_label(c), transform=ax.transAxes, fontsize=20 if big else 18, ha="right", va="center")
     ax.set_xlabel(r"$p_{T,\mathrm{sub}}$ threshold (raw) [GeV]")
-    ax.set_ylabel(r"Purity at $\Delta\phi > 3\pi/4$")
+    ax.set_ylabel(r"Purity at $\Delta\phi > 7\pi/8$")
     ax.set_xlim(thr[0], thr[-1])
     ax.set_ylim(0, 1.05)
     if legend:
@@ -553,13 +553,13 @@ def plot_e1_cartoon(output_path, save_pdf=False):
         ax.set_ylim(0, 4.8)
         ax.set_xlabel(DPHI_LABEL)
         n = (bk + sig)[b2b].sum()
-        ax.text(0.03, 0.62, rf"Purity at $\Delta\phi > 3\pi/4$:" "\n"
+        ax.text(0.03, 0.62, rf"Purity at $\Delta\phi > 7\pi/8$:" "\n"
                 rf"true: {1 - bk[b2b].sum() / n:.2f}" "\n" rf"flat estimate: {1 - bk_flat[b2b].sum() / n:.2f}",
                 transform=ax.transAxes, fontsize=15, va="top")
     axes[0].set_ylabel("Dijets (arbitrary units)")
     axes[0].legend(loc="upper left", fontsize=13)
     fig.text(0.01, 0.995, r"Toy model (not data): Gaussian signal at $\pi$; background with the same level at $\pi/2$ in both "
-             r"panels ($V_{2} = 0.15$ on the right). Gray band: flat window; dashed: $3\pi/4$.", fontsize=12, va="top")
+             r"panels ($V_{2} = 0.15$ on the right). Gray band: flat window; dashed: $7\pi/8$.", fontsize=12, va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.95))
     save_fig(fig, output_path, save_pdf)
     plt.close(fig)
@@ -581,7 +581,7 @@ def plot_e2_annotated(D, c, lead, thr, runs, lumi, output_path, save_pdf=False):
     ax.stairs(bk_b2b, edges, fill=True, color="#e41a1c", alpha=0.3, label=rf"$B_{{\mathrm{{fit}}}}$ = {e['b_fit']:.0f}: fit bkg. under the peak")
     ax.stairs(np.full(D.b2b.sum(), flat), edges, fill=False, hatch="//", color="#377eb8", linewidth=0,
               label=rf"$B_{{\mathrm{{flat}}}}$ = {e['b_flat']:.0f}: flat bkg. under the peak")
-    ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=4, label=rf"Data: $N(\Delta\phi > 3\pi/4)$ = {e['n']:.0f}")
+    ax.errorbar(D.dc, v, yerr=np.sqrt(v), fmt="o", color="black", markersize=4, label=rf"Data: $N(\Delta\phi > 7\pi/8)$ = {e['n']:.0f}")
     ax.axhline(flat, color="#377eb8", linestyle="--", linewidth=1.8)
     ax.plot(D.dc, e["bk"], color="#e41a1c", linewidth=2, label=rf"Bkg. $B(1 + 2V_{{2}}\cos 2\Delta\phi)$, $V_{{2}}$ = {e['v2']:.3f}")
     ax.plot(D.dc, e["bk"] + e["sig"], color="#4daf4a", linewidth=2, label="Bkg. + 40–60% signal shape (the fit)")
@@ -620,8 +620,8 @@ def plot_d4(D, cuts, runs, lumi, output_path, save_pdf=False):
         for ax in axes:
             if cut is not None:
                 ax.axvline(cut, color=col, linestyle=":")
-    axes[0].set_ylabel(r"Dijets at $\Delta\phi > 3\pi/4$")
-    axes[1].set_ylabel(r"Dijets per run at $\Delta\phi > 3\pi/4$")
+    axes[0].set_ylabel(r"Dijets at $\Delta\phi > 7\pi/8$")
+    axes[1].set_ylabel(r"Dijets per run at $\Delta\phi > 7\pi/8$")
     for ax in axes:
         ax.set_yscale("log")
         ax.set_xlabel(r"$p_{T,\mathrm{sub}}$ threshold (raw) [GeV]")
@@ -635,7 +635,7 @@ def plot_d4(D, cuts, runs, lumi, output_path, save_pdf=False):
 
 
 def plot_d5(D, runs, lumi, output_path, save_pdf=False):
-    """x_J of the dijets at delta phi > 3pi/4 (pT_sub >= the 7 GeV floor), per pT_lead range, per class."""
+    """x_J of the dijets at delta phi > 7pi/8 (pT_sub >= the 7 GeV floor), per pT_lead range, per class."""
     hep.style.use("ATLAS")
     fig, axes = plt.subplots(1, len(LEAD_PLOT), figsize=(6 * len(LEAD_PLOT), 6.5), sharey=True)
     for ax, lead in zip(axes, LEAD_PLOT):
@@ -650,7 +650,7 @@ def plot_d5(D, runs, lumi, output_path, save_pdf=False):
         ax.legend(loc="upper left", fontsize=10, title=lead_label(lead), title_fontsize=12)
     axes[0].set_ylabel(r"$\frac{1}{N}\frac{dN}{dx_{J}}$")
     add_header(axes[-1], runs, RADII[D.r_tag]["r"], lumi)
-    fig.text(0.01, 0.995, rf"{jet_info(D.r_tag)}, $\Delta\phi > 3\pi/4$, no $p_{{T,\mathrm{{sub}}}}$ cut beyond the floor. "
+    fig.text(0.01, 0.995, rf"{jet_info(D.r_tag)}, $\Delta\phi > 7\pi/8$, no $p_{{T,\mathrm{{sub}}}}$ cut beyond the floor. "
              rf"Dotted: $x_{{J}} = {JET_PT_MIN}\,\mathrm{{GeV}} / p_{{T,\mathrm{{lead}}}}$ at the range edges.", fontsize=11, va="top")
     fig.tight_layout(rect=(0, 0, 1, 0.97))
     save_fig(fig, output_path, save_pdf)
@@ -795,7 +795,7 @@ def main():
 
     path = out / "dijet_cuts.csv"
     with path.open("w", newline="") as f:
-        f.write(f"# lowest raw pT_sub threshold [GeV] with fit purity >= {args.purity_target} at delta phi > 3pi/4, "
+        f.write(f"# lowest raw pT_sub threshold [GeV] with fit purity >= {args.purity_target} at delta phi > 7pi/8, "
                 f"all pT_lead; {len(runs)} runs of {args.file}\n")
         w = csv.DictWriter(f, fieldnames=list(cut_rows[0]))
         w.writeheader()
