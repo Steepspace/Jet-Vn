@@ -389,6 +389,8 @@ def draw_d3(ax, D, c, cut, target, band_only=False, big=False, legend=True):
             p = np.array([np.nan if t >= lead[1] else
                           (lambda e: 1 - e["b_fit"] / e["n"] if e["fit"] == "ok" else np.nan)(D.estimate(c, lead, t))
                           for t in thr])
+            if np.all(np.isnan(p)):     # no fit at any threshold (too few dijets or no template): no line, no legend entry
+                continue
             ax.plot(thr, p, color=col, linewidth=1.4, marker="o", markersize=2.5 if big else 1.5, label=lead_label(lead))
     ax.axhline(target, color="gray", linestyle="--")
     if cut is not None:
