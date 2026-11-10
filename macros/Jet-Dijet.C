@@ -4,6 +4,11 @@
 // Jet-Anav3 (|z| < 10 cm and MB from the skim, Good Calo-Cent, centrality 0 - 60 %). Per radius and 10 % centrality
 // class and raw pT_lead class it fills TH2s of the subleading raw pT (and of x_J) vs delta phi, so that the subleading
 // pT, x_J and delta phi cuts can be scanned offline.
+//
+// With the chosen cut per radius (pT_sub >= pt_sub_min, delta phi > 7pi/8) it also fills, for the leading jet, TH2s of
+// jet time - MBD t0 vs OHCal energy fraction in a grid of 10 % centrality classes x raw pT_lead bins, for the dijet
+// sample and for the inclusive comparison (leading jet raw pT >= pt_sub_min, no dijet requirement), and the raw pT x
+// centrality of every jet, in dijet events and in all events.
 
 // -- utils
 #include "myUtils.C"
@@ -61,6 +66,9 @@ class JetDijet
   void set_jet_pt_raw_min(double pt) { m_jet_pt_raw_min = pt; }
   void set_sigma_cut(double sigma) { m_sigma_cut = sigma; }
   void set_verbosity(int verbosity) { m_verbosity = verbosity; }
+  // Dijet selection for the timing and jet pT hists: subleading raw pT >= pt_sub_min of the radius (the 0-20 % cut of
+  // the purity scan, used in every centrality class)
+  void set_pt_sub_min(double r02, double r03) { m_pt_sub_min = {r02, r03}; }
 
  private:
   // Centrality: the selection of Jet-Anav3 (centrality <= 59.5) and 10 % classes [lo, hi), the last one closed
@@ -106,15 +114,38 @@ class JetDijet
   // delta phi: pi / 72 wide, so pi/3, pi/2, 2pi/3, 3pi/4 and 7pi/8 are bin edges
   static constexpr int m_bins_dphi = 72;
   static constexpr int m_bins_xj = 20;
-  static constexpr double m_dphi_b2b = 7 * std::numbers::pi / 8;  // back-to-back cut of the timing-count hist (the plot script uses the same)
+  static constexpr double m_dphi_b2b = 7 * std::numbers::pi / 8;  // back-to-back cut of the dijet selection (the plot script uses the same)
+
+  // Leading jet timing hists, binning as h2LeadJetTimeOHCalFrac of Jet-Anav3: OHCal fraction 60 bins over [-0.25, 1.25],
+  // jet t - MBD t0 100 bins over +-25 ns
+  static constexpr int m_bins_frac = 60;
+  static constexpr double m_frac_low = -0.25;
+  static constexpr double m_frac_high = 1.25;
+  static constexpr int m_bins_dt = 100;
+  static constexpr double m_dt_max = 25; /*ns*/
+  // Raw pT_lead bins of the timing grid [GeV]: from pt_sub_min of the radius, then these edges above it
+  static constexpr std::array<double, 6> m_time_lead_upper = {20, 25, 30, 40, 60, 100};
+  // Jet raw pT x centrality: 1 GeV over [0, 300], 1 % centrality bins
+  static constexpr int m_bins_jet_pt = 300;
+  static constexpr double m_jet_pt_high = 300;
+  // Selections of the timing and jet pT hists
+  enum Sel : std::uint8_t
+  {
+    SEL_DIJET,  // leading + subleading, delta phi > 7pi/8, pT_sub >= pt_sub_min
+    SEL_INCL,   // timing: leading jet pT >= pt_sub_min, no dijet requirement; jet pT: every selected event
+    N_SEL
+  };
+  static constexpr std::array<const char *, N_SEL> m_sel_time_tag = {"dijet", "incl"};
+  static constexpr std::array<const char *, N_SEL> m_sel_jet_tag = {"dijet", "all"};
 
   struct JetData
   {
-    std::vector<double> *pt{nullptr};   // NOLINT(misc-non-private-member-variables-in-classes)
-    std::vector<double> *e{nullptr};    // NOLINT(misc-non-private-member-variables-in-classes)
-    std::vector<double> *phi{nullptr};  // NOLINT(misc-non-private-member-variables-in-classes)
-    std::vector<double> *eta{nullptr};  // NOLINT(misc-non-private-member-variables-in-classes)
-    std::vector<double> *t{nullptr};    // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *pt{nullptr};          // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *e{nullptr};           // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *phi{nullptr};         // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *eta{nullptr};         // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *t{nullptr};           // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *ohcal_frac{nullptr};  // NOLINT(misc-non-private-member-variables-in-classes)
   };
 
   struct EventData
@@ -138,7 +169,13 @@ class JetDijet
     // [centrality class][pT_lead class]
     std::array<std::array<TH2 *, m_n_lead>, m_n_cent> h2PtSubDphi{};
     std::array<std::array<TH2 *, m_n_lead>, m_n_cent> h2XjDphi{};
-    std::array<TH2 *, m_n_cent> h2PtLeadPtSubTime{};
+
+    // Leading jet timing, [selection][centrality class][pT_lead bin]: jet t - MBD t0 vs OHCal fraction
+    std::vector<double> time_lead_edges;  // pt_sub_min, then the m_time_lead_upper edges above it
+    std::array<std::array<std::vector<TH2 *>, m_n_cent>, N_SEL> h2LeadTimeOHCalFrac{};
+    std::array<TH1 *, N_SEL> hLeadTimingStatus{};
+    // Raw pT x centrality of every jet passing the jet cuts, [selection]: in dijet events, in all selected events
+    std::array<TH2 *, N_SEL> h2JetPtCent{};
   };
 
   enum EventBin : std::uint8_t
@@ -161,6 +198,7 @@ class JetDijet
   int m_verbosity{0};
   double m_jet_pt_raw_min{7}; /*GeV*/
   double m_sigma_cut{3.5};
+  std::array<double, m_n_radii> m_pt_sub_min{14.25, 21.5}; /*GeV, raw*/
 
   // --- State ---
   EventData m_event_data;
@@ -179,6 +217,9 @@ class JetDijet
   void init_hists();
   bool check_CaloMBD() const;
   static int cent_class(double cent);
+  static std::string edge_tag(double x);
+  bool pass_jet(const JetData &jd, size_t idx, size_t ir) const;
+  void fill_lead_timing(size_t ir, Sel sel, size_t ic, size_t il);
   void process_dijet(size_t ir, int cls);
   void process_events();
   void save_results() const;
@@ -284,6 +325,7 @@ void JetDijet::setup_chain()
     enable(std::format("phi_iter_{}", r), &jd.phi);
     enable(std::format("eta_iter_{}", r), &jd.eta);
     enable(std::format("t_iter_{}", r), &jd.t);
+    enable(std::format("ohcal_frac_iter_{}", r), &jd.ohcal_frac);
   }
 }
 
@@ -352,11 +394,111 @@ void JetDijet::init_hists()
                                         std::format("{}; x_{{J}} = p_{{T,sub}} / p_{{T,lead}}; #Delta#phi", label).c_str(),
                                         m_bins_xj, xj_edges.data(), m_bins_dphi, dphi_edges.data());
       }
-      h.h2PtLeadPtSubTime[ic] = book<TH2D>(std::format("h2PtLeadPtSubTime_{}", tag),
-                                           std::format("Dijet, #Delta#phi > 7#pi/8, t_{{lead}}, t_{{sub}}, t_{{0}} finite ({}, {}); Raw p_{{T,lead}} [GeV]; Raw p_{{T,sub}} [GeV]", jet_label, cent_label).c_str(),
-                                           n_pt, pt, n_pt, pt);
+    }
+
+    // Timing and jet pT hists of the chosen dijet cut
+    const double cut = m_pt_sub_min[ir];
+    if (!(cut >= m_jet_pt_raw_min) || cut >= m_time_lead_upper.back())
+    {
+      throw std::runtime_error(std::format("pt_sub_min {} of {} must be in [{}, {}) GeV", cut, r, m_jet_pt_raw_min, m_time_lead_upper.back()));
+    }
+    h.time_lead_edges = {cut};
+    for (double e : m_time_lead_upper)
+    {
+      if (e > cut)
+      {
+        h.time_lead_edges.push_back(e);
+      }
+    }
+    const std::array<std::string, N_SEL> sel_label = {
+        std::format("Dijet: #Delta#phi > 7#pi/8, raw p_{{T,sub}} #geq {} GeV", cut),
+        std::format("Inclusive: raw p_{{T,lead}} #geq {} GeV", cut)};
+
+    for (size_t is = 0; is < N_SEL; ++is)
+    {
+      const std::string stag = std::format("{}_{}", r, m_sel_time_tag[is]);
+      for (size_t ic = 0; ic < m_n_cent; ++ic)
+      {
+        const auto clo = static_cast<int>(m_cent_edges[ic]);
+        const auto chi = static_cast<int>(m_cent_edges[ic + 1]);
+        auto &row = h.h2LeadTimeOHCalFrac[is][ic];
+        row.clear();
+        for (size_t ib = 0; ib + 1 < h.time_lead_edges.size(); ++ib)
+        {
+          const double plo = h.time_lead_edges[ib];
+          const double phi = h.time_lead_edges[ib + 1];
+          row.push_back(book<TH2D>(
+              std::format("h2LeadTimeOHCalFrac_{}_cent_{}_{}_ptlead_{}_{}", stag, clo, chi, edge_tag(plo), edge_tag(phi)),
+              std::format("Leading Jet, {} ({}, {}-{}%, {} #leq raw p_{{T,lead}} < {} GeV); OHCal Energy Fraction; Jet t - MBD t_{{0}} [ns]",
+                          sel_label[is], jet_label, clo, chi, plo, phi).c_str(),
+              m_bins_frac, m_frac_low, m_frac_high, m_bins_dt, -m_dt_max, m_dt_max));
+        }
+      }
+
+      h.hLeadTimingStatus[is] = book<TH1D>(std::format("hLeadTimingStatus_{}", stag),
+                                           std::format("Leading Jet Timing, {} ({}); ; Leading Jets", sel_label[is], jet_label).c_str(),
+                                           5, 0, 5);
+      const std::array<const char *, 5> slabels = {"Selected", "Filled", "t NaN", "OHCal frac or t0 NaN", "p_{T,lead} #geq 100 GeV"};
+      for (size_t i = 0; i < slabels.size(); ++i)
+      {
+        h.hLeadTimingStatus[is]->GetXaxis()->SetBinLabel(static_cast<int>(i) + 1, slabels[i]);
+      }
+
+      const std::string jlabel = is == SEL_DIJET ? std::format("Jets in dijet events ({})", sel_label[is]) : std::string("Jets in all selected events");
+      h.h2JetPtCent[is] = book<TH2D>(std::format("h2JetPtCent_{}_{}", r, m_sel_jet_tag[is]),
+                                     std::format("{} ({}); Jet raw p_{{T}} [GeV]; Centrality [%]", jlabel, jet_label).c_str(),
+                                     m_bins_jet_pt, 0, m_jet_pt_high, 60, -0.5, 59.5);
     }
   }
+}
+
+// A bin edge as it appears in hist names: 14.25 -> "14p25", 20 -> "20"
+std::string JetDijet::edge_tag(double x)
+{
+  std::string s = std::format("{:g}", x);
+  std::replace(s.begin(), s.end(), '.', 'p');
+  return s;
+}
+
+// The jet cuts: E > 0, |eta| < eta_max of the radius, raw pT >= m_jet_pt_raw_min
+bool JetDijet::pass_jet(const JetData &jd, size_t idx, size_t ir) const
+{
+  return jd.e->at(idx) > 0 && std::abs(jd.eta->at(idx)) < m_jet_eta_max[ir] && jd.pt->at(idx) >= m_jet_pt_raw_min;
+}
+
+// Leading jet time - MBD t0 vs OHCal fraction in the cell (centrality class ic, pT_lead bin) of selection sel. As in
+// Jet-Anav3, only jets with t, t0 and the OHCal fraction finite are filled; times outside +-25 ns go to the flow bins
+void JetDijet::fill_lead_timing(size_t ir, Sel sel, size_t ic, size_t il)
+{
+  const JetData &jd = m_event_data.jets[ir];
+  DijetHists &h = m_hists[ir];
+  TH1 *status = h.hLeadTimingStatus[sel];
+  status->Fill(0.5);
+
+  const double pt_lead = jd.pt->at(il);
+  const auto &edges = h.time_lead_edges;
+  const auto it = std::upper_bound(edges.begin(), edges.end(), pt_lead);
+  if (it == edges.begin() || it == edges.end())  // below pt_sub_min cannot happen; >= 100 GeV is outside the grid
+  {
+    status->Fill(4.5);
+    return;
+  }
+  const auto ib = static_cast<size_t>(std::distance(edges.begin(), it) - 1);
+
+  const double t = jd.t->at(il);
+  if (!std::isfinite(t))
+  {
+    status->Fill(2.5);
+    return;
+  }
+  const double frac = jd.ohcal_frac->at(il);
+  if (!std::isfinite(frac) || !std::isfinite(m_event_data.t0))
+  {
+    status->Fill(3.5);
+    return;
+  }
+  status->Fill(1.5);
+  h.h2LeadTimeOHCalFrac[sel][ic][ib]->Fill(frac, t - m_event_data.t0);
 }
 
 int JetDijet::cent_class(double cent)
@@ -384,12 +526,13 @@ void JetDijet::process_dijet(size_t ir, int cls)
   int njets = 0;
   for (size_t idx = 0; idx < jd.pt->size(); ++idx)
   {
-    const double pt = jd.pt->at(idx);
-    if (jd.e->at(idx) <= 0 || std::abs(jd.eta->at(idx)) >= m_jet_eta_max[ir] || pt < m_jet_pt_raw_min)
+    if (!pass_jet(jd, idx, ir))
     {
       continue;
     }
+    const double pt = jd.pt->at(idx);
     ++njets;
+    h.h2JetPtCent[SEL_INCL]->Fill(pt, cent);  // every jet of every selected event
     const int i = static_cast<int>(idx);
     if (lead < 0 || pt > jd.pt->at(static_cast<size_t>(lead)))
     {
@@ -413,6 +556,15 @@ void JetDijet::process_dijet(size_t ir, int cls)
   h.h2LeadPtCent->Fill(pt_lead, cent);
   m_hEvent->Fill(ir == 0 ? LEAD_R02 : LEAD_R03);
 
+  const auto ic = static_cast<size_t>(cls);
+  const double cut = m_pt_sub_min[ir];
+
+  // Inclusive comparison: the leading jet above the cut, no subleading jet required
+  if (pt_lead >= cut)
+  {
+    fill_lead_timing(ir, SEL_INCL, ic, il);
+  }
+
   if (sub < 0)
   {
     return;
@@ -430,7 +582,6 @@ void JetDijet::process_dijet(size_t ir, int cls)
   dphi = std::min(dphi, std::nextafter(std::numbers::pi, 0.0));
   const double xj = std::min(pt_sub / pt_lead, std::nextafter(1.0, 0.0));
 
-  const auto ic = static_cast<size_t>(cls);
   // pT_lead class; leading jets at raw pT >= 100 GeV are counted only in h2LeadPtCent (overflow) and hEvent
   const auto lead_it = std::upper_bound(m_lead_edges.begin(), m_lead_edges.end(), pt_lead);
   if (lead_it != m_lead_edges.begin() && lead_it != m_lead_edges.end())
@@ -440,9 +591,17 @@ void JetDijet::process_dijet(size_t ir, int cls)
     h.h2XjDphi[ic][lc]->Fill(xj, dphi);
   }
 
-  if (dphi > m_dphi_b2b && std::isfinite(jd.t->at(il)) && std::isfinite(jd.t->at(is)) && std::isfinite(m_event_data.t0))
+  // Dijet selection: back to back and the subleading jet above the cut (so the leading jet is too)
+  if (dphi > m_dphi_b2b && pt_sub >= cut)
   {
-    h.h2PtLeadPtSubTime[ic]->Fill(pt_lead, pt_sub);
+    fill_lead_timing(ir, SEL_DIJET, ic, il);
+    for (size_t idx = 0; idx < jd.pt->size(); ++idx)  // every jet of the dijet event, third jets included
+    {
+      if (pass_jet(jd, idx, ir))
+      {
+        h.h2JetPtCent[SEL_DIJET]->Fill(jd.pt->at(idx), cent);
+      }
+    }
   }
 
   if (m_verbosity > 1)
@@ -523,9 +682,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 7)
+  if (argc < 3 || argc > 9)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [jet_pt_raw_min] [sigma_cut]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [jet_pt_raw_min] [sigma_cut] [pt_sub_min_r02] [pt_sub_min_r03]" << std::endl;
     return 1;
   }
 
@@ -536,6 +695,8 @@ int main(int argc, const char *const argv[])
   const std::string output_dir = (argc >= ctr + 1) ? argv[ctr++] : ".";
   const double jet_pt_raw_min = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 7;
   const double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
+  const double pt_sub_min_r02 = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 14.25;
+  const double pt_sub_min_r03 = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 21.5;
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -545,6 +706,7 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Output Dir: {}\n", output_dir);
   std::cout << std::format("Jet Raw pT Min: {} [GeV]\n", jet_pt_raw_min);
   std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
+  std::cout << std::format("Dijet pT_sub Min: R = 0.2: {} GeV, R = 0.3: {} GeV (raw; delta phi > 7pi/8)\n", pt_sub_min_r02, pt_sub_min_r03);
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -552,6 +714,7 @@ int main(int argc, const char *const argv[])
     JetDijet analysis(input_file, calo_mbd_file, events, output_dir);
     analysis.set_jet_pt_raw_min(jet_pt_raw_min);
     analysis.set_sigma_cut(sigma_cut);
+    analysis.set_pt_sub_min(pt_sub_min_r02, pt_sub_min_r03);
     analysis.run();
   }
   catch (const std::exception &e)

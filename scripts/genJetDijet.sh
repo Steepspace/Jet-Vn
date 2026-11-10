@@ -22,6 +22,8 @@ input_calo_mbd=${3}
 submitDir=${4}
 jet_pt_raw_min=${5:-7}
 sigma_cut=${6:-3.5}
+pt_sub_min_r02=${7:-14.25}
+pt_sub_min_r03=${8:-21.5}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -78,7 +80,7 @@ printenv
 mkdir -p "$run"
 
 echo "Starting Jet-Dijet binary at $(date) on $(hostname)"
-$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$run" "$jet_pt_raw_min" "$sigma_cut"
+$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$run" "$jet_pt_raw_min" "$sigma_cut" "$pt_sub_min_r02" "$pt_sub_min_r03"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then
