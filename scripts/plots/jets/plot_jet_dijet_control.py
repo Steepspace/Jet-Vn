@@ -34,6 +34,7 @@ from scipy.optimize import least_squares
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator, NullFormatter
 import mplhep as hep
 
 from plot_jet_bkgsub_compare import save_fig
@@ -631,6 +632,11 @@ def plot_d4(D, cuts, runs, lumi, output_path, save_pdf=False):
         ax.set_xlim(thr[0], thr[-1])
         ax.legend(loc="upper right", fontsize=10)
     axes[0].text(0.03, 0.03, "dotted: the chosen cut", transform=axes[0].transAxes, fontsize=11)
+    # major ticks at every power of 10 (the default thins them to every other one over 9 decades), minor ticks at
+    # 2 ... 9 of each decade, unlabeled
+    axes[0].yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
+    axes[0].yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10), numticks=50))
+    axes[0].yaxis.set_minor_formatter(NullFormatter())
     add_header(axes[1], runs, RADII[D.r_tag]["r"], lumi)
     fig.tight_layout()
     save_fig(fig, output_path, save_pdf)
