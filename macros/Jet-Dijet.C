@@ -81,12 +81,8 @@ class JetDijet
   static constexpr std::array<const char *, m_n_radii> m_radius_tag = {"r02", "r03"};
   static constexpr std::array<double, m_n_radii> m_jet_eta_max = {0.9, 0.8};
 
-  // Raw pT binning [GeV]: 1 GeV to 40 GeV, coarser above
-  static constexpr std::array<double, 42> m_pt_edges = {
-      7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
-      31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 42.5, 45, 50, 55, 60, 70, 80, 100};
-  // Raw pT_sub binning [GeV] of the pT_sub x delta phi hists, finer so the purity scan can place the pT_sub cut between
-  // whole GeV: 0.25 GeV from 7 to 30 GeV, 1 GeV to 40 GeV, then as m_pt_edges. Every m_pt_edges edge is also an edge here.
+  // Raw pT_sub binning [GeV] of the pT_sub x delta phi hists, fine so the purity scan can place the pT_sub cut between
+  // whole GeV: 0.25 GeV from 7 to 30 GeV, 1 GeV to 40 GeV, then 42.5, 45, 50, 55, 60, 70, 80, 100 GeV.
   static constexpr size_t m_n_sub_fine = 92;  // (30 - 7) / 0.25
   static constexpr size_t m_n_sub_mid = 10;   // 31 ... 40
   static constexpr std::array<double, 8> m_sub_tail = {42.5, 45, 50, 55, 60, 70, 80, 100};
@@ -164,7 +160,6 @@ class JetDijet
 
   struct DijetHists
   {
-    TH2 *h2LeadPtCent{nullptr};
     TH2 *h2NjetsCent{nullptr};
     // [centrality class][pT_lead class]
     std::array<std::array<TH2 *, m_n_lead>, m_n_cent> h2PtSubDphi{};
@@ -333,9 +328,6 @@ void JetDijet::init_hists()
 {
   std::cout << "Processing... init_hists" << std::endl;
 
-  const int n_pt = static_cast<int>(m_pt_edges.size()) - 1;
-  const double *pt = m_pt_edges.data();
-
   // fixed-width axes as edge arrays for the variable-binning TH2 constructor
   std::vector<double> dphi_edges(m_bins_dphi + 1);
   for (int i = 0; i <= m_bins_dphi; ++i)
@@ -365,9 +357,6 @@ void JetDijet::init_hists()
     const std::string jet_label = std::format("R = 0.{}, |#eta| < {}, raw p_{{T}} #geq {} GeV", r[2], m_jet_eta_max[ir], m_jet_pt_raw_min);
     DijetHists &h = m_hists[ir];
 
-    h.h2LeadPtCent = book<TH2D>(std::format("h2LeadPtCent_{}", r),
-                                std::format("Leading Jet ({}); Raw p_{{T,lead}} [GeV]; Centrality [%]", jet_label).c_str(),
-                                n_pt, pt, 60, -0.5, 59.5);
     h.h2NjetsCent = book<TH2D>(std::format("h2NjetsCent_{}", r),
                                std::format("Jets ({}); Centrality [%]; N_{{jets}}", jet_label).c_str(),
                                60, -0.5, 59.5, 20, -0.5, 19.5);
@@ -553,7 +542,6 @@ void JetDijet::process_dijet(size_t ir, int cls)
 
   const auto il = static_cast<size_t>(lead);
   const double pt_lead = jd.pt->at(il);
-  h.h2LeadPtCent->Fill(pt_lead, cent);
   m_hEvent->Fill(ir == 0 ? LEAD_R02 : LEAD_R03);
 
   const auto ic = static_cast<size_t>(cls);
@@ -582,7 +570,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
   dphi = std::min(dphi, std::nextafter(std::numbers::pi, 0.0));
   const double xj = std::min(pt_sub / pt_lead, std::nextafter(1.0, 0.0));
 
-  // pT_lead class; leading jets at raw pT >= 100 GeV are counted only in h2LeadPtCent (overflow) and hEvent
+  // pT_lead class; leading jets at raw pT >= 100 GeV are counted only in hEvent
   const auto lead_it = std::upper_bound(m_lead_edges.begin(), m_lead_edges.end(), pt_lead);
   if (lead_it != m_lead_edges.begin() && lead_it != m_lead_edges.end())
   {

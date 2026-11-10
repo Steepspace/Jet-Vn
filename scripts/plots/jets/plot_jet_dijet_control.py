@@ -112,7 +112,7 @@ def xj_name(r_tag, c, lead):
 
 def load_run(task):
     """Per run: hEvent, hCentrality, and per radius the stacked hists S (cent, lead, pT_sub, dphi), X (cent, lead, x_J,
-    dphi), the leading pT vs centrality and the jet count vs centrality. Returns (run, data), data None on a missing hist."""
+    dphi) and the jet count vs centrality. Returns (run, data), data None on a missing hist."""
     run, path = task
     try:
         with uproot.open(path) as rf:
@@ -122,7 +122,6 @@ def load_run(task):
                 d[r_tag] = {
                     "S": np.stack([np.stack([rf[sub_name(r_tag, c, l)].values() for l in LEAD_CLS]) for c in CENT10]),
                     "X": np.stack([np.stack([rf[xj_name(r_tag, c, l)].values() for l in LEAD_CLS]) for c in CENT10]),
-                    "lead": rf[f"h2LeadPtCent_{r_tag}"].values(flow=True),
                     "njets": rf[f"h2NjetsCent_{r_tag}"].values(),
                 }
     except (KeyError, OSError) as e:
