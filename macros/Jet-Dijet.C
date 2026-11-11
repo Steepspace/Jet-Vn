@@ -171,6 +171,8 @@ class JetDijet
     std::array<TH1 *, N_SEL> hLeadTimingStatus{};
     // Raw pT x centrality of every jet passing the jet cuts, [selection]: in dijet events, in all selected events
     std::array<TH2 *, N_SEL> h2JetPtCent{};
+    // Raw pT x centrality of the leading jet, [selection]: dijet sample, inclusive (pT_lead >= pt_sub_min)
+    std::array<TH2 *, N_SEL> h2LeadPtCent{};
   };
 
   enum EventBin : std::uint8_t
@@ -437,6 +439,10 @@ void JetDijet::init_hists()
       h.h2JetPtCent[is] = book<TH2D>(std::format("h2JetPtCent_{}_{}", r, m_sel_jet_tag[is]),
                                      std::format("{} ({}); Jet raw p_{{T}} [GeV]; Centrality [%]", jlabel, jet_label).c_str(),
                                      m_bins_jet_pt, 0, m_jet_pt_high, 60, -0.5, 59.5);
+      // the same binning as the jet pT hists; every selected leading jet, also at >= 100 GeV and with t, t0 or x NaN
+      h.h2LeadPtCent[is] = book<TH2D>(std::format("h2LeadPtCent_{}_{}", r, m_sel_time_tag[is]),
+                                      std::format("Leading Jet, {} ({}); Leading jet raw p_{{T}} [GeV]; Centrality [%]", sel_label[is], jet_label).c_str(),
+                                      m_bins_jet_pt, 0, m_jet_pt_high, 60, -0.5, 59.5);
     }
   }
 }
@@ -550,6 +556,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
   // Inclusive comparison: the leading jet above the cut, no subleading jet required
   if (pt_lead >= cut)
   {
+    h.h2LeadPtCent[SEL_INCL]->Fill(pt_lead, cent);
     fill_lead_timing(ir, SEL_INCL, ic, il);
   }
 
@@ -582,6 +589,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
   // Dijet selection: back to back and the subleading jet above the cut (so the leading jet is too)
   if (dphi > m_dphi_b2b && pt_sub >= cut)
   {
+    h.h2LeadPtCent[SEL_DIJET]->Fill(pt_lead, cent);
     fill_lead_timing(ir, SEL_DIJET, ic, il);
     for (size_t idx = 0; idx < jd.pt->size(); ++idx)  // every jet of the dijet event, third jets included
     {
