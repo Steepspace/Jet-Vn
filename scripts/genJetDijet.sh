@@ -24,7 +24,7 @@ jet_pt_raw_min=${5:-7}
 sigma_cut=${6:-3.5}
 pt_sub_min_r02=${7:-14.25}
 pt_sub_min_r03=${8:-21.5}
-# dijet timing correction CSV, read in place (absolute path from condor_utils), or "none"
+# leading jet timing correction CSV (dijet fit, applied to dijet and inclusive), read in place (absolute path from condor_utils), or "none"
 timing_corr_file=${9:-none}
 
 # extract runnumber from file name

@@ -97,7 +97,7 @@ def run_jet_jobs(args, version):
         init_log['Jet Raw pT Min'] = f"{args.jet_pt_raw_min} GeV"
         init_log['Sigma Cut'] = args.sigma_cut
         init_log['Dijet pT_sub Min'] = f"R = 0.2: {args.pt_sub_min_r02} GeV, R = 0.3: {args.pt_sub_min_r03} GeV (raw)"
-        init_log['Timing Correction File (dijet)'] = Path(args.timing_corr_file).resolve() if args.timing_corr_file else "Not Provided (no corrected timing hists)"
+        init_log['Timing Correction File'] = Path(args.timing_corr_file).resolve() if args.timing_corr_file else "Not Provided (no corrected timing hists)"
     elif version == "jetJES":
         # the jet pT is not cut on, the response is filled for every matched truth jet
         del init_log['Jet pT Min']
@@ -305,7 +305,7 @@ def setup_jetAna_subparsers(subparsers):
     jetDijet.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
     jetDijet.add_argument('--pt-sub-min-r02', type=float, default=14.25, help='Dijet selection of the timing and jet pT hists, R = 0.2: raw pT_sub >= this (the 0-20%% cut of the purity scan). Default: 14.25 [GeV]')
     jetDijet.add_argument('--pt-sub-min-r03', type=float, default=21.5, help='Dijet selection of the timing and jet pT hists, R = 0.3: raw pT_sub >= this (the 0-20%% cut of the purity scan). Default: 21.5 [GeV]')
-    jetDijet.add_argument('--timing-corr-file', type=str, default=None, help='Leading jet timing correction of the dijet sample: f(x) per radius and centrality range (files/calib/timing_dijet_fit_iternf.csv, from plot_jet_dijet_timing.py --write-calib). Fills the h2LeadTimeOHCalFrac_<r>_dijet_*_corr hists. (Optional)')
+    jetDijet.add_argument('--timing-corr-file', type=str, default=None, help='Leading jet timing correction: f(x) per radius and centrality range, fitted to the dijet sample (files/calib/timing_dijet_fit_iternf.csv, from plot_jet_dijet_timing.py --write-calib). Fills the h2LeadTimeOHCalFrac_<r>_<dijet|incl>_*_corr hists and the corrected time vs pT hists h2LeadTimeCorrPt_<r>_<dijet|lead>_* and h2JetTimeCorrPt_<r>_<dijet|all>_*. (Optional)')
     jetDijet.set_defaults(func=jetDijet_jobs)
 
     jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay or p+p MC JES, all pT-hat samples of the input list in one submission).')
