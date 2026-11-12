@@ -23,7 +23,10 @@ This script makes:
    - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, 10% / 20% class or 0-60%,
      pT_lead bin or all).
 3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
-   profile <t - t0> per x bin, its standard deviation and a quartic fitted to the profile.
+   profile <t - t0> per x bin, its standard deviation and a quartic fitted to the profile;
+   timing/T2_profiles_cent20_<r>_dijet: the profiles of the three 20% classes with the T1 fit, and profile - fit [ns].
+   With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
+   (files/calib/timing_dijet_fit_iternf.csv).
 """
 
 import argparse
@@ -321,21 +324,50 @@ T1_YLIM = (-12, 12)                                        # [ns]; jets outside 
 T1_FIT_DEG = 4                                             # quartic fitted to the profile (pol2 leaves an S-shaped residual)
 
 
-def plot_t1(inputs, r_tag, cut, x_rebin, runs, lumi, out_dir, sel="dijet", save_pdf=False):
-    """t - t0 vs x of the leading jet, 0-60% and all pT_lead, with the profile (<t - t0> per x bin, from the bin centres
-    of the t axis; error RMS / sqrt N)."""
-    hep.style.use("ATLAS")
+def time_profile(inputs, r_tag, sel, x_rebin, cents=None):
+    """t - t0 vs x summed over runs, pT_lead and the 10% classes cents (all if None), with x rebinned, and its profile:
+    <t - t0> per x bin from the bin centres of the t axis, the standard deviation, and the mask of bins with N >= PROFILE_MIN_N."""
     xe = inputs["layout"]["x_edges"][::x_rebin]
     te = inputs["layout"]["t_edges"]
     tc = 0.5 * (te[1:] + te[:-1])
-    h = inputs["tx"][(r_tag, sel)].sum(axis=(0, 1))                       # (x, t), fine x bins
+    g = inputs["tx"][(r_tag, sel)]                                       # (cent, pT_lead, x, t), fine x bins
+    h = (g if cents is None else g[list(cents)]).sum(axis=(0, 1))
     h = h.reshape(len(xe) - 1, x_rebin, len(tc)).sum(axis=1)
-    xc = 0.5 * (xe[1:] + xe[:-1])
     n = h.sum(axis=1)
     with np.errstate(invalid="ignore", divide="ignore"):
         mean = (h * tc).sum(axis=1) / n
         rms = np.sqrt(np.maximum((h * tc ** 2).sum(axis=1) / n - mean ** 2, 0))
-    ok = n >= PROFILE_MIN_N
+    return {"xe": xe, "te": te, "tc": tc, "xc": 0.5 * (xe[1:] + xe[:-1]), "h": h, "n": n, "mean": mean, "rms": rms,
+            "err": rms / np.sqrt(n), "ok": n >= PROFILE_MIN_N}
+
+
+def fit_profile(P):
+    """Quartic fitted to the profile points (weights 1 / error^2): coefficients (highest power first), chi2, ndf and the
+    fitted x range (first and last bin centre); outside it the correction uses f at the nearest edge."""
+    ok = P["ok"]
+    xf, yf, ef = P["xc"][ok], P["mean"][ok], P["err"][ok]
+    c = np.polyfit(xf, yf, T1_FIT_DEG, w=1 / ef)
+    chi2, ndf = (((yf - np.polyval(c, xf)) / ef) ** 2).sum(), len(xf) - T1_FIT_DEG - 1
+    return {"c": c, "chi2": chi2, "ndf": ndf, "x_lo": xf[0], "x_hi": xf[-1]}
+
+
+def fit_eval(fit, x):
+    return np.polyval(fit["c"], np.clip(x, fit["x_lo"], fit["x_hi"]))
+
+
+def sel_lines(r_tag, cut, sel):
+    return [rf"$\Delta\phi > 7\pi/8$, raw $p_{{T,\mathrm{{sub}}}} \geq {cut:g}$ GeV" if sel == "dijet"
+            else rf"Leading jet raw $p_{{T}} \geq {cut:g}$ GeV",
+            r"$|z| < 10$ cm & MB, Good Calo-Cent, Iterative No Flow",
+            rf"Jets: $|\eta| < {RADII[r_tag]['eta_max']:g}$, Energy > 0, raw $p_{{T}} \geq {JET_PT_MIN}$ GeV"]
+
+
+def plot_t1(inputs, r_tag, cut, x_rebin, runs, lumi, out_dir, sel="dijet", save_pdf=False):
+    """t - t0 vs x of the leading jet, 0-60% and all pT_lead, with the profile (<t - t0> per x bin, from the bin centres
+    of the t axis; error sigma / sqrt N) and the quartic fitted to it. Returns the fit."""
+    hep.style.use("ATLAS")
+    P = time_profile(inputs, r_tag, sel, x_rebin)
+    xe, te, tc, xc, h, n, mean, rms, ok = (P[k] for k in ("xe", "te", "tc", "xc", "h", "n", "mean", "rms", "ok"))
 
     fig, ax = plt.subplots(figsize=(10.5, 8.5))
     z = np.where(h > 0, h, np.nan)
@@ -345,23 +377,18 @@ def plot_t1(inputs, r_tag, cut, x_rebin, runs, lumi, out_dir, sel="dijet", save_
                 linewidth=1.4, label=r"Profile: $\langle t - t_{0} \rangle$", zorder=3)
     ax.errorbar(xc[ok], mean[ok], yerr=rms[ok], fmt="none", color="black", alpha=0.35, linewidth=4, capsize=0,
                 label=r"$\sigma$ (std. dev.)", zorder=2)
-    # quartic fitted to the profile points (weights 1 / error^2), drawn over the fitted x range
-    xf, yf, ef = xc[ok], mean[ok], rms[ok] / np.sqrt(n[ok])
-    c = np.polyfit(xf, yf, T1_FIT_DEG, w=1 / ef)
-    chi2, ndf = (((yf - np.polyval(c, xf)) / ef) ** 2).sum(), len(xf) - T1_FIT_DEG - 1
-    print(f"  T1 {r_tag} {sel} quartic: chi2/ndf = {chi2:.1f}/{ndf}, coefficients (highest first) {np.round(c, 4)}")
-    xs = np.linspace(xf[0], xf[-1], 300)
-    ax.plot(xs, np.polyval(c, xs), "-", color="#e41a1c", linewidth=2.2, zorder=4,
-            label=rf"Quartic fit: $\chi^2$/ndf = {chi2:.0f}/{ndf}")
+    # quartic fitted to the profile points, drawn over the fitted x range
+    fit = fit_profile(P)
+    print(f"  T1 {r_tag} {sel} quartic: chi2/ndf = {fit['chi2']:.1f}/{fit['ndf']}, x in [{fit['x_lo']:.3f}, {fit['x_hi']:.3f}], "
+          f"coefficients (highest first) {np.round(fit['c'], 4)}")
+    xs = np.linspace(fit["x_lo"], fit["x_hi"], 300)
+    ax.plot(xs, np.polyval(fit["c"], xs), "-", color="#e41a1c", linewidth=2.2, zorder=4,
+            label=rf"Quartic fit: $\chi^2$/ndf = {fit['chi2']:.0f}/{fit['ndf']}")
     N = h.sum()
     n_out = h[:, (tc < T1_YLIM[0]) | (tc > T1_YLIM[1])].sum()
     print(f"  T1 {r_tag} {sel} profile <t - t0> [ns]: " + ", ".join(f"x={x:.3f}: {m:.2f}" for x, m in zip(xc[ok], mean[ok])))
-    lines = [rf"$\bf{{{SEL_LABEL[sel]},\ 0\text{{–}}60\%}}$".replace(r"\text{–}", "-"),
-             rf"$\Delta\phi > 7\pi/8$, raw $p_{{T,\mathrm{{sub}}}} \geq {cut:g}$ GeV" if sel == "dijet"
-             else rf"Leading jet raw $p_{{T}} \geq {cut:g}$ GeV",
-             r"$|z| < 10$ cm & MB, Good Calo-Cent, Iterative No Flow",
-             rf"Jets: $|\eta| < {RADII[r_tag]['eta_max']:g}$, Energy > 0, raw $p_{{T}} \geq {JET_PT_MIN}$ GeV",
-             rf"$N$ = {fmt_n(N)} leading jets" + (f", {n_out:.0f} outside the y range" if n_out else "")]
+    lines = ([rf"$\bf{{{SEL_LABEL[sel]},\ 0\text{{–}}60\%}}$".replace(r"\text{–}", "-")] + sel_lines(r_tag, cut, sel) +
+             [             rf"$N$ = {fmt_n(N)} leading jets" + (f", {n_out:.0f} outside the y range" if n_out else "")])
     box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3)
     ax.text(0.97, 0.97, "\n".join(lines), transform=ax.transAxes, ha="right", va="top", fontsize=13, linespacing=1.3,
             bbox=box)
@@ -373,6 +400,56 @@ def plot_t1(inputs, r_tag, cut, x_rebin, runs, lumi, out_dir, sel="dijet", save_
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
     save_fig(fig, out_dir / f"T1_time_vs_x_{r_tag}_{sel}.png", save_pdf)
+    plt.close(fig)
+    return fit
+
+
+T2_COLORS = ("#1b9e77", "#d95f02", "#7570b3")             # 0-20, 20-40, 40-60 %
+T2_ERR_RANGE = 0.25                                        # [ns] profile points with larger errors do not set the lower panel range
+
+
+def plot_t2(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", save_pdf=False):
+    """The profiles <t - t0> of the three 20% classes (all pT_lead) with the 0-60% quartic of T1, and below them each
+    profile minus the fit in ns (f clamped to the fitted x range, as the correction will use it)."""
+    hep.style.use("ATLAS")
+    fig = plt.figure(figsize=(10.5, 9.5))
+    gs = fig.add_gridspec(2, 1, height_ratios=(3, 1), hspace=0.05)
+    ax, axr = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+    xs = np.linspace(fit["x_lo"], fit["x_hi"], 300)
+    dmax = 0.0                                                          # largest |profile - fit| + error, for the lower panel
+    ax.plot(xs, np.polyval(fit["c"], xs), "-", color="black", linewidth=2, zorder=2,
+            label=rf"Quartic fit, 0–60%: $\chi^2$/ndf = {fit['chi2']:.0f}/{fit['ndf']}")
+    for k, c in enumerate(CLASSES20):
+        P = time_profile(inputs, r_tag, sel, x_rebin, cents=cent_idx(c))
+        ok = P["ok"]
+        x, m, e = P["xc"][ok], P["mean"][ok], P["err"][ok]
+        f = fit_eval(fit, x)
+        chi2 = (((m - f) / e) ** 2).sum()
+        dx = (k - 1) * 0.008                                              # offset so the points do not overlap
+        ax.errorbar(x + dx, m, yerr=e, fmt="o", color=T2_COLORS[k], markersize=5, capsize=0, linewidth=1.3, zorder=3,
+                    label=rf"{cent_label(c)}: $N$ = {fmt_n(P['n'].sum())}, $\chi^2$/$n$ to fit = {chi2:.0f}/{ok.sum()}")
+        axr.errorbar(x + dx, m - f, yerr=e, fmt="o", color=T2_COLORS[k], markersize=4, capsize=0, linewidth=1.2)
+        well = e < T2_ERR_RANGE                                         # sparse points do not set the range
+        if well.any():
+            dmax = max(dmax, np.max(np.abs(m - f)[well] + e[well]))
+        print(f"  T2 {r_tag} {sel} {cent_label(c)}: profile - fit [ns] = " + ", ".join(f"x={a:.3f}: {b:+.3f}" for a, b in zip(x, m - f)))
+    t = ax.text(0.97, 0.96, "\n".join([rf"$\bf{{{SEL_LABEL[sel]}}}$"] + sel_lines(r_tag, cut, sel)), transform=ax.transAxes,
+                ha="right", va="top", fontsize=17, linespacing=1.3)
+    ax.legend(loc="lower left", fontsize=17, frameon=False)
+    ax.set_xlim(fit["x_lo"] - 0.1, fit["x_hi"] + 0.1)
+    lo = np.polyval(fit["c"], fit["x_hi"])
+    ax.set_ylim(lo - 1.6, 1.2)                                           # room for the legend below, the text above
+    ax.tick_params(labelbottom=False)
+    ax.set_ylabel(r"$\langle t - t_{0}^{\mathrm{MBD}} \rangle$ [ns]")
+    axr.axhline(0, color="gray", linestyle="--")
+    axr.set_xlim(*ax.get_xlim())
+    lim = np.ceil(1.15 * max(dmax, 0.2) * 10) / 10                      # symmetric, rounded up to 0.1 ns
+    axr.set_ylim(-lim, lim)
+    axr.set_xlabel(X_LABEL)
+    axr.set_ylabel("Profile − fit [ns]", fontsize=15)
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.09, top=0.95)
+    save_fig(fig, out_dir / f"T2_profiles_cent20_{r_tag}_{sel}.png", save_pdf)
     plt.close(fig)
 
 
@@ -617,6 +694,20 @@ def x_moment_rows(X, gi, glabels):
     return rows
 
 
+def write_timing_calib(fits, source, path):
+    """The Jet-Dijet timing correction (one 0-60% row per radius), in the columns of timing_correction_iternf.csv:
+    t_corr = t - t0 - f(clamp(x, x_lo, x_hi)), f = sum_i c_i x^i (coefficients lowest power first)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as f:
+        f.write(f"# t_corr = t - t0 - f(clamp(x, x_lo, x_hi)), f = sum_i c_i x^i; quartic fitted to the dijet leading-jet "
+                f"profile <t - t0> vs x (T1 of plot_jet_dijet_timing.py), 0-60%, all pT_lead; input {source}\n")
+        f.write("radius,cent_lo,cent_hi,x_lo,x_hi," + ",".join(f"c{i}" for i in range(T1_FIT_DEG + 1)) + "\n")
+        for r_tag, fit in sorted(fits.items()):
+            c = fit["c"][::-1]                                           # lowest power first
+            f.write(f"{r_tag},0,60,{fit['x_lo']:.6g},{fit['x_hi']:.6g}," + ",".join(f"{v:.10g}" for v in c) + "\n")
+    print(f"Saved: {path}")
+
+
 def write_csv(rows, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
@@ -650,7 +741,12 @@ def main():
     parser.add_argument("--cache-dir", type=Path, default=None, help="Input cache directory (default: <output-dir>/cache)")
     parser.add_argument("--no-cache", action="store_true", help="Neither read nor write the input cache")
     parser.add_argument("--refresh-cache", action="store_true", help="Reread the ROOT files and overwrite the cache")
+    parser.add_argument("--write-calib", type=Path, default=None,
+                        help="Write the T1 quartic of every radius as the Jet-Dijet timing correction file, e.g. "
+                             "files/calib/timing_dijet_fit_iternf.csv (needs both radii; default: not written)")
     args = parser.parse_args()
+    if args.write_calib is not None and set(args.radii) != set(RADII):
+        sys.exit("--write-calib needs both radii (the macro requires a row for each)")
     tick = StageTimer()
     if 60 % args.x_rebin:
         sys.exit("--x-rebin must divide 60")
@@ -685,6 +781,7 @@ def main():
     print(f"{len(runs)} runs; run groups: " + ", ".join(f"{l} ({(gi == g).sum()} runs)" for g, l in enumerate(glabels) if l))
 
     out = args.output_dir
+    fits = {}
     for r_tag in args.radii:
         cut = inputs["layout"]["lead_edges"][r_tag][0]
         st = {s: inputs["status"][(r_tag, s)] for s in SELS}
@@ -697,7 +794,9 @@ def main():
             for row in rows:
                 print(f"  leading jets >= {row['pt_lead_min']} GeV: inclusive {row['n_incl']}, dijet {row['n_dijet']}")
 
-        plot_t1(inputs, r_tag, cut, args.x_rebin, runs, lumi, out / "timing", save_pdf=args.save_pdf)
+        fit = plot_t1(inputs, r_tag, cut, args.x_rebin, runs, lumi, out / "timing", save_pdf=args.save_pdf)
+        fits[r_tag] = fit
+        plot_t2(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
@@ -705,6 +804,9 @@ def main():
         plot_x3(X, gi, glabels, runs, lumi, xd, args.save_pdf)
         write_csv(x_moment_rows(X, gi, glabels), xd / f"x_moments_{r_tag}.csv")
         tick(r_tag)
+
+    if args.write_calib is not None:
+        write_timing_calib(fits, args.file, args.write_calib)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,10 @@
 // jet time - MBD t0 vs OHCal energy fraction in a grid of 10 % centrality classes x raw pT_lead bins, for the dijet
 // sample and for the inclusive comparison (leading jet raw pT >= pt_sub_min, no dijet requirement), and the raw pT x
 // centrality of every jet, in dijet events and in all events.
+//
+// With a timing correction file (files/calib/timing_dijet_fit_iternf.csv, written by plot_jet_dijet_timing.py
+// --write-calib) it also fills, for the dijet sample only, the same grid of the corrected time
+// t - t0 - f(clamp(x, x_lo, x_hi)), f a quartic per radius and centrality range (h2LeadTimeOHCalFrac_*_corr).
 
 // -- utils
 #include "myUtils.C"
@@ -21,11 +25,13 @@
 #include <cmath>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -57,6 +63,7 @@ class JetDijet
   void run()
   {
     setup_calo_mbd_cut();
+    setup_timing_corr();
     setup_chain();
     init_hists();
     process_events();
@@ -69,6 +76,9 @@ class JetDijet
   // Dijet selection for the timing and jet pT hists: subleading raw pT >= pt_sub_min of the radius (the 0-20 % cut of
   // the purity scan, used in every centrality class)
   void set_pt_sub_min(double r02, double r03) { m_pt_sub_min = {r02, r03}; }
+  // Leading jet timing correction of the dijet sample: CSV with columns radius, cent_lo, cent_hi, x_lo, x_hi, c0 ... c4
+  // (f = sum_i c_i x^i, x clamped to [x_lo, x_hi]); "none" or empty: no correction
+  void set_timing_corr_file(std::string file) { m_timing_corr_file = std::move(file); }
 
  private:
   // Centrality: the selection of Jet-Anav3 (centrality <= 59.5) and 10 % classes [lo, hi), the last one closed
@@ -169,6 +179,9 @@ class JetDijet
     std::vector<double> time_lead_edges;  // pt_sub_min, then the m_time_lead_upper edges above it
     std::array<std::array<std::vector<TH2 *>, m_n_cent>, N_SEL> h2LeadTimeOHCalFrac{};
     std::array<TH1 *, N_SEL> hLeadTimingStatus{};
+    // Corrected leading jet timing of the dijet sample, [centrality class][pT_lead bin]: t - t0 - f(x) vs OHCal fraction;
+    // booked only with the timing correction
+    std::array<std::vector<TH2 *>, m_n_cent> h2LeadTimeCorrOHCalFrac{};
     // Raw pT x centrality of every jet passing the jet cuts, [selection]: in dijet events, in all selected events
     std::array<TH2 *, N_SEL> h2JetPtCent{};
     // Raw pT x centrality of the leading jet, [selection]: dijet sample, inclusive (pT_lead >= pt_sub_min)
@@ -196,6 +209,19 @@ class JetDijet
   double m_jet_pt_raw_min{7}; /*GeV*/
   double m_sigma_cut{3.5};
   std::array<double, m_n_radii> m_pt_sub_min{14.25, 21.5}; /*GeV, raw*/
+  std::string m_timing_corr_file{"none"};
+
+  // Timing correction f(x) per radius and 10 % centrality class (see set_timing_corr_file)
+  static constexpr size_t m_n_timing_coef = 5;
+  struct TimingShape
+  {
+    double x_lo{0};                                // NOLINT(misc-non-private-member-variables-in-classes)
+    double x_hi{0};                                // NOLINT(misc-non-private-member-variables-in-classes)
+    std::array<double, m_n_timing_coef> c{};       // NOLINT(misc-non-private-member-variables-in-classes)
+    bool set{false};                               // NOLINT(misc-non-private-member-variables-in-classes)
+  };
+  std::array<std::array<TimingShape, m_n_cent>, m_n_radii> m_timing_fc{};
+  bool m_has_timing_corr{false};
 
   // --- State ---
   EventData m_event_data;
@@ -210,6 +236,8 @@ class JetDijet
 
   // --- Helpers ---
   void setup_calo_mbd_cut();
+  void setup_timing_corr();
+  double timing_f(size_t ir, size_t ic, double x) const;
   void setup_chain();
   void init_hists();
   bool check_CaloMBD() const;
@@ -277,6 +305,143 @@ bool JetDijet::check_CaloMBD() const
   const double mean = m_profile_calo_mbd->GetBinContent(bin);
   const double sigma = m_profile_calo_mbd->GetBinError(bin);
   return sigma > 0.0 && std::abs(total_energy - mean) <= m_sigma_cut * sigma;
+}
+
+// The leading jet timing correction of the dijet sample (see set_timing_corr_file). Each row of the CSV sets f for the
+// 10 % classes inside its [cent_lo, cent_hi]; every radius and class needs one. Parsing as setup_timing_corr of Jet-Anav3
+void JetDijet::setup_timing_corr()
+{
+  if (m_timing_corr_file.empty() || m_timing_corr_file == "none")
+  {
+    return;
+  }
+  std::cout << "Processing... setup_timing_corr" << std::endl;
+  const std::string &path = m_timing_corr_file;
+
+  std::ifstream file(path);
+  if (!file)
+  {
+    throw std::runtime_error(std::format("Could not open timing correction file: {}", path));
+  }
+  // CSV rows without '#' comment lines; the first row is the header
+  std::vector<std::vector<std::string>> rows;
+  std::string line;
+  while (std::getline(file, line))
+  {
+    if (!line.empty() && line.back() == '\r')
+    {
+      line.pop_back();
+    }
+    if (line.empty() || line[0] == '#')
+    {
+      continue;
+    }
+    std::vector<std::string> fields;
+    std::stringstream ss(line);
+    std::string field;
+    while (std::getline(ss, field, ','))
+    {
+      fields.push_back(field);
+    }
+    rows.push_back(std::move(fields));
+  }
+  if (rows.size() < 2)
+  {
+    throw std::runtime_error(std::format("No rows in timing correction file: {}", path));
+  }
+
+  const auto &hdr = rows[0];
+  auto column = [&](const std::string &name)
+  {
+    auto it = std::ranges::find(hdr, name);
+    if (it == hdr.end())
+    {
+      throw std::runtime_error(std::format("No column {} in {}", name, path));
+    }
+    return static_cast<size_t>(it - hdr.begin());
+  };
+  auto number = [&](const std::string &str)
+  {
+    try
+    {
+      return std::stod(str);
+    }
+    catch (const std::exception &)
+    {
+      throw std::runtime_error(std::format("Bad number '{}' in {}", str, path));
+    }
+  };
+  const size_t i_r = column("radius");
+  const size_t i_clo = column("cent_lo");
+  const size_t i_chi = column("cent_hi");
+  const size_t i_xlo = column("x_lo");
+  const size_t i_xhi = column("x_hi");
+  std::array<size_t, m_n_timing_coef> i_c{};
+  for (size_t i = 0; i < m_n_timing_coef; ++i)
+  {
+    i_c[i] = column(std::format("c{}", i));
+  }
+
+  for (size_t row = 1; row < rows.size(); ++row)
+  {
+    const auto &f = rows[row];
+    if (f.size() != hdr.size())
+    {
+      throw std::runtime_error(std::format("Row {} of {} has {} fields, expected {}", row, path, f.size(), hdr.size()));
+    }
+    const auto r_it = std::ranges::find(m_radius_tag, f[i_r]);
+    if (r_it == m_radius_tag.end())
+    {
+      throw std::runtime_error(std::format("Unknown radius {} in {}", f[i_r], path));
+    }
+    const auto ir = static_cast<size_t>(r_it - m_radius_tag.begin());
+    const double clo = number(f[i_clo]);
+    const double chi = number(f[i_chi]);
+    TimingShape shape;
+    shape.x_lo = number(f[i_xlo]);
+    shape.x_hi = number(f[i_xhi]);
+    if (!(shape.x_lo < shape.x_hi))
+    {
+      throw std::runtime_error(std::format("Row {} of {}: x_lo {} must be below x_hi {}", row, path, shape.x_lo, shape.x_hi));
+    }
+    for (size_t i = 0; i < m_n_timing_coef; ++i)
+    {
+      shape.c[i] = number(f[i_c[i]]);
+    }
+    shape.set = true;
+    int n_cls = 0;
+    for (size_t ic = 0; ic < m_n_cent; ++ic)
+    {
+      if (m_cent_edges[ic] >= clo && m_cent_edges[ic + 1] <= chi)
+      {
+        if (m_timing_fc[ir][ic].set)
+        {
+          throw std::runtime_error(std::format("Two rows of {} cover {} {}-{}%", path, m_radius_tag[ir], m_cent_edges[ic], m_cent_edges[ic + 1]));
+        }
+        m_timing_fc[ir][ic] = shape;
+        ++n_cls;
+      }
+    }
+    if (n_cls == 0)
+    {
+      throw std::runtime_error(std::format("Row {} of {}: {}-{}% contains no 10% class", row, path, clo, chi));
+    }
+  }
+
+  for (size_t ir = 0; ir < m_n_radii; ++ir)
+  {
+    for (size_t ic = 0; ic < m_n_cent; ++ic)
+    {
+      const TimingShape &sh = m_timing_fc[ir][ic];
+      if (!sh.set)
+      {
+        throw std::runtime_error(std::format("No timing correction for {} {}-{}% in {}", m_radius_tag[ir], m_cent_edges[ic], m_cent_edges[ic + 1], path));
+      }
+      std::cout << std::format("Timing f {} {}-{}%: x in [{:.3f}, {:.3f}], c = {:.4f} {:.4f} {:.4f} {:.4f} {:.4f}\n", m_radius_tag[ir],
+                               m_cent_edges[ic], m_cent_edges[ic + 1], sh.x_lo, sh.x_hi, sh.c[0], sh.c[1], sh.c[2], sh.c[3], sh.c[4]);
+    }
+  }
+  m_has_timing_corr = true;
 }
 
 void JetDijet::setup_chain()
@@ -426,6 +591,27 @@ void JetDijet::init_hists()
         }
       }
 
+      if (is == SEL_DIJET && m_has_timing_corr)
+      {
+        for (size_t ic = 0; ic < m_n_cent; ++ic)
+        {
+          const auto clo = static_cast<int>(m_cent_edges[ic]);
+          const auto chi = static_cast<int>(m_cent_edges[ic + 1]);
+          auto &row = h.h2LeadTimeCorrOHCalFrac[ic];
+          row.clear();
+          for (size_t ib = 0; ib + 1 < h.time_lead_edges.size(); ++ib)
+          {
+            const double plo = h.time_lead_edges[ib];
+            const double phi = h.time_lead_edges[ib + 1];
+            row.push_back(book<TH2D>(
+                std::format("h2LeadTimeOHCalFrac_{}_cent_{}_{}_ptlead_{}_{}_corr", stag, clo, chi, edge_tag(plo), edge_tag(phi)),
+                std::format("Leading Jet, {} ({}, {}-{}%, {} #leq raw p_{{T,lead}} < {} GeV); OHCal Energy Fraction; Jet t - MBD t_{{0}} - f(x) [ns]",
+                            sel_label[is], jet_label, clo, chi, plo, phi).c_str(),
+                m_bins_frac, m_frac_low, m_frac_high, m_bins_dt, -m_dt_max, m_dt_max));
+          }
+        }
+      }
+
       h.hLeadTimingStatus[is] = book<TH1D>(std::format("hLeadTimingStatus_{}", stag),
                                            std::format("Leading Jet Timing, {} ({}); ; Leading Jets", sel_label[is], jet_label).c_str(),
                                            5, 0, 5);
@@ -493,7 +679,25 @@ void JetDijet::fill_lead_timing(size_t ir, Sel sel, size_t ic, size_t il)
     return;
   }
   status->Fill(1.5);
-  h.h2LeadTimeOHCalFrac[sel][ic][ib]->Fill(frac, t - m_event_data.t0);
+  const double dt = t - m_event_data.t0;
+  h.h2LeadTimeOHCalFrac[sel][ic][ib]->Fill(frac, dt);
+  if (sel == SEL_DIJET && m_has_timing_corr)
+  {
+    h.h2LeadTimeCorrOHCalFrac[ic][ib]->Fill(frac, dt - timing_f(ir, ic, frac));
+  }
+}
+
+// The timing correction f(x) of radius ir and 10 % class ic, with x clamped to the fitted range
+double JetDijet::timing_f(size_t ir, size_t ic, double x) const
+{
+  const TimingShape &s = m_timing_fc[ir][ic];
+  const double xc = std::clamp(x, s.x_lo, s.x_hi);
+  double f = 0;
+  for (size_t i = m_n_timing_coef; i-- > 0;)  // Horner
+  {
+    f = f * xc + s.c[i];
+  }
+  return f;
 }
 
 int JetDijet::cent_class(double cent)
@@ -678,9 +882,9 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 9)
+  if (argc < 3 || argc > 10)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [jet_pt_raw_min] [sigma_cut] [pt_sub_min_r02] [pt_sub_min_r03]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [jet_pt_raw_min] [sigma_cut] [pt_sub_min_r02] [pt_sub_min_r03] [timing_corr_file]" << std::endl;
     return 1;
   }
 
@@ -693,6 +897,7 @@ int main(int argc, const char *const argv[])
   const double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   const double pt_sub_min_r02 = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 14.25;
   const double pt_sub_min_r03 = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 21.5;
+  const std::string timing_corr_file = (argc >= ctr + 1) ? argv[ctr++] : "none";
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
@@ -703,6 +908,7 @@ int main(int argc, const char *const argv[])
   std::cout << std::format("Jet Raw pT Min: {} [GeV]\n", jet_pt_raw_min);
   std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   std::cout << std::format("Dijet pT_sub Min: R = 0.2: {} GeV, R = 0.3: {} GeV (raw; delta phi > 7pi/8)\n", pt_sub_min_r02, pt_sub_min_r03);
+  std::cout << std::format("Timing Correction File (dijet): {}\n", timing_corr_file);
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -711,6 +917,7 @@ int main(int argc, const char *const argv[])
     analysis.set_jet_pt_raw_min(jet_pt_raw_min);
     analysis.set_sigma_cut(sigma_cut);
     analysis.set_pt_sub_min(pt_sub_min_r02, pt_sub_min_r03);
+    analysis.set_timing_corr_file(timing_corr_file);
     analysis.run();
   }
   catch (const std::exception &e)

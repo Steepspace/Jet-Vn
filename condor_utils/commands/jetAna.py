@@ -39,6 +39,8 @@ def run_jet_jobs(args, version):
                 manager.add_file_to_check(timing_file)
     elif version == "jetDijet":
         manager.add_file_to_check(args.calo_mbd_list)
+        if args.timing_corr_file:
+            manager.add_file_to_check(args.timing_corr_file)
     elif version == "jetJES":
         # p+p MC trees (Fun4All_PP_JES) have no Calo-MBD selection
         if not args.pp:
@@ -95,6 +97,7 @@ def run_jet_jobs(args, version):
         init_log['Jet Raw pT Min'] = f"{args.jet_pt_raw_min} GeV"
         init_log['Sigma Cut'] = args.sigma_cut
         init_log['Dijet pT_sub Min'] = f"R = 0.2: {args.pt_sub_min_r02} GeV, R = 0.3: {args.pt_sub_min_r03} GeV (raw)"
+        init_log['Timing Correction File (dijet)'] = Path(args.timing_corr_file).resolve() if args.timing_corr_file else "Not Provided (no corrected timing hists)"
     elif version == "jetJES":
         # the jet pT is not cut on, the response is filled for every matched truth jet
         del init_log['Jet pT Min']
@@ -218,7 +221,9 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow} {timing_files}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetDijet":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output {args.jet_pt_raw_min} {args.sigma_cut} {args.pt_sub_min_r02} {args.pt_sub_min_r03}"
+        # the timing correction file is read in place by the jobs: pass its absolute path
+        timing_corr = str(Path(args.timing_corr_file).resolve()) if args.timing_corr_file else "none"
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output {args.jet_pt_raw_min} {args.sigma_cut} {args.pt_sub_min_r02} {args.pt_sub_min_r03} {timing_corr}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetJES":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {1 if args.pp else 0}"
@@ -300,6 +305,7 @@ def setup_jetAna_subparsers(subparsers):
     jetDijet.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
     jetDijet.add_argument('--pt-sub-min-r02', type=float, default=14.25, help='Dijet selection of the timing and jet pT hists, R = 0.2: raw pT_sub >= this (the 0-20%% cut of the purity scan). Default: 14.25 [GeV]')
     jetDijet.add_argument('--pt-sub-min-r03', type=float, default=21.5, help='Dijet selection of the timing and jet pT hists, R = 0.3: raw pT_sub >= this (the 0-20%% cut of the purity scan). Default: 21.5 [GeV]')
+    jetDijet.add_argument('--timing-corr-file', type=str, default=None, help='Leading jet timing correction of the dijet sample: f(x) per radius and centrality range (files/calib/timing_dijet_fit_iternf.csv, from plot_jet_dijet_timing.py --write-calib). Fills the h2LeadTimeOHCalFrac_<r>_dijet_*_corr hists. (Optional)')
     jetDijet.set_defaults(func=jetDijet_jobs)
 
     jetJES = subparsers.add_parser('jetJES', help='jetJES condor jobs (data+MC overlay or p+p MC JES, all pT-hat samples of the input list in one submission).')

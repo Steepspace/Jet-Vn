@@ -1,0 +1,4 @@
+# t_corr = t - t0 - f(clamp(x, x_lo, x_hi)), f = sum_i c_i x^i; quartic fitted to the dijet leading-jet profile <t - t0> vs x (T1 of plot_jet_dijet_timing.py), 0-60%, all pT_lead; input /sphenix/user/anarde/sEPD-Study/jetDijet/11-11-26/test.list
+radius,cent_lo,cent_hi,x_lo,x_hi,c0,c1,c2,c3,c4
+r02,0,60,-0.125,1.075,-0.773841087,-1.432885689,-10.06584247,11.44097398,-5.244846202
+r03,0,60,-0.075,0.925,-0.770365328,-0.676497625,-10.045108,10.50628197,-4.968569382

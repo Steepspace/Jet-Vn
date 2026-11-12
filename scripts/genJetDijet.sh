@@ -24,6 +24,8 @@ jet_pt_raw_min=${5:-7}
 sigma_cut=${6:-3.5}
 pt_sub_min_r02=${7:-14.25}
 pt_sub_min_r03=${8:-21.5}
+# dijet timing correction CSV, read in place (absolute path from condor_utils), or "none"
+timing_corr_file=${9:-none}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -80,7 +82,7 @@ printenv
 mkdir -p "$run"
 
 echo "Starting Jet-Dijet binary at $(date) on $(hostname)"
-$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$run" "$jet_pt_raw_min" "$sigma_cut" "$pt_sub_min_r02" "$pt_sub_min_r03"
+$jetAna_bin "$input_file" "$input_calo_mbd_file" 0 "$run" "$jet_pt_raw_min" "$sigma_cut" "$pt_sub_min_r02" "$pt_sub_min_r03" "$timing_corr_file"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then
