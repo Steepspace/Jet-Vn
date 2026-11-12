@@ -19,7 +19,8 @@ This script makes:
    unit-area shapes, all pT_lead:
    - X1_cent20_<r>: inclusive (left) and dijet (right), the three 20% classes, ratio to 0-60%;
    - X2_runs_<r>: inclusive (left) and dijet (right), 0-60%, the run groups (light: early, dark: late), ratio to all runs;
-   - X3_runs_cent20_<r>: inclusive only, one panel per 20% class, the run groups as in X2, ratio to all runs of the class;
+   - X3_runs_cent20_<r>_<incl|dijet>: one selection, one panel per 20% class, the run groups as in X2, ratio to all runs
+     of the class;
    - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, 10% / 20% class or 0-60%,
      pT_lead bin or all).
 3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
@@ -728,9 +729,9 @@ def plot_x2(X, gi, glabels, runs, lumi, out_dir, save_pdf=False):
     plt.close(fig)
 
 
-def plot_x3(X, gi, glabels, runs, lumi, out_dir, save_pdf=False):
-    """1 x 3: inclusive, one panel per 20% class, all pT_lead, one curve per run group (as X2); ratio to all runs of the
-    class."""
+def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, save_pdf=False):
+    """1 x 3: one selection, one panel per 20% class, all pT_lead, one curve per run group (as X2); ratio to all runs of
+    the class."""
     hep.style.use("ATLAS")
     fig = plt.figure(figsize=(25, 9.5))
     gs = fig.add_gridspec(2, 3, height_ratios=(3, 1), hspace=0.05, wspace=0.16)
@@ -738,15 +739,15 @@ def plot_x3(X, gi, glabels, runs, lumi, out_dir, save_pdf=False):
     for col, c in enumerate(CLASSES20):
         ax, axr = fig.add_subplot(gs[0, col]), fig.add_subplot(gs[1, col])
         # selection on the first panel, event and jet cuts on the second, the class on each
-        left = {0: sel_text["incl"][1:], 1: common}.get(col)
-        draw_group_panel(fig, ax, axr, X, "incl", gi, glabels, [rf"Inclusive,\ {c[0]}–{c[1]}\%"],
+        left = {0: sel_text[sel][1:], 1: common}.get(col)
+        draw_group_panel(fig, ax, axr, X, sel, gi, glabels, [rf"{SEL_LABEL[sel]},\ {c[0]}–{c[1]}\%"],
                          cents=cent_idx(c), left_lines=left, legend_fs=11)
         if col == 0:
             ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
         if col == 2:
             header(ax, runs, X.r_tag, lumi)
     fig.subplots_adjust(left=0.05, right=0.975, bottom=0.09, top=0.95)
-    save_fig(fig, out_dir / f"X3_runs_cent20_{X.r_tag}.png", save_pdf)
+    save_fig(fig, out_dir / f"X3_runs_cent20_{X.r_tag}_{sel}.png", save_pdf)
     plt.close(fig)
 
 
@@ -873,7 +874,8 @@ def main():
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
         plot_x2(X, gi, glabels, runs, lumi, xd, args.save_pdf)
-        plot_x3(X, gi, glabels, runs, lumi, xd, args.save_pdf)
+        for sel in ("incl", "dijet"):
+            plot_x3(X, sel, gi, glabels, runs, lumi, xd, args.save_pdf)
         write_csv(x_moment_rows(X, gi, glabels), xd / f"x_moments_{r_tag}.csv")
         tick(r_tag)
 
