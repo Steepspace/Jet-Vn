@@ -25,6 +25,8 @@ This script makes:
 3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
    profile <t - t0> per x bin, its standard deviation and a quartic fitted to the profile;
    timing/T2_profiles_cent20_<r>_dijet: the profiles of the three 20% classes with the T1 fit, and profile - fit [ns].
+   timing/T3_closure_<r>_dijet: uncorrected (left) and corrected (right) t vs x of the dijet sample, with their profiles
+   (the _corr hists of Jet-Dijet.C with a timing correction file, production 11-12-26 on).
    With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
    (files/calib/timing_dijet_fit_iternf.csv).
 """
@@ -53,7 +55,7 @@ from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header
 from plot_jet_dijet_control import RADII, CENT10, EVENT_INFO, JET_PT_MIN, cent_label, one_line
 
-CACHE_VERSION = 3                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin
+CACHE_VERSION = 4                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on)
 
 SELS = ("dijet", "incl")                                   # timing hists: dijet sample, inclusive comparison
 SEL_LABEL = {"dijet": "Dijet", "incl": "Inclusive"}
@@ -105,7 +107,7 @@ def load_run(task):
     """Per run: the x projection (all t, flow included) of every timing hist as (cent, pT_lead, x) per (radius,
     selection), the x under/overflow per (radius, selection), the jet pT x centrality hists and the status hists."""
     run, path, layout = task
-    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}}
+    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}, "tx_corr": {}}
     try:
         with uproot.open(path) as f:
             for r in RADII:
@@ -115,16 +117,25 @@ def load_run(task):
                     fl = 0.0
                     tx = np.zeros((len(CENT10), len(le) - 1, len(layout["x_edges"]) - 1, len(layout["t_edges"]) - 1),
                                   dtype=np.float32)
+                    txc = np.zeros_like(tx)
+                    has_corr = True
                     for ic, c in enumerate(CENT10):
                         for il in range(len(le) - 1):
                             v = f[grid_name(r, sel, c, le[il], le[il + 1])].values(flow=True)   # (x+2, t+2)
                             px = v.sum(axis=1)
                             g[ic, il] = px[1:-1]
                             tx[ic, il] = v[1:-1, 1:-1]
+                            cname = grid_name(r, sel, c, le[il], le[il + 1]) + "_corr"      # dijet only, from 11-12-26 on
+                            if has_corr and cname in f:
+                                txc[ic, il] = f[cname].values(flow=True)[1:-1, 1:-1]
+                            else:
+                                has_corr = False
                             fl += px[0] + px[-1]
                     d["grid"][(r, sel)] = g
                     d["xflow"][(r, sel)] = fl
                     d["tx"][(r, sel)] = tx
+                    if has_corr:
+                        d["tx_corr"][(r, sel)] = txc
                     d["status"][(r, sel)] = f[f"hLeadTimingStatus_{r}_{sel}"].values().astype(np.float64)
                     lname = f"h2LeadPtCent_{r}_{sel}"                       # from production 11-11-26 on
                     if lname in f:
@@ -150,8 +161,9 @@ def cache_key(tasks, lumi_paths):
 
 def load_inputs(tasks, lumi_files, n_jobs):
     layout = read_layout(tasks[0][1])
-    runs, grids, xflow, jetpt, status, leadpt, tx = [], {}, {}, {}, {}, {}, {}
+    runs, grids, xflow, jetpt, status, leadpt, tx, tx_corr = [], {}, {}, {}, {}, {}, {}, {}
     ex = concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
+    n_corr = 0                                                          # runs with the corrected dijet timing hists
     jobs = [(r, p, layout) for r, p in tasks]
     for run, d in (ex.map(load_run, jobs, chunksize=8) if ex else map(load_run, jobs)):
         if d is None:
@@ -169,6 +181,9 @@ def load_inputs(tasks, lumi_files, n_jobs):
             leadpt[k] = leadpt.get(k, 0) + v
         for k, v in d["tx"].items():                               # summed over runs: (cent, pT_lead, x, t)
             tx[k] = tx.get(k, 0) + v.astype(np.float64)
+        for k, v in d["tx_corr"].items():
+            tx_corr[k] = tx_corr.get(k, 0) + v.astype(np.float64)
+        n_corr = n_corr + bool(d["tx_corr"])
     if ex:
         ex.shutdown()
     order = np.argsort(runs)
@@ -183,7 +198,7 @@ def load_inputs(tasks, lumi_files, n_jobs):
         lumis = [load_luminosity(lumi_files[r]) for r in runs]
         lumi = None if any(l is None for l in lumis) else float(sum(lumis))
     return {"runs": runs, "grids": grids, "xflow": xflow, "jetpt": jetpt, "status": status, "leadpt": leadpt,
-            "tx": tx, "layout": layout, "lumi": lumi}
+            "tx": tx, "tx_corr": tx_corr if n_corr == len(runs) else {}, "layout": layout, "lumi": lumi}
 
 
 # Helpers
@@ -324,13 +339,13 @@ T1_YLIM = (-12, 12)                                        # [ns]; jets outside 
 T1_FIT_DEG = 4                                             # quartic fitted to the profile (pol2 leaves an S-shaped residual)
 
 
-def time_profile(inputs, r_tag, sel, x_rebin, cents=None):
+def time_profile(inputs, r_tag, sel, x_rebin, cents=None, key="tx"):
     """t - t0 vs x summed over runs, pT_lead and the 10% classes cents (all if None), with x rebinned, and its profile:
     <t - t0> per x bin from the bin centres of the t axis, the standard deviation, and the mask of bins with N >= PROFILE_MIN_N."""
     xe = inputs["layout"]["x_edges"][::x_rebin]
     te = inputs["layout"]["t_edges"]
     tc = 0.5 * (te[1:] + te[:-1])
-    g = inputs["tx"][(r_tag, sel)]                                       # (cent, pT_lead, x, t), fine x bins
+    g = inputs[key][(r_tag, sel)]                                        # (cent, pT_lead, x, t), fine x bins
     h = (g if cents is None else g[list(cents)]).sum(axis=(0, 1))
     h = h.reshape(len(xe) - 1, x_rebin, len(tc)).sum(axis=1)
     n = h.sum(axis=1)
@@ -450,6 +465,62 @@ def plot_t2(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", 
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.09, top=0.95)
     save_fig(fig, out_dir / f"T2_profiles_cent20_{r_tag}_{sel}.png", save_pdf)
+    plt.close(fig)
+
+
+def plot_t3(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", save_pdf=False):
+    """Closure of the timing correction, 1 x 2: t - t0 vs x (left, with the quartic of T1) and the corrected
+    t - t0 - f(x) (right, with 0), dijet, 0-60%, all pT_lead, each with its profile and standard deviation; one colour
+    scale for both."""
+    if (r_tag, sel) not in inputs.get("tx_corr", {}):
+        print(f"Warning: no corrected {sel} timing hists of {r_tag} in every run (needs a production with a timing correction "
+              "file, 11-12-26 on), skipping T3")
+        return
+    hep.style.use("ATLAS")
+    P = {k: time_profile(inputs, r_tag, sel, x_rebin, key=k) for k in ("tx", "tx_corr")}
+    vmax = max(np.nanmax(P[k]["h"]) for k in P)
+    fig = plt.figure(figsize=(19, 8.5))
+    # columns: left panel, a spacer for the right panel's y title, right panel, colour bar (close to the right panel)
+    gs = fig.add_gridspec(1, 4, width_ratios=(1, 0.17, 1, 0.035), wspace=0.025)
+    axs = [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 2])]
+    cax = fig.add_subplot(gs[0, 3])
+    box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3)
+    for ax, k in zip(axs, ("tx", "tx_corr")):
+        Q = P[k]
+        z = np.where(Q["h"] > 0, Q["h"], np.nan)
+        pcm = ax.pcolormesh(Q["xe"], Q["te"], z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=vmax), rasterized=True)
+        ok = Q["ok"]
+        ax.errorbar(Q["xc"][ok], Q["mean"][ok], yerr=Q["rms"][ok], fmt="none", color="black", alpha=0.35, linewidth=4,
+                    capsize=0, label=r"$\sigma$ (std. dev.)", zorder=2)
+        ax.errorbar(Q["xc"][ok], Q["mean"][ok], yerr=Q["err"][ok], fmt="o", color="black", markersize=5, capsize=0,
+                    linewidth=1.4, label="Profile", zorder=3)
+        if k == "tx":
+            xs = np.linspace(fit["x_lo"], fit["x_hi"], 300)
+            ax.plot(xs, np.polyval(fit["c"], xs), "-", color="#e41a1c", linewidth=2.2, zorder=4, label=r"Quartic fit $f(x)$")
+            title = r"$\bf{Uncorrected}$: $t - t_{0}$"
+        else:
+            ax.axhline(0, color="#e41a1c", linewidth=2.2, zorder=4, label="0")
+            title = r"$\bf{Corrected}$: $t - t_{0} - f(x)$"
+            print(f"  T3 {r_tag} {sel} corrected profile [ns]: " + ", ".join(
+                f"x={a:.3f}: {b:+.3f}" for a, b in zip(Q["xc"][ok], Q["mean"][ok])))
+        N, n_out = Q["h"].sum(), Q["h"][:, (Q["tc"] < T1_YLIM[0]) | (Q["tc"] > T1_YLIM[1])].sum()
+        lines = [title, rf"$N$ = {fmt_n(N)} leading jets" + (f", {n_out:.0f} outside the y range" if n_out else "")]
+        ax.text(0.97, 0.97, "\n".join(lines), transform=ax.transAxes, ha="right", va="top", fontsize=16, linespacing=1.3,
+                bbox=box)
+        ax.legend(loc="lower left", fontsize=15, frameon=True, framealpha=0.8, facecolor="0.75", edgecolor="none")
+        ax.set_xlim(Q["xe"][0], Q["xe"][-1])
+        ax.set_ylim(*T1_YLIM)
+        ax.set_xlabel(X_LABEL)
+    axs[0].set_ylabel(T_LABEL)
+    axs[1].set_ylabel(r"Leading jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    # the selection, bottom right of the corrected panel (empty: the corrected band is around 0)
+    axs[1].text(0.97, 0.03, "\n".join([rf"$\bf{{{SEL_LABEL[sel]},\ 0\text{{–}}60\%}}$".replace(r"\text{–}", "-")]
+                                      + sel_lines(r_tag, cut, sel)), transform=axs[1].transAxes, ha="right", va="bottom",
+                fontsize=13, linespacing=1.3, color="0.2")
+    fig.colorbar(pcm, cax=cax).set_label("Leading jets")
+    header(axs[1], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.06, right=0.94, bottom=0.11, top=0.93)
+    save_fig(fig, out_dir / f"T3_closure_{r_tag}_{sel}.png", save_pdf)
     plt.close(fig)
 
 
@@ -723,7 +794,7 @@ def write_csv(rows, path):
 def main():
     parser = argparse.ArgumentParser(description="Leading-jet checks in the clean dijet sample: jet pT tail and OHCal "
                                                  "fraction (Jet-Dijet output with the dijet timing hists).")
-    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-11-26/test.list"),
+    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
                         help="List of Event QA ROOT files named <run>.root with hLuminosity (default: %(default)s)")
@@ -797,6 +868,7 @@ def main():
         fit = plot_t1(inputs, r_tag, cut, args.x_rebin, runs, lumi, out / "timing", save_pdf=args.save_pdf)
         fits[r_tag] = fit
         plot_t2(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
+        plot_t3(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
