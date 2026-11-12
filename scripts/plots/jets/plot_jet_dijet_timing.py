@@ -5,8 +5,8 @@ dijet timing hists (first in 11-10-26) and the leading-jet pT per selection (fro
 Jet-Dijet.C applies one pT_sub cut per radius (the 0-20% cut of the purity scan, R = 0.2: 14.25 GeV, R = 0.3: 21.5 GeV,
 raw, delta phi > 7pi/8) to every centrality class and fills, per radius:
 - h2LeadTimeOHCalFrac_<r>_<dijet|incl>_cent_<c>_ptlead_<a>_<b>: leading jet t - MBD t0 vs OHCal fraction x, for the
-  dijet sample and for the inclusive comparison (leading jet raw pT >= the cut, no dijet requirement), on a grid of 10%
-  centrality classes x raw pT_lead bins;
+  dijet sample and for the inclusive comparison (leading jet raw pT >= the cut, no dijet requirement), on a grid of
+  centrality classes (10% up to production 11-12-26, 20% after) x raw pT_lead bins;
 - h2JetPtCent_<r>_<dijet|all>: raw pT x centrality of every jet passing the jet cuts, in dijet events and in all events.
 
 This script makes:
@@ -21,7 +21,7 @@ This script makes:
    - X2_runs_<r>: inclusive (left) and dijet (right), 0-60%, the run groups (light: early, dark: late), ratio to all runs;
    - X3_runs_cent20_<r>_<incl|dijet>: one selection, one panel per 20% class, the run groups as in X2, ratio to all runs
      of the class;
-   - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, 10% / 20% class or 0-60%,
+   - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, grid class / 20% class or 0-60%,
      pT_lead bin or all).
 3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
    profile <t - t0> per x bin, its standard deviation and a quartic fitted to the profile;
@@ -54,9 +54,9 @@ import mplhep as hep
 from plot_jet_bkgsub_compare import save_fig
 from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header
-from plot_jet_dijet_control import RADII, CENT10, EVENT_INFO, JET_PT_MIN, cent_label, one_line
+from plot_jet_dijet_control import RADII, EVENT_INFO, JET_PT_MIN, cent_label, one_line
 
-CACHE_VERSION = 4                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on)
+CACHE_VERSION = 5                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names
 
 SELS = ("dijet", "incl")                                   # timing hists: dijet sample, inclusive comparison
 SEL_LABEL = {"dijet": "Dijet", "incl": "Inclusive"}
@@ -80,18 +80,22 @@ def edge_val(tag):
 # ---------------------------------------------------------------------------------------------------------------------
 
 def read_layout(path):
-    """Per radius: the pT_lead bin edges of the timing grid (from the hist names), and the x and jet pT axes."""
+    """Per radius: the pT_lead bin edges of the timing grid; the centrality classes of the grid (10% up to production
+    11-12-26, 20% after); both from the hist names; and the x and jet pT axes."""
     lead = {r: set() for r in RADII}
+    classes = set()
     with uproot.open(path) as f:
         names = f.keys(cycle=False)
         for k in names:
             m = NAME_RE.match(k)
             if m:
                 lead[m.group(1)].update((edge_val(m.group(5)), edge_val(m.group(6))))
+                classes.add((int(m.group(3)), int(m.group(4))))
         first = next(k for k in names if NAME_RE.match(k))
         h = f[first]
         hp = f["h2JetPtCent_r02_all"]
         layout = {"lead_edges": {r: sorted(v) for r, v in lead.items()},
+                  "cent_classes": sorted(classes),
                   "x_edges": h.axis(0).edges(),
                   "t_edges": h.axis(1).edges(),
                   "pt_edges": hp.axis(0).edges(),
@@ -114,13 +118,14 @@ def load_run(task):
             for r in RADII:
                 le = layout["lead_edges"][r]
                 for sel in SELS:
-                    g = np.zeros((len(CENT10), len(le) - 1, len(layout["x_edges"]) - 1), dtype=np.float32)
+                    classes = layout["cent_classes"]
+                    g = np.zeros((len(classes), len(le) - 1, len(layout["x_edges"]) - 1), dtype=np.float32)
                     fl = 0.0
-                    tx = np.zeros((len(CENT10), len(le) - 1, len(layout["x_edges"]) - 1, len(layout["t_edges"]) - 1),
+                    tx = np.zeros((len(classes), len(le) - 1, len(layout["x_edges"]) - 1, len(layout["t_edges"]) - 1),
                                   dtype=np.float32)
                     txc = np.zeros_like(tx)
                     has_corr = True
-                    for ic, c in enumerate(CENT10):
+                    for ic, c in enumerate(classes):
                         for il in range(len(le) - 1):
                             v = f[grid_name(r, sel, c, le[il], le[il + 1])].values(flow=True)   # (x+2, t+2)
                             px = v.sum(axis=1)
@@ -341,7 +346,7 @@ T1_FIT_DEG = 4                                             # quartic fitted to t
 
 
 def time_profile(inputs, r_tag, sel, x_rebin, cents=None, key="tx"):
-    """t - t0 vs x summed over runs, pT_lead and the 10% classes cents (all if None), with x rebinned, and its profile:
+    """t - t0 vs x summed over runs, pT_lead and the grid classes cents (all if None), with x rebinned, and its profile:
     <t - t0> per x bin from the bin centres of the t axis, the standard deviation, and the mask of bins with N >= PROFILE_MIN_N."""
     xe = inputs["layout"]["x_edges"][::x_rebin]
     te = inputs["layout"]["t_edges"]
@@ -436,7 +441,7 @@ def plot_t2(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", 
     ax.plot(xs, np.polyval(fit["c"], xs), "-", color="black", linewidth=2, zorder=2,
             label=rf"Quartic fit, 0–60%: $\chi^2$/ndf = {fit['chi2']:.0f}/{fit['ndf']}")
     for k, c in enumerate(CLASSES20):
-        P = time_profile(inputs, r_tag, sel, x_rebin, cents=cent_idx(c))
+        P = time_profile(inputs, r_tag, sel, x_rebin, cents=cent_idx(c, inputs["layout"]["cent_classes"]))
         ok = P["ok"]
         x, m, e = P["xc"][ok], P["mean"][ok], P["err"][ok]
         f = fit_eval(fit, x)
@@ -551,19 +556,26 @@ class XGrid:
             self.lead_bins.append((le[cur[0]], le[cur[-1] + 1]))
             self.lead_idx.append(cur)
         self.cut = le[0]
+        self.classes = inputs["layout"]["cent_classes"]                 # centrality classes of the grid
         self.g = {sel: rebin(inputs["grids"][(r_tag, sel)].astype(np.float64), x_rebin) for sel in SELS}   # (run, cent, lead, x)
 
     def get(self, sel, runs_mask=None, cents=None, leads=None):
-        """Summed x counts over the runs in runs_mask, the 10% classes in cents and the merged pT_lead bins in leads."""
+        """Summed x counts over the runs in runs_mask, the grid classes in cents and the merged pT_lead bins in leads."""
         g = self.g[sel] if runs_mask is None else self.g[sel][runs_mask]
         g = g.sum(axis=0)                                                   # (cent, lead, x)
-        ci = range(len(CENT10)) if cents is None else cents
+        ci = range(len(self.classes)) if cents is None else cents
         li = [i for k in (range(len(self.lead_bins)) if leads is None else leads) for i in self.lead_idx[k]]
         return g[np.ix_(list(ci), li)].sum(axis=(0, 1))
 
 
-def cent_idx(c):
-    return [i for i, (lo, hi) in enumerate(CENT10) if lo >= c[0] and hi <= c[1]]
+def cent_idx(c, classes):
+    """Indices of the grid classes inside the class c; they must cover it exactly (a 10% class cannot be taken from a
+    20% grid)."""
+    idx = [i for i, (lo, hi) in enumerate(classes) if lo >= c[0] and hi <= c[1]]
+    covered = sum(classes[i][1] - classes[i][0] for i in idx)
+    if covered != c[1] - c[0]:
+        raise ValueError(f"centrality class {c[0]}-{c[1]}% is not a union of the grid classes {classes}")
+    return idx
 
 
 X1_COLORS = ("#000000", "#e41a1c", "#377eb8")             # 0-20, 20-40, 40-60 %: black, red, blue
@@ -598,7 +610,7 @@ def plot_x1(X, runs, lumi, out_dir, save_pdf=False):
         ymax = 0
         dens = []
         for k, c in enumerate(CLASSES20):
-            n = X.get(sel, cents=cent_idx(c))
+            n = X.get(sel, cents=cent_idx(c, X.classes))
             d, ed = density(n, X.xe)
             N, m, em, _ = moments(n, X.xc)
             ymax = max(ymax, np.nanmax(d))
@@ -741,7 +753,7 @@ def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, save_pdf=False):
         # selection on the first panel, event and jet cuts on the second, the class on each
         left = {0: sel_text[sel][1:], 1: common}.get(col)
         draw_group_panel(fig, ax, axr, X, sel, gi, glabels, [rf"{SEL_LABEL[sel]},\ {c[0]}–{c[1]}\%"],
-                         cents=cent_idx(c), left_lines=left, legend_fs=11)
+                         cents=cent_idx(c, X.classes), left_lines=left, legend_fs=11)
         if col == 0:
             ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
         if col == 2:
@@ -756,9 +768,9 @@ def x_moment_rows(X, gi, glabels):
     groups = [("all", None)] + [(glabels[g], gi == g) for g in range(len(glabels)) if glabels[g]]
     for sel in SELS:
         for gname, mask in groups:
-            for c in CENT10 + CLASSES20 + ((0, 60),):
+            for c in dict.fromkeys(tuple(X.classes) + CLASSES20 + ((0, 60),)):   # grid classes, 20%, 0-60%, no repeats
                 for j, (lo, hi) in [(-1, (X.lead_bins[0][0], X.lead_bins[-1][1]))] + list(enumerate(X.lead_bins)):
-                    n = X.get(sel, runs_mask=mask, cents=cent_idx(c), leads=None if j < 0 else [j])
+                    n = X.get(sel, runs_mask=mask, cents=cent_idx(c, X.classes), leads=None if j < 0 else [j])
                     N, m, em, rms = moments(n, X.xc)
                     rows.append({"radius": X.r_tag, "selection": sel, "run_group": gname, "cent_lo": c[0], "cent_hi": c[1],
                                  "ptlead_lo": f"{lo:g}", "ptlead_hi": f"{hi:g}", "n": f"{N:.0f}", "mean_x": f"{m:.5f}",
