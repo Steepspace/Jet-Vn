@@ -145,19 +145,23 @@ class JetDijet
   static constexpr int m_bins_xj = 20;
   static constexpr double m_dphi_b2b = 7 * std::numbers::pi / 8;  // back-to-back cut of the dijet selection (the plot script uses the same)
 
-  // Leading jet timing hists, binning as h2LeadJetTimeOHCalFrac of Jet-Anav3: OHCal fraction 60 bins over [-0.25, 1.25],
-  // jet t - MBD t0 100 bins over +-25 ns
+  // Leading jet timing hists: OHCal fraction 60 bins over [-0.25, 1.25] (as h2LeadJetTimeOHCalFrac of Jet-Anav3); jet
+  // t - MBD t0 over +-25 ns in variable bins (see time_edges)
   static constexpr int m_bins_frac = 60;
   static constexpr double m_frac_low = -0.25;
   static constexpr double m_frac_high = 1.25;
-  static constexpr int m_bins_dt = 100;
   static constexpr double m_dt_max = 25; /*ns*/
+  // Time axes of every timing hist (from 2026-11-12; 0.5 ns uniform before): 0.1 ns bins within +-5 ns, where the
+  // dijet core is (sigma ~ 0.75 ns), and 0.5 ns bins outside. The core edges are multiples of 0.5 ns, so merging five
+  // fine bins gives back the uniform 0.5 ns binning.
+  static constexpr int m_dt_core_tenths = 50;   // +-5 ns
+  static constexpr int m_dt_fine_tenths = 1;    // 0.1 ns
+  static constexpr int m_dt_coarse_tenths = 5;  // 0.5 ns
   // Raw pT_lead bins of the timing grid [GeV]: from pt_sub_min of the radius, then these edges above it
   // (100-300 GeV from 2026-11-12, for the high-pT leading jets without a partner; above 300 GeV only counted in the status)
   static constexpr std::array<double, 7> m_time_lead_upper = {20, 25, 30, 40, 60, 100, 300};
-  // Corrected time vs raw pT hists (with the timing correction): 20 % classes, t - t0 - f(x) 300 bins over +-75 ns, raw pT
+  // Corrected time vs raw pT hists (with the timing correction): 20 % classes, t - t0 - f(x) over +-75 ns (time_edges), raw pT
   // 1 GeV bins from the lower edge (the first bin up to the next whole GeV) to 60 GeV (dijet) or 300 GeV (lead, all)
-  static constexpr int m_bins_tpt_dt = 300;
   static constexpr double m_tpt_dt_max = 75; /*ns*/
   static constexpr double m_tpt_pt_high_dijet = 60;
   static constexpr double m_tpt_pt_high_incl = 300;
@@ -275,6 +279,7 @@ class JetDijet
   double timing_f(size_t ir, size_t tc, double x) const;
   void fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx) const;
   static std::vector<double> unit_edges(double lo, double hi);
+  static std::vector<double> time_edges(double t_max);
   void setup_chain();
   void init_hists();
   bool check_CaloMBD() const;
@@ -595,6 +600,7 @@ void JetDijet::init_hists()
     {
       throw std::runtime_error(std::format("pt_sub_min {} of {} must be in [{}, {}) GeV", cut, r, m_jet_pt_raw_min, m_time_lead_upper.back()));
     }
+    const std::vector<double> dt_edges = time_edges(m_dt_max);
     h.time_lead_edges = {cut};
     for (double e : m_time_lead_upper)
     {
@@ -624,7 +630,7 @@ void JetDijet::init_hists()
               std::format("h2LeadTimeOHCalFrac_{}_cent_{}_{}_ptlead_{}_{}", stag, clo, chi, edge_tag(plo), edge_tag(phi)),
               std::format("Leading Jet, {} ({}, {}-{}%, {} #leq raw p_{{T,lead}} < {} GeV); OHCal Energy Fraction; Jet t - MBD t_{{0}} [ns]",
                           sel_label[is], jet_label, clo, chi, plo, phi).c_str(),
-              m_bins_frac, m_frac_low, m_frac_high, m_bins_dt, -m_dt_max, m_dt_max));
+              m_bins_frac, m_frac_low, m_frac_high, static_cast<int>(dt_edges.size()) - 1, dt_edges.data()));
         }
       }
 
@@ -644,7 +650,7 @@ void JetDijet::init_hists()
                 std::format("h2LeadTimeOHCalFrac_{}_cent_{}_{}_ptlead_{}_{}_corr", stag, clo, chi, edge_tag(plo), edge_tag(phi)),
                 std::format("Leading Jet, {} ({}, {}-{}%, {} #leq raw p_{{T,lead}} < {} GeV); OHCal Energy Fraction; Jet t - MBD t_{{0}} - f(x) [ns]",
                             sel_label[is], jet_label, clo, chi, plo, phi).c_str(),
-                m_bins_frac, m_frac_low, m_frac_high, m_bins_dt, -m_dt_max, m_dt_max));
+                m_bins_frac, m_frac_low, m_frac_high, static_cast<int>(dt_edges.size()) - 1, dt_edges.data()));
           }
         }
       }
@@ -680,11 +686,7 @@ void JetDijet::init_hists()
       const std::array<const char *, N_SEL> lead_tag = {"dijet", "lead"};
       const std::array<std::string, N_SEL> lead_label = {sel_label[SEL_DIJET], std::string("Leading jet of every selected event")};
       const std::array<std::string, N_SEL> jet_label_sel = {std::format("Jets in dijet events ({})", sel_label[SEL_DIJET]), std::string("Jets in all selected events")};
-      std::vector<double> dt_edges(m_bins_tpt_dt + 1);
-      for (int i = 0; i <= m_bins_tpt_dt; ++i)
-      {
-        dt_edges[static_cast<size_t>(i)] = -m_tpt_dt_max + 2 * m_tpt_dt_max * i / m_bins_tpt_dt;
-      }
+      const std::vector<double> tpt_dt_edges = time_edges(m_tpt_dt_max);
       for (size_t is = 0; is < N_SEL; ++is)
       {
         for (size_t k = 0; k < m_n_tcent; ++k)
@@ -694,11 +696,11 @@ void JetDijet::init_hists()
           h.h2LeadTimeCorrPt[is][k] = book<TH2F>(
               std::format("h2LeadTimeCorrPt_{}_{}_cent_{}_{}", r, lead_tag[is], clo, chi),
               std::format("Leading Jet, {} ({}, {}-{}%); Leading jet raw p_{{T}} [GeV]; Jet t - MBD t_{{0}} - f(x) [ns]", lead_label[is], jet_label, clo, chi).c_str(),
-              static_cast<int>(lead_edges[is].size()) - 1, lead_edges[is].data(), m_bins_tpt_dt, dt_edges.data());
+              static_cast<int>(lead_edges[is].size()) - 1, lead_edges[is].data(), static_cast<int>(tpt_dt_edges.size()) - 1, tpt_dt_edges.data());
           h.h2JetTimeCorrPt[is][k] = book<TH2F>(
               std::format("h2JetTimeCorrPt_{}_{}_cent_{}_{}", r, m_sel_jet_tag[is], clo, chi),
               std::format("{} ({}, {}-{}%); Jet raw p_{{T}} [GeV]; Jet t - MBD t_{{0}} - f(x) [ns]", jet_label_sel[is], jet_label, clo, chi).c_str(),
-              static_cast<int>(jet_edges[is].size()) - 1, jet_edges[is].data(), m_bins_tpt_dt, dt_edges.data());
+              static_cast<int>(jet_edges[is].size()) - 1, jet_edges[is].data(), static_cast<int>(tpt_dt_edges.size()) - 1, tpt_dt_edges.data());
         }
       }
     }
@@ -722,6 +724,26 @@ std::vector<double> JetDijet::unit_edges(double lo, double hi)
   {
     e.push_back(x);
   }
+  return e;
+}
+
+// Time axis edges over +-t_max [ns]: 0.5 ns bins outside +-5 ns, 0.1 ns bins inside (built in tenths of a ns, so the
+// edges are exact multiples of 0.1); t_max must be a multiple of 0.5 ns above 5 ns
+std::vector<double> JetDijet::time_edges(double t_max)
+{
+  const auto max_tenths = static_cast<int>(std::lround(t_max * 10));
+  if (max_tenths <= m_dt_core_tenths || max_tenths % m_dt_coarse_tenths != 0)
+  {
+    throw std::runtime_error(std::format("time axis +-{} ns must be a multiple of 0.5 ns above 5 ns", t_max));
+  }
+  std::vector<double> e;
+  int k = -max_tenths;
+  while (k < max_tenths)
+  {
+    e.push_back(k / 10.0);
+    k += (k >= -m_dt_core_tenths && k < m_dt_core_tenths) ? m_dt_fine_tenths : m_dt_coarse_tenths;
+  }
+  e.push_back(max_tenths / 10.0);
   return e;
 }
 

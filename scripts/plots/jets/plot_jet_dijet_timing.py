@@ -376,6 +376,19 @@ T1_YLIM = (-12, 12)                                        # [ns]; jets outside 
 T1_FIT_DEG = 4                                             # quartic fitted to the profile (pol2 leaves an S-shaped residual)
 
 
+T_DISPLAY_BIN = 0.5                                        # [ns] t bins of the 2D plots (the hists have 0.1 ns bins within +-5 ns from 11-12-26-v2 on)
+
+
+def merge_t(h, te, width=T_DISPLAY_BIN):
+    """h (..., t) on the edges te, merged to uniform bins of width (every new edge must be an edge of te; the fine core
+    bins of the variable time axis are, so this gives back the 0.5 ns binning). Returns (merged h, new edges)."""
+    new = np.arange(te[0], te[-1] + width / 2, width)
+    idx = np.searchsorted(te, new - 1e-9)
+    if len(idx) < 2 or not np.allclose(te[np.minimum(idx, len(te) - 1)], new, atol=1e-6):
+        raise ValueError(f"the time edges cannot be merged to {width} ns bins")
+    return np.add.reduceat(h, idx[:-1], axis=-1), new
+
+
 def time_profile(inputs, r_tag, sel, x_rebin, cents=None, key="tx"):
     """t - t0 vs x summed over runs, pT_lead and the grid classes cents (all if None), with x rebinned, and its profile:
     <t - t0> per x bin from the bin centres of the t axis, the standard deviation, and the mask of bins with N >= PROFILE_MIN_N."""
@@ -422,8 +435,9 @@ def plot_t1(inputs, r_tag, cut, x_rebin, runs, lumi, out_dir, sel="dijet", save_
     xe, te, tc, xc, h, n, mean, rms, ok = (P[k] for k in ("xe", "te", "tc", "xc", "h", "n", "mean", "rms", "ok"))
 
     fig, ax = plt.subplots(figsize=(10.5, 8.5))
-    z = np.where(h > 0, h, np.nan)
-    pcm = ax.pcolormesh(xe, te, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
+    hd, ted = merge_t(h, te)                                             # 2D shown in 0.5 ns bins; the profile uses the hist bins
+    z = np.where(hd > 0, hd, np.nan)
+    pcm = ax.pcolormesh(xe, ted, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
     fig.colorbar(pcm, ax=ax, pad=0.02).set_label("Leading jets")
     ax.errorbar(xc[ok], mean[ok], yerr=rms[ok] / np.sqrt(n[ok]), fmt="o", color="black", markersize=5, capsize=0,
                 linewidth=1.4, label=r"Profile: $\langle t - t_{0} \rangle$", zorder=3)
@@ -515,7 +529,8 @@ def plot_t3(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", 
         return
     hep.style.use("ATLAS")
     P = {k: time_profile(inputs, r_tag, sel, x_rebin, key=k) for k in ("tx", "tx_corr")}
-    vmax = max(np.nanmax(P[k]["h"]) for k in P)
+    D = {k: merge_t(P[k]["h"], P[k]["te"]) for k in P}                  # 2D shown in 0.5 ns bins
+    vmax = max(np.nanmax(D[k][0]) for k in P)
     fig = plt.figure(figsize=(19, 8.5))
     # columns: left panel, a spacer for the right panel's y title, right panel, colour bar (close to the right panel)
     gs = fig.add_gridspec(1, 4, width_ratios=(1, 0.17, 1, 0.035), wspace=0.025)
@@ -524,8 +539,9 @@ def plot_t3(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", 
     box = dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3)
     for ax, k in zip(axs, ("tx", "tx_corr")):
         Q = P[k]
-        z = np.where(Q["h"] > 0, Q["h"], np.nan)
-        pcm = ax.pcolormesh(Q["xe"], Q["te"], z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=vmax), rasterized=True)
+        hd, ted = D[k]
+        z = np.where(hd > 0, hd, np.nan)
+        pcm = ax.pcolormesh(Q["xe"], ted, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=vmax), rasterized=True)
         ok = Q["ok"]
         ax.errorbar(Q["xc"][ok], Q["mean"][ok], yerr=Q["rms"][ok], fmt="none", color="black", alpha=0.35, linewidth=4,
                     capsize=0, label=r"$\sigma$ (std. dev.)", zorder=2)
@@ -587,8 +603,9 @@ def plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out_dir, x_max=None, suf
     n_above = hf[-1, :].sum() + (hf[1:-1][xe[:-1] >= hi].sum() if x_max is not None else 0)
 
     fig, ax = plt.subplots(figsize=(10.5, 8.5))
-    z = np.where(h > 0, h, np.nan)
-    pcm = ax.pcolormesh(xe, te, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
+    hd, ted = merge_t(h, te)                                             # 2D shown in 0.5 ns bins; the profile uses the hist bins
+    z = np.where(hd > 0, hd, np.nan)
+    pcm = ax.pcolormesh(xe, ted, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
     fig.colorbar(pcm, ax=ax, pad=0.02).set_label("Leading jets" if kind == "lead" else "Jets")
     ax.axhline(0, color="#e41a1c", linewidth=1.8, zorder=2, label="0")
     ax.errorbar(xc[ok], mean[ok], yerr=rms[ok], fmt="none", color="black", alpha=0.35, linewidth=3, capsize=0,
@@ -674,14 +691,14 @@ def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_p
     hf = inputs["tpt"][key].sum(axis=0).sum(axis=0)                     # t with flow, every pT (flow included)
     n = hf[1:-1]
     tc = 0.5 * (te[1:] + te[:-1])
-    w = te[1] - te[0]
+    dens = n / np.diff(te)                                               # jets per ns (the bins are not all equal)
     tot, n_out = hf.sum(), hf[0] + hf[-1]
     mean = (n * tc).sum() / n.sum()
     rms = np.sqrt((n * tc ** 2).sum() / n.sum() - mean ** 2)
     far = n[np.abs(tc) > PROJ_FAR].sum() + n_out
 
     fig, ax = plt.subplots(figsize=(10.5, 8))
-    ax.stairs(n, te, color="black", linewidth=1.6, label="Jets")
+    ax.stairs(dens, te, color="black", linewidth=1.6, label="Jets")
     lines = [rf"$N$ = {fmt_n(tot)}" + (rf", {n_out:.0f} outside $\pm${te[-1]:g} ns" if n_out else ""),
              rf"Mean {mean:+.3f} ns, RMS {rms:.3f} ns (within $\pm${te[-1]:g} ns)",
              rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {far:.0f} ({far / tot:.2e})"]
@@ -689,7 +706,7 @@ def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_p
     if fit is not None:
         lo, hi = fit["window"]
         xs = np.linspace(-PROJ_ZOOM * 2, PROJ_ZOOM * 2, 2000)
-        g = fit["a"] * w / (np.sqrt(2 * np.pi) * fit["sigma"]) * np.exp(-0.5 * ((xs - fit["mu"]) / fit["sigma"]) ** 2)
+        g = fit["a"] / (np.sqrt(2 * np.pi) * fit["sigma"]) * np.exp(-0.5 * ((xs - fit["mu"]) / fit["sigma"]) ** 2)   # per ns
         inwin = (xs >= lo) & (xs <= hi)
         ax.plot(xs[inwin], g[inwin], "-", color="#e41a1c", linewidth=2.2, label=rf"Gaussian fit ($\pm{PROJ_FIT_NSIG}\sigma$)")
         ax.plot(xs, np.where(inwin, np.nan, g), "--", color="#e41a1c", linewidth=1.4, label="Fit, extrapolated")
@@ -712,12 +729,12 @@ def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_p
     if zoom is None:
         ax.set_yscale("log")
         ax.set_xlim(te[0], te[-1])
-        ax.set_ylim(0.5, n.max() * 30)
+        ax.set_ylim(0.5, dens.max() * 30)
     else:
         ax.set_xlim(-zoom, zoom)
-        ax.set_ylim(0, n.max() * 1.6)
+        ax.set_ylim(0, dens.max() * 1.6)
     ax.set_xlabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
-    ax.set_ylabel(f"Jets / {w:g} ns")
+    ax.set_ylabel("Jets / ns")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
     save_fig(fig, out_dir / f"T5proj_{r_tag}_{tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
