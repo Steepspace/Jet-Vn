@@ -28,6 +28,11 @@ This script makes:
    timing/T2_profiles_cent20_<r>_dijet: the profiles of the three 20% classes with the T1 fit, and profile - fit [ns].
    timing/T3_closure_<r>_dijet: uncorrected (left) and corrected (right) t vs x of the dijet sample, with their profiles
    (the _corr hists of Jet-Dijet.C with a timing correction file, production 11-12-26 on).
+   timing/T4_leadpt_<r>_<dijet|lead>[_zoom60], T5_jetpt_<r>_<dijet|all>[_zoom60]: the corrected t - t0 - f(x) vs raw pT
+   (h2LeadTimeCorrPt / h2JetTimeCorrPt, production 11-12-26-v2 on), summed over the 20% classes, with the profile per
+   pT bin; lead / all shown to 150 GeV, and zoomed to 60 GeV.
+   timing/projections/T5proj_<r>_<dijet|all>[_zoom10]: the T5 hists projected on t - t0 - f(x) (every pT), log scale over
+   +-75 ns and linear over +-10 ns; the dijet one with a Gaussian fitted iteratively within +-2 sigma of its peak.
    With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
    (files/calib/timing_dijet_fit_iternf.csv).
 """
@@ -50,13 +55,15 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import LogLocator, NullFormatter
 import mplhep as hep
+from scipy.optimize import curve_fit
+from scipy.special import erf
 
 from plot_jet_bkgsub_compare import save_fig
 from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header
-from plot_jet_dijet_control import RADII, EVENT_INFO, JET_PT_MIN, cent_label, one_line
+from plot_jet_dijet_control import RADII, JET_PT_MIN, cent_label
 
-CACHE_VERSION = 5                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names
+CACHE_VERSION = 6                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names; 6: corrected t vs pT (11-12-26-v2 on)
 
 SELS = ("dijet", "incl")                                   # timing hists: dijet sample, inclusive comparison
 SEL_LABEL = {"dijet": "Dijet", "incl": "Inclusive"}
@@ -69,6 +76,12 @@ PT_PLOT_EDGES = (list(range(0, 30)) + list(range(30, 40, 2))
                  + [40, 45, 50, 55, 60, 70, 80, 90, 100, 120, 140, 160, 200, 250, 300])
 TAIL_THRESHOLDS = (40, 50, 60, 80, 100)
 X_LABEL = r"Leading jet OHCal energy fraction $x$"
+# Corrected time vs raw pT hists of Jet-Dijet.C (with a timing correction file, 11-12-26-v2 on), per 20% class:
+# (kind, name prefix, sample tags)
+TPT_HISTS = (("lead", "h2LeadTimeCorrPt", ("dijet", "lead")), ("jet", "h2JetTimeCorrPt", ("dijet", "all")))
+TPT_PREFIX = {kind: pre for kind, pre, _ in TPT_HISTS}
+TPT_MAX = 150                                              # [GeV] pT axis of the lead / all plots (jets above are counted in the text)
+TPT_ZOOM = 60                                              # [GeV] pT axis of their zoomed versions
 NAME_RE = re.compile(r"h2LeadTimeOHCalFrac_(r0\d)_(dijet|incl)_cent_(\d+)_(\d+)_ptlead_([\dp]+)_([\dp]+)$")
 
 
@@ -99,7 +112,14 @@ def read_layout(path):
                   "x_edges": h.axis(0).edges(),
                   "t_edges": h.axis(1).edges(),
                   "pt_edges": hp.axis(0).edges(),
-                  "cent_edges": hp.axis(1).edges()}
+                  "cent_edges": hp.axis(1).edges(),
+                  "tpt_edges": {}}
+        for kind, pre, tags in TPT_HISTS:                               # from production 11-12-26-v2 on
+            for r in RADII:
+                for tag in tags:
+                    name = f"{pre}_{r}_{tag}_cent_{CLASSES20[0][0]}_{CLASSES20[0][1]}"
+                    if name in f:
+                        layout["tpt_edges"][(kind, r, tag)] = (f[name].axis(0).edges(), f[name].axis(1).edges())
     return layout
 
 
@@ -112,7 +132,7 @@ def load_run(task):
     """Per run: the x projection (all t, flow included) of every timing hist as (cent, pT_lead, x) per (radius,
     selection), the x under/overflow per (radius, selection), the jet pT x centrality hists and the status hists."""
     run, path, layout = task
-    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}, "tx_corr": {}}
+    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}, "tx_corr": {}, "tpt": {}}
     try:
         with uproot.open(path) as f:
             for r in RADII:
@@ -148,6 +168,12 @@ def load_run(task):
                         d["leadpt"][(r, sel)] = f[lname].values(flow=True).astype(np.float64)
                 for s in ("dijet", "all"):
                     d["jetpt"][(r, s)] = f[f"h2JetPtCent_{r}_{s}"].values(flow=True).astype(np.float64)
+            # corrected time vs raw pT per 20% class, with flow: (class, pT + 2, t + 2)
+            for key in layout.get("tpt_edges", {}):
+                kind, r, tag = key
+                names = [f"{TPT_PREFIX[kind]}_{r}_{tag}_cent_{lo}_{hi}" for lo, hi in CLASSES20]
+                if all(n in f for n in names):
+                    d["tpt"][key] = np.stack([f[n].values(flow=True) for n in names]).astype(np.float32)
     except (KeyError, OSError) as e:
         print(f"Warning: run {run}: {e}, skipping")
         return run, None
@@ -170,6 +196,7 @@ def load_inputs(tasks, lumi_files, n_jobs):
     runs, grids, xflow, jetpt, status, leadpt, tx, tx_corr = [], {}, {}, {}, {}, {}, {}, {}
     ex = concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
     n_corr = 0                                                          # runs with the corrected dijet timing hists
+    tpt, n_tpt = {}, {}                                                 # corrected t vs pT, and the runs that have it
     jobs = [(r, p, layout) for r, p in tasks]
     for run, d in (ex.map(load_run, jobs, chunksize=8) if ex else map(load_run, jobs)):
         if d is None:
@@ -190,6 +217,9 @@ def load_inputs(tasks, lumi_files, n_jobs):
         for k, v in d["tx_corr"].items():
             tx_corr[k] = tx_corr.get(k, 0) + v.astype(np.float64)
         n_corr = n_corr + bool(d["tx_corr"])
+        for k, v in d["tpt"].items():
+            tpt[k] = tpt.get(k, 0) + v.astype(np.float64)
+            n_tpt[k] = n_tpt.get(k, 0) + 1
     if ex:
         ex.shutdown()
     order = np.argsort(runs)
@@ -204,7 +234,8 @@ def load_inputs(tasks, lumi_files, n_jobs):
         lumis = [load_luminosity(lumi_files[r]) for r in runs]
         lumi = None if any(l is None for l in lumis) else float(sum(lumis))
     return {"runs": runs, "grids": grids, "xflow": xflow, "jetpt": jetpt, "status": status, "leadpt": leadpt,
-            "tx": tx, "tx_corr": tx_corr if n_corr == len(runs) else {}, "layout": layout, "lumi": lumi}
+            "tx": tx, "tx_corr": tx_corr if n_corr == len(runs) else {},
+            "tpt": {k: v for k, v in tpt.items() if n_tpt[k] == len(runs)}, "layout": layout, "lumi": lumi}
 
 
 # Helpers
@@ -530,6 +561,169 @@ def plot_t3(inputs, r_tag, cut, x_rebin, fit, runs, lumi, out_dir, sel="dijet", 
     plt.close(fig)
 
 
+def plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out_dir, x_max=None, suffix="", save_pdf=False):
+    """Corrected t - t0 - f(x) vs raw pT, 0-60% (the three 20% classes summed), with the profile per pT bin (N >= 10)
+    and its standard deviation. kind "lead": the leading jet (T4; tag dijet or lead = every selected event's leading
+    jet); kind "jet": every jet passing the cuts (T5; tag dijet = in dijet events, all = in all selected events).
+    x_max: upper end of the pT axis (no rebinning; default the hist's top edge); suffix: added to the file name."""
+    key = (kind, r_tag, tag)
+    if key not in inputs.get("tpt", {}):
+        print(f"Warning: no {TPT_PREFIX[kind]}_{r_tag}_{tag} hists in every run (production 11-12-26-v2 on), skipping")
+        return
+    hep.style.use("ATLAS")
+    xe, te = inputs["layout"]["tpt_edges"][key]
+    hf = inputs["tpt"][key].sum(axis=0)                                  # (pT + 2, t + 2), with flow
+    h = hf[1:-1, 1:-1]
+    tc = 0.5 * (te[1:] + te[:-1])
+    xc = 0.5 * (xe[1:] + xe[:-1])
+    n = h.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = (h * tc).sum(axis=1) / n
+        rms = np.sqrt(np.maximum((h * tc ** 2).sum(axis=1) / n - mean ** 2, 0))
+    ok = n >= PROFILE_MIN_N
+    hi = xe[-1] if x_max is None else x_max
+    n_tot = hf.sum()
+    n_t_out = hf[:, 0].sum() + hf[:, -1].sum()                          # outside +-75 ns (every pT)
+    n_above = hf[-1, :].sum() + (hf[1:-1][xe[:-1] >= hi].sum() if x_max is not None else 0)
+
+    fig, ax = plt.subplots(figsize=(10.5, 8.5))
+    z = np.where(h > 0, h, np.nan)
+    pcm = ax.pcolormesh(xe, te, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
+    fig.colorbar(pcm, ax=ax, pad=0.02).set_label("Leading jets" if kind == "lead" else "Jets")
+    ax.axhline(0, color="#e41a1c", linewidth=1.8, zorder=2, label="0")
+    ax.errorbar(xc[ok], mean[ok], yerr=rms[ok], fmt="none", color="black", alpha=0.35, linewidth=3, capsize=0,
+                label=r"$\sigma$ (std. dev.)", zorder=3)
+    ax.errorbar(xc[ok], mean[ok], yerr=rms[ok] / np.sqrt(n[ok]), fmt="o", color="black", markersize=3, capsize=0,
+                linewidth=1.2, label=rf"Profile ($N \geq {PROFILE_MIN_N}$ per bin)", zorder=4)
+    title = {("lead", "dijet"): "Dijet, leading jet", ("lead", "lead"): "Leading jet, every selected event",
+             ("jet", "dijet"): "Every jet in dijet events", ("jet", "all"): "Every jet, every selected event"}[(kind, tag)]
+    common = sel_lines(r_tag, cut, "dijet")
+    bold = title.replace(" ", r"\ ") + r",\ 0-60\%"
+    lines = ([rf"$\bf{{{bold}}}$"]
+             + (common if tag == "dijet" else common[1:])
+             + [rf"$N$ = {fmt_n(n_tot)}" + (rf", {n_t_out:.0f} outside $\pm${te[-1]:g} ns" if n_t_out else "")
+                + (f", {n_above:.0f} above {hi:g} GeV" if n_above else "")])
+    ax.text(0.97, 0.97, "\n".join(lines), transform=ax.transAxes, ha="right", va="top", fontsize=13, linespacing=1.3,
+            bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3))
+    ax.legend(loc="lower right", fontsize=13, frameon=True, framealpha=0.8, facecolor="0.75", edgecolor="none")
+    ax.set_xlim(xe[0], hi)
+    ax.set_ylim(te[0], te[-1])
+    ax.set_xlabel(("Leading jet" if kind == "lead" else "Jet") + r" raw $p_{T}$ [GeV]")
+    ax.set_ylabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
+    stem = f"{'T4_leadpt' if kind == 'lead' else 'T5_jetpt'}_{r_tag}_{tag}{suffix}"
+    save_fig(fig, out_dir / f"{stem}.png", save_pdf)
+    plt.close(fig)
+    print(f"  {stem}: N {n_tot:.0f}, outside +-{te[-1]:g} ns {n_t_out:.0f}, above {hi:g} GeV {n_above:.0f}")
+
+
+PROJ_ZOOM = 10                                             # [ns] range of the linear (zoomed) projections
+PROJ_FIT_NSIG = 2                                          # Gaussian fit window: +-2 sigma around the fitted mean
+PROJ_FAR = 10                                              # [ns] |t_corr| above this counts as far out of time
+
+
+def fit_gauss_core(n, edges, nsig=PROJ_FIT_NSIG, max_iter=20):
+    """Gaussian fitted to the core of a binned distribution: start from the mean and RMS, fit the bins whose centres are
+    within +-nsig sigma of the mean, move the window to the new mean and sigma, until both change by less than 1e-4 ns.
+    The model is the Gaussian integrated over each bin (the bins are not small against sigma); errors sqrt(N) (empty
+    bins: 1). Returns the parameters, errors, chi2, ndf, window and the iterations used, or None."""
+    c = 0.5 * (edges[1:] + edges[:-1])
+    tot = n.sum()
+    if tot <= 0:
+        return None
+    mu = (n * c).sum() / tot
+    sig = np.sqrt(max((n * c ** 2).sum() / tot - mu ** 2, 1e-6))
+
+    def model(lo_hi, a, m, s):
+        lo, hi = lo_hi
+        return a * 0.5 * (erf((hi - m) / (np.sqrt(2) * s)) - erf((lo - m) / (np.sqrt(2) * s)))
+
+    res = None
+    for it in range(1, max_iter + 1):
+        sel = np.abs(c - mu) <= nsig * sig
+        if sel.sum() < 4:
+            return None
+        x = (edges[:-1][sel], edges[1:][sel])
+        y = n[sel]
+        e = np.sqrt(np.maximum(y, 1))
+        try:
+            p, cov = curve_fit(model, x, y, p0=(y.sum(), mu, sig), sigma=e, absolute_sigma=True)
+        except RuntimeError:
+            return None
+        a, m, s = p[0], p[1], abs(p[2])
+        chi2 = (((y - model(x, a, m, s)) / e) ** 2).sum()
+        res = {"a": a, "mu": m, "sigma": s, "err": np.sqrt(np.diag(cov)), "chi2": chi2, "ndf": int(sel.sum()) - 3,
+               "window": (mu - nsig * sig, mu + nsig * sig), "iter": it}
+        done = abs(m - mu) < 1e-4 and abs(s - sig) < 1e-4
+        mu, sig = m, s
+        if done:
+            break
+    return res
+
+
+def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_pdf=False):
+    """The T5 hist (every jet passing the cuts; tag dijet = in dijet events, all = in all selected events) projected on
+    t - t0 - f(x), every pT, 0-60%. zoom None: log scale over the whole axis; zoom z: linear over +-z ns. The dijet
+    projection gets a Gaussian fitted to its core (fit_gauss_core)."""
+    key = ("jet", r_tag, tag)
+    if key not in inputs.get("tpt", {}):
+        return
+    hep.style.use("ATLAS")
+    xe, te = inputs["layout"]["tpt_edges"][key]
+    hf = inputs["tpt"][key].sum(axis=0).sum(axis=0)                     # t with flow, every pT (flow included)
+    n = hf[1:-1]
+    tc = 0.5 * (te[1:] + te[:-1])
+    w = te[1] - te[0]
+    tot, n_out = hf.sum(), hf[0] + hf[-1]
+    mean = (n * tc).sum() / n.sum()
+    rms = np.sqrt((n * tc ** 2).sum() / n.sum() - mean ** 2)
+    far = n[np.abs(tc) > PROJ_FAR].sum() + n_out
+
+    fig, ax = plt.subplots(figsize=(10.5, 8))
+    ax.stairs(n, te, color="black", linewidth=1.6, label="Jets")
+    lines = [rf"$N$ = {fmt_n(tot)}" + (rf", {n_out:.0f} outside $\pm${te[-1]:g} ns" if n_out else ""),
+             rf"Mean {mean:+.3f} ns, RMS {rms:.3f} ns (within $\pm${te[-1]:g} ns)",
+             rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {far:.0f} ({far / tot:.2e})"]
+    fit = fit_gauss_core(n, te) if tag == "dijet" else None
+    if fit is not None:
+        lo, hi = fit["window"]
+        xs = np.linspace(-PROJ_ZOOM * 2, PROJ_ZOOM * 2, 2000)
+        g = fit["a"] * w / (np.sqrt(2 * np.pi) * fit["sigma"]) * np.exp(-0.5 * ((xs - fit["mu"]) / fit["sigma"]) ** 2)
+        inwin = (xs >= lo) & (xs <= hi)
+        ax.plot(xs[inwin], g[inwin], "-", color="#e41a1c", linewidth=2.2, label=rf"Gaussian fit ($\pm{PROJ_FIT_NSIG}\sigma$)")
+        ax.plot(xs, np.where(inwin, np.nan, g), "--", color="#e41a1c", linewidth=1.4, label="Fit, extrapolated")
+        out3 = n[np.abs(tc - fit["mu"]) > 3 * fit["sigma"]].sum() + n_out
+        em, es = fit["err"][1], fit["err"][2]
+        lines += [rf"Fit: $\mu$ = {fit['mu']:+.3f} $\pm$ {em:.3f} ns, $\sigma$ = {fit['sigma']:.3f} $\pm$ {es:.3f} ns",
+                  rf"$\chi^2$/ndf = {fit['chi2']:.1f}/{fit['ndf']}, window [{lo:+.2f}, {hi:+.2f}] ns",
+                  rf"Outside $\mu \pm 3\sigma$: {out3:.0f} ({out3 / tot:.2e})"]
+        print(f"  T5proj {r_tag} {tag}: mu {fit['mu']:+.4f} +- {em:.4f}, sigma {fit['sigma']:.4f} +- {es:.4f} ns, "
+              f"chi2/ndf {fit['chi2']:.1f}/{fit['ndf']}, window [{lo:+.3f}, {hi:+.3f}], {fit['iter']} iterations, "
+              f"outside 3 sigma {out3:.0f} / {tot:.0f}")
+    elif tag == "dijet":
+        print(f"Warning: the Gaussian fit of the {r_tag} dijet projection failed")
+    title = {"dijet": "Every jet in dijet events", "all": "Every jet, every selected event"}[tag]
+    common = sel_lines(r_tag, cut, "dijet")
+    head = [rf"$\bf{{{title.replace(' ', chr(92) + ' ')},\ 0-60\%}}$"] + (common if tag == "dijet" else common[1:])
+    ax.text(0.97, 0.97, "\n".join(head + lines), transform=ax.transAxes, ha="right", va="top", fontsize=12,
+            linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3))
+    ax.legend(loc="upper left", fontsize=13, frameon=False)
+    if zoom is None:
+        ax.set_yscale("log")
+        ax.set_xlim(te[0], te[-1])
+        ax.set_ylim(0.5, n.max() * 30)
+    else:
+        ax.set_xlim(-zoom, zoom)
+        ax.set_ylim(0, n.max() * 1.6)
+    ax.set_xlabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    ax.set_ylabel(f"Jets / {w:g} ns")
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
+    save_fig(fig, out_dir / f"T5proj_{r_tag}_{tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    plt.close(fig)
+
+
 # P2: OHCal fraction
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -807,7 +1001,7 @@ def write_csv(rows, path):
 def main():
     parser = argparse.ArgumentParser(description="Leading-jet checks in the clean dijet sample: jet pT tail and OHCal "
                                                  "fraction (Jet-Dijet output with the dijet timing hists).")
-    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26/test.list"),
+    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26-v2/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
                         help="List of Event QA ROOT files named <run>.root with hLuminosity (default: %(default)s)")
@@ -882,6 +1076,17 @@ def main():
         fits[r_tag] = fit
         plot_t2(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
         plot_t3(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
+        for kind, _, tags in TPT_HISTS:
+            for tag in tags:
+                if tag == "dijet":                                       # up to 60 GeV: the whole hist
+                    plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", save_pdf=args.save_pdf)
+                else:                                                    # lead / all: to 150 GeV, and zoomed to 60 GeV
+                    plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", x_max=TPT_MAX, save_pdf=args.save_pdf)
+                    plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", x_max=TPT_ZOOM,
+                             suffix=f"_zoom{TPT_ZOOM:g}", save_pdf=args.save_pdf)
+        for tag in ("dijet", "all"):
+            for zoom in (None, PROJ_ZOOM):
+                plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out / "timing" / "projections", zoom=zoom, save_pdf=args.save_pdf)
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
