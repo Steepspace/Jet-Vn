@@ -31,8 +31,17 @@ This script makes:
    timing/T4_leadpt_<r>_<dijet|lead>[_zoom60], T5_jetpt_<r>_<dijet|all>[_zoom60]: the corrected t - t0 - f(x) vs raw pT
    (h2LeadTimeCorrPt / h2JetTimeCorrPt, production 11-12-26-v2 on), summed over the 20% classes, with the profile per
    pT bin; lead / all shown to 150 GeV, and zoomed to 60 GeV.
-   timing/projections/T5proj_<r>_<dijet|all>[_zoom10]: the T5 hists projected on t - t0 - f(x) (every pT), log scale over
-   +-75 ns and linear over +-10 ns; the dijet one with a Gaussian fitted iteratively within +-2 sigma of its peak.
+   timing/projections/lead_dijet/T4proj_<r>_dijet*: the corrected time of the dijet leading jets (the sample the
+   correction was fitted to), each with a Gaussian fitted iteratively within +-2 sigma of its peak and its mu +- 3 sigma
+   marked: full pT range (log over +-75 ns and linear over +-10 ns), per pT window and per 20% class (single plots and
+   panels), mu and sigma vs pT and centrality (_fits_vs_pt, _fits_vs_cent), and a CSV of every fit (_fits.csv).
+   timing/projections/all_jets/T5proj_<r>_all[_leaddijet3sigma][_zoom10]: every jet of every selected event projected
+   on t - t0 - f(x) (every pT), log and +-10 ns; _leaddijet3sigma with the dijet leading-jet full-range mu +- 3 sigma
+   marked and the jets outside counted.
+   timing/cut/C1_jetpt_3sigma_<r>: the raw pT spectrum of every jet of every selected event before and after a single
+   timing window (the dijet leading-jet full-range fit's mu +- 3 sigma), with the fraction kept per pT bin;
+   timing/cut/C2_jett_3sigma_<r>[_panels][_zoom10]: the corrected time of those jets per raw pT class (counts per ns,
+   overlaid, or one class per panel) with the same window and the fraction of each class outside it.
    With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
    (files/calib/timing_dijet_fit_iternf.csv).
 """
@@ -83,6 +92,11 @@ TPT_PREFIX = {kind: pre for kind, pre, _ in TPT_HISTS}
 TPT_MAX = 150                                              # [GeV] pT axis of the lead / all plots (jets above are counted in the text)
 TPT_ZOOM = 60                                              # [GeV] pT axis of their zoomed versions
 NAME_RE = re.compile(r"h2LeadTimeOHCalFrac_(r0\d)_(dijet|incl)_cent_(\d+)_(\d+)_ptlead_([\dp]+)_([\dp]+)$")
+
+
+def edge_tag(x):
+    """A bin edge as in the hist names of Jet-Dijet.C: 14.25 -> "14p25", 20 -> "20"."""
+    return f"{x:g}".replace(".", "p")
 
 
 def edge_val(tag):
@@ -679,11 +693,11 @@ def fit_gauss_core(n, edges, nsig=PROJ_FIT_NSIG, max_iter=20):
     return res
 
 
-def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_pdf=False):
-    """The T5 hist (every jet passing the cuts; tag dijet = in dijet events, all = in all selected events) projected on
-    t - t0 - f(x), every pT, 0-60%. zoom None: log scale over the whole axis; zoom z: linear over +-z ns. The dijet
-    projection gets a Gaussian fitted to its core (fit_gauss_core)."""
-    key = ("jet", r_tag, tag)
+def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=None, save_pdf=False):
+    """The T5 hist of every jet in every selected event (h2JetTimeCorrPt_<r>_all) projected on t - t0 - f(x), every pT,
+    0-60%. zoom None: log scale over the whole axis; zoom z: linear over +-z ns. ref_fit: the dijet leading-jet
+    full-range fit (plot_lead_dijet_proj), whose mu +- 3 sigma is marked and counted (file suffix _leaddijet3sigma)."""
+    key = ("jet", r_tag, "all")
     if key not in inputs.get("tpt", {}):
         return
     hep.style.use("ATLAS")
@@ -701,30 +715,90 @@ def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_p
     ax.stairs(dens, te, color="black", linewidth=1.6, label="Jets")
     lines = [rf"$N$ = {fmt_n(tot)}" + (rf", {n_out:.0f} outside $\pm${te[-1]:g} ns" if n_out else ""),
              rf"Mean {mean:+.3f} ns, RMS {rms:.3f} ns (within $\pm${te[-1]:g} ns)",
-             rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {far:.0f} ({far / tot:.2e})"]
-    fit = fit_gauss_core(n, te) if tag == "dijet" else None
-    if fit is not None:
-        lo, hi = fit["window"]
+             rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {fmt_n(far)} ({far / tot:.2e})"]
+    if ref_fit is not None:
+        lo3, hi3 = ref_fit["mu"] - 3 * ref_fit["sigma"], ref_fit["mu"] + 3 * ref_fit["sigma"]
+        for x3 in (lo3, hi3):
+            ax.axvline(x3, color="#377eb8", linestyle=":", linewidth=2,
+                       label=r"Dijet leading-jet $\mu \pm 3\sigma$" if x3 == lo3 else None)
+        # jets outside the window: bins whose centre is outside, and the flow (the window edges fall inside 0.1 ns bins)
+        out3 = n[(tc < lo3) | (tc > hi3)].sum() + n_out
+        lines += [rf"Dijet leading-jet fit $\mu \pm 3\sigma$ (full $p_{{T}}$ range): [{lo3:+.2f}, {hi3:+.2f}] ns",
+                  rf"Outside: {fmt_n(out3)} ({out3 / tot:.2e}); below {fmt_n(n[tc < lo3].sum() + hf[0])}, "
+                  rf"above {fmt_n(n[tc > hi3].sum() + hf[-1])}"]
+        if zoom is None:
+            print(f"  T5proj {r_tag} all: outside the dijet leading-jet mu +- 3 sigma [{lo3:+.3f}, {hi3:+.3f}]: "
+                  f"{out3:.0f} / {tot:.0f} ({out3 / tot:.4f})")
+    head = [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, cut, "dijet")[1:]
+    ax.text(0.97, 0.97, "\n".join(head + lines), transform=ax.transAxes, ha="right", va="top", fontsize=12,
+            linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3))
+    ax.legend(loc="upper left", fontsize=13, frameon=False)
+    if zoom is None:
+        ax.set_yscale("log")
+        ax.set_xlim(te[0], te[-1])
+        ax.set_ylim(0.5, dens.max() * 3e4)                              # peak below the text
+    else:
+        ax.set_xlim(-zoom, zoom)
+        ax.set_ylim(0, dens.max() * 1.6)
+    ax.set_xlabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    ax.set_ylabel("Jets / ns")
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
+    suffix = ("_leaddijet3sigma" if ref_fit is not None else "") + ("" if zoom is None else f"_zoom{zoom:g}")
+    save_fig(fig, out_dir / f"T5proj_{r_tag}_all{suffix}.png", save_pdf)
+    plt.close(fig)
+
+
+# Projections of the dijet leading jets (the sample the correction was fitted to): full pT range, pT windows, 20% classes
+LEAD_PT_WINDOWS = {"r02": ((14.25, 16), (16, 18), (18, 20), (20, 25), (25, 30), (30, 60)),
+                   "r03": ((21.5, 24), (24, 27), (27, 30), (30, 35), (35, 60))}
+
+
+def proj_stats(nf, te):
+    """Counts, mean, RMS, |t| > PROJ_FAR and the Gaussian core fit of a projection nf (t with flow)."""
+    n = nf[1:-1]
+    tc = 0.5 * (te[1:] + te[:-1])
+    st = {"n_flow": nf, "n": n, "tc": tc, "tot": nf.sum(), "out": nf[0] + nf[-1]}
+    st["mean"] = (n * tc).sum() / n.sum() if n.sum() else np.nan
+    st["rms"] = np.sqrt((n * tc ** 2).sum() / n.sum() - st["mean"] ** 2) if n.sum() else np.nan
+    st["far"] = n[np.abs(tc) > PROJ_FAR].sum() + st["out"]
+    st["fit"] = fit_gauss_core(n, te)
+    if st["fit"] is not None:
+        f = st["fit"]
+        st["out3"] = n[np.abs(tc - f["mu"]) > 3 * f["sigma"]].sum() + st["out"]
+    return st
+
+
+def draw_proj(st, te, head, path, runs, r_tag, lumi, zoom=None, save_pdf=False):
+    """One projection with its Gaussian core fit and mu +- 3 sigma: log over the whole axis (zoom None) or linear over
+    +-zoom ns."""
+    hep.style.use("ATLAS")
+    n, tc, tot = st["n"], st["tc"], st["tot"]
+    dens = n / np.diff(te)
+    fig, ax = plt.subplots(figsize=(10.5, 8))
+    ax.stairs(dens, te, color="black", linewidth=1.6, label="Leading jets")
+    lines = [rf"$N$ = {fmt_n(tot)}" + (rf", {st['out']:.0f} outside $\pm${te[-1]:g} ns" if st["out"] else ""),
+             rf"Mean {st['mean']:+.3f} ns, RMS {st['rms']:.3f} ns (within $\pm${te[-1]:g} ns)",
+             rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {st['far']:.0f} ({st['far'] / tot:.2e})"]
+    f = st["fit"]
+    if f is not None:
+        lo, hi = f["window"]
         xs = np.linspace(-PROJ_ZOOM * 2, PROJ_ZOOM * 2, 2000)
-        g = fit["a"] / (np.sqrt(2 * np.pi) * fit["sigma"]) * np.exp(-0.5 * ((xs - fit["mu"]) / fit["sigma"]) ** 2)   # per ns
+        g = f["a"] / (np.sqrt(2 * np.pi) * f["sigma"]) * np.exp(-0.5 * ((xs - f["mu"]) / f["sigma"]) ** 2)
         inwin = (xs >= lo) & (xs <= hi)
         ax.plot(xs[inwin], g[inwin], "-", color="#e41a1c", linewidth=2.2, label=rf"Gaussian fit ($\pm{PROJ_FIT_NSIG}\sigma$)")
         ax.plot(xs, np.where(inwin, np.nan, g), "--", color="#e41a1c", linewidth=1.4, label="Fit, extrapolated")
-        out3 = n[np.abs(tc - fit["mu"]) > 3 * fit["sigma"]].sum() + n_out
-        em, es = fit["err"][1], fit["err"][2]
-        lines += [rf"Fit: $\mu$ = {fit['mu']:+.3f} $\pm$ {em:.3f} ns, $\sigma$ = {fit['sigma']:.3f} $\pm$ {es:.3f} ns",
-                  rf"$\chi^2$/ndf = {fit['chi2']:.1f}/{fit['ndf']}, window [{lo:+.2f}, {hi:+.2f}] ns",
-                  rf"Outside $\mu \pm 3\sigma$: {out3:.0f} ({out3 / tot:.2e})"]
-        print(f"  T5proj {r_tag} {tag}: mu {fit['mu']:+.4f} +- {em:.4f}, sigma {fit['sigma']:.4f} +- {es:.4f} ns, "
-              f"chi2/ndf {fit['chi2']:.1f}/{fit['ndf']}, window [{lo:+.3f}, {hi:+.3f}], {fit['iter']} iterations, "
-              f"outside 3 sigma {out3:.0f} / {tot:.0f}")
-    elif tag == "dijet":
-        print(f"Warning: the Gaussian fit of the {r_tag} dijet projection failed")
-    title = {"dijet": "Every jet in dijet events", "all": "Every jet, every selected event"}[tag]
-    common = sel_lines(r_tag, cut, "dijet")
-    head = [rf"$\bf{{{title.replace(' ', chr(92) + ' ')},\ 0-60\%}}$"] + (common if tag == "dijet" else common[1:])
+        for sgn in (-1, 1):
+            ax.axvline(f["mu"] + sgn * 3 * f["sigma"], color="#377eb8", linestyle=":", linewidth=2,
+                       label=r"$\mu \pm 3\sigma$" if sgn < 0 else None)
+        lines += [rf"Fit: $\mu$ = {f['mu']:+.3f} $\pm$ {f['err'][1]:.3f} ns, $\sigma$ = {f['sigma']:.3f} $\pm$ {f['err'][2]:.3f} ns",
+                  rf"$\chi^2$/ndf = {f['chi2']:.1f}/{f['ndf']}, window [{lo:+.2f}, {hi:+.2f}] ns",
+                  rf"Outside $\mu \pm 3\sigma$ [{f['mu'] - 3 * f['sigma']:+.2f}, {f['mu'] + 3 * f['sigma']:+.2f}] ns: "
+                  rf"{st['out3']:.0f} ({st['out3'] / tot:.2e})"]
+    else:
+        lines.append("Gaussian fit failed")
     ax.text(0.97, 0.97, "\n".join(head + lines), transform=ax.transAxes, ha="right", va="top", fontsize=12,
-            linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3))
+            linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3), zorder=5)
     ax.legend(loc="upper left", fontsize=13, frameon=False)
     if zoom is None:
         ax.set_yscale("log")
@@ -733,11 +807,440 @@ def plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out_dir, zoom=None, save_p
     else:
         ax.set_xlim(-zoom, zoom)
         ax.set_ylim(0, dens.max() * 1.6)
-    ax.set_xlabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
-    ax.set_ylabel("Jets / ns")
+    ax.set_xlabel(r"Leading jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    ax.set_ylabel("Leading jets / ns")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
-    save_fig(fig, out_dir / f"T5proj_{r_tag}_{tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    save_fig(fig, path, save_pdf)
+    plt.close(fig)
+
+
+def draw_proj_panels(stats, labels, te, head, path, runs, r_tag, lumi, zoom=PROJ_ZOOM, save_pdf=False):
+    """The projections of draw_proj (linear, +-zoom ns) one per panel, in 1 row (up to 3 slices) or 2, plus a slot with
+    the selection text and the legend. Each panel: the slice, N, the Gaussian core fit and the fraction outside its
+    mu +- 3 sigma."""
+    hep.style.use("ATLAS")
+    n_sl = len(stats)
+    nrows = 1 if n_sl <= 3 else 2
+    ncols = int(np.ceil((n_sl + 1) / nrows))
+    fig, axs = plt.subplots(nrows, ncols, figsize=(5.6 * ncols, 5.6 * nrows + 0.8), squeeze=False)
+    handles = None
+    for k, ax in enumerate(axs.flat):
+        if k >= n_sl:
+            ax.axis("off")
+            continue
+        st = stats[k]
+        dens = st["n"] / np.diff(te)
+        ax.stairs(dens, te, color="black", linewidth=1.4, label="Leading jets")
+        lines = [labels[k], rf"$N$ = {fmt_n(st['tot'])}"]
+        f = st["fit"]
+        if f is not None:
+            lo, hi = f["window"]
+            xs = np.linspace(-zoom, zoom, 2000)
+            g = f["a"] / (np.sqrt(2 * np.pi) * f["sigma"]) * np.exp(-0.5 * ((xs - f["mu"]) / f["sigma"]) ** 2)
+            inwin = (xs >= lo) & (xs <= hi)
+            ax.plot(xs[inwin], g[inwin], "-", color="#e41a1c", linewidth=2, label=rf"Gaussian fit ($\pm{PROJ_FIT_NSIG}\sigma$)")
+            ax.plot(xs, np.where(inwin, np.nan, g), "--", color="#e41a1c", linewidth=1.3, label="Fit, extrapolated")
+            for sgn in (-1, 1):
+                ax.axvline(f["mu"] + sgn * 3 * f["sigma"], color="#377eb8", linestyle=":", linewidth=2,
+                           label=r"$\mu \pm 3\sigma$" if sgn < 0 else None)
+            lines += [rf"$\mu$ = {f['mu']:+.3f} $\pm$ {f['err'][1]:.3f} ns",
+                      rf"$\sigma$ = {f['sigma']:.3f} $\pm$ {f['err'][2]:.3f} ns",
+                      rf"$\chi^2$/ndf = {f['chi2']:.1f}/{f['ndf']}",
+                      rf"Outside $\mu \pm 3\sigma$: {st['out3'] / st['tot']:.3f}"]
+            if handles is None:
+                handles = ax.get_legend_handles_labels()
+        else:
+            lines.append("Gaussian fit failed")
+        ax.text(0.04, 0.96, "\n".join(lines), transform=ax.transAxes, ha="left", va="top", fontsize=13, linespacing=1.3,
+                bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=2), zorder=5)
+        ax.set_xlim(-zoom, zoom)
+        ax.set_ylim(0, dens.max() * 1.75)
+        ax.ticklabel_format(axis="y", style="plain")                     # no x10^n label under the header
+        if k % ncols == 0:
+            ax.set_ylabel("Leading jets / ns")
+        ax.set_xlabel(r"Leading jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]", fontsize=15)
+    header(axs[0, -1] if n_sl >= ncols else axs[0, n_sl - 1], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.07, right=0.98, bottom=0.1 if nrows == 2 else 0.17, top=0.93 if nrows == 2 else 0.88,
+                        wspace=0.28, hspace=0.32)
+    slot = axs.flat[n_sl]
+    if handles is not None:
+        slot.legend(*handles, loc="lower left", fontsize=15, frameon=False, borderaxespad=0)
+    fit_text_box(fig, slot, head, fs_max=20, top=0.95, bottom=0.42 if handles is not None else 0.0)
+    save_fig(fig, path, save_pdf)
+    plt.close(fig)
+
+
+def plot_fit_summary(rows, ref, xlabel, path, runs, r_tag, lumi, head, save_pdf=False):
+    """mu and sigma of the Gaussian core fits vs the slice variable (rows: dicts with lo, hi, fit), with the full-range
+    fit (ref) as a line and band; below, the mu +- 3 sigma window of each slice (a box over the slice, marker at mu) against
+    the full-range window (dashed lines)."""
+    hep.style.use("ATLAS")
+    fig = plt.figure(figsize=(10.5, 11))
+    gs = fig.add_gridspec(3, 1, height_ratios=(1, 1, 1), hspace=0.06)
+    axs = [fig.add_subplot(gs[i]) for i in range(3)]
+    ok = [r for r in rows if r["fit"] is not None]
+    xc = np.array([0.5 * (r["lo"] + r["hi"]) for r in ok])
+    xw = np.array([0.5 * (r["hi"] - r["lo"]) for r in ok])
+    rf = ref["fit"]
+    lo3_ref, hi3_ref = rf["mu"] - 3 * rf["sigma"], rf["mu"] + 3 * rf["sigma"]
+    for ax, key, ie, lab in ((axs[0], "mu", 1, r"$\mu$ [ns]"), (axs[1], "sigma", 2, r"$\sigma$ [ns]")):
+        y = np.array([r["fit"][key] for r in ok]); e = np.array([r["fit"]["err"][ie] for r in ok])
+        ax.errorbar(xc, y, xerr=xw, yerr=e, fmt="o", color="black", markersize=6, capsize=0, label="Slice fit")
+        ax.axhline(rf[key], color="#e41a1c", linewidth=1.8, label="Full range")
+        ax.axhspan(rf[key] - rf["err"][ie], rf[key] + rf["err"][ie], color="#e41a1c", alpha=0.2)
+        ax.set_ylabel(lab)
+        pad = max(0.05, 0.25 * (np.max(y + e) - np.min(y - e)))
+        ax.set_ylim(min(np.min(y - e), rf[key]) - pad, max(np.max(y + e), rf[key]) + 3 * pad)
+    # the mu +- 3 sigma window of each slice as a box over the slice, mu as a marker; the full-range window as lines
+    for k, r in enumerate(ok):
+        f = r["fit"]
+        axs[2].fill_between([r["lo"], r["hi"]], f["mu"] - 3 * f["sigma"], f["mu"] + 3 * f["sigma"], color="#377eb8",
+                            alpha=0.35, linewidth=0, label=r"Slice $\mu \pm 3\sigma$" if k == 0 else None)
+        axs[2].plot([r["lo"], r["hi"]], [f["mu"] - 3 * f["sigma"]] * 2, color="#377eb8", linewidth=1.5)
+        axs[2].plot([r["lo"], r["hi"]], [f["mu"] + 3 * f["sigma"]] * 2, color="#377eb8", linewidth=1.5)
+    axs[2].plot(xc, [r["fit"]["mu"] for r in ok], "o", color="black", markersize=5, label=r"Slice $\mu$")
+    axs[2].axhline(rf["mu"], color="#e41a1c", linewidth=1.5)
+    for k, y in enumerate((lo3_ref, hi3_ref)):
+        axs[2].axhline(y, color="#e41a1c", linestyle="--", linewidth=1.8, label=r"Full range $\mu \pm 3\sigma$" if k == 0 else None)
+    edges = np.r_[[r["fit"]["mu"] - 3 * r["fit"]["sigma"] for r in ok], [r["fit"]["mu"] + 3 * r["fit"]["sigma"] for r in ok],
+                  lo3_ref, hi3_ref]
+    span = edges.max() - edges.min()
+    axs[2].set_ylim(edges.min() - 0.15 * span, edges.max() + 0.45 * span)
+    axs[2].set_ylabel(r"$\mu \pm 3\sigma$ [ns]")
+    axs[2].legend(loc="upper right", fontsize=15, ncol=3, frameon=False)
+    for ax in axs:
+        ax.set_xlim(min(r["lo"] for r in rows), max(r["hi"] for r in rows))
+    for ax in axs[:2]:
+        ax.tick_params(labelbottom=False)
+    axs[2].set_xlabel(xlabel)
+    axs[0].legend(loc="upper right", fontsize=15, frameon=False)
+    axs[0].text(0.03, 0.95, "\n".join(head + [rf"Full range: $\mu \pm 3\sigma$ = [{lo3_ref:+.2f}, {hi3_ref:+.2f}] ns"]),
+                transform=axs[0].transAxes, ha="left", va="top", fontsize=15, linespacing=1.25)
+    header(axs[0], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.13, right=0.96, bottom=0.07, top=0.95)
+    save_fig(fig, path, save_pdf)
+    plt.close(fig)
+
+
+def plot_lead_dijet_proj(inputs, r_tag, cut, runs, lumi, out_dir, save_pdf=False):
+    """Projections of the dijet leading jets' corrected time (h2LeadTimeCorrPt_<r>_dijet): the full pT range (log and
+    +-10 ns), each pT window of LEAD_PT_WINDOWS and each 20% class (+-10 ns), each with a Gaussian core fit; summaries of
+    mu and sigma vs pT and vs centrality; panel versions of the slices; and T4proj_<r>_dijet_fits.csv, all in out_dir.
+    Returns the full-range fit."""
+    key = ("lead", r_tag, "dijet")
+    if key not in inputs.get("tpt", {}):
+        return None
+    xe, te = inputs["layout"]["tpt_edges"][key]
+    h = inputs["tpt"][key]                                               # (class, pT + 2, t + 2)
+    common = sel_lines(r_tag, cut, "dijet")
+    title = lambda extra: [rf"$\bf{{Dijet,\ leading\ jet,\ {extra}}}$"] + common
+
+    full = proj_stats(h.sum(axis=(0, 1)), te)
+    for zoom in (None, PROJ_ZOOM):
+        draw_proj(full, te, title(r"0-60\%"), out_dir / f"T4proj_{r_tag}_dijet{'' if zoom is None else f'_zoom{zoom:g}'}.png",
+                  runs, r_tag, lumi, zoom=zoom, save_pdf=save_pdf)
+    rows = [{"slice": "all", "lo": "", "hi": "", **full}]
+
+    pt_rows = []
+    for lo, hi in LEAD_PT_WINDOWS[r_tag]:
+        sel = (xe[:-1] >= lo - 1e-9) & (xe[1:] <= hi + 1e-9)            # pT bins inside the window (edges coincide)
+        st = proj_stats(h.sum(axis=0)[1:-1][sel].sum(axis=0), te)
+        pt_rows.append({"slice": "pt", "lo": lo, "hi": hi, **st})
+        txt = rf"0-60\%,\ {lo:g} \leq p_{{T}} < {hi:g}\ GeV"
+        draw_proj(st, te, title(txt), out_dir / f"T4proj_{r_tag}_dijet_pt_{edge_tag(lo)}_{edge_tag(hi)}.png",
+                  runs, r_tag, lumi, zoom=PROJ_ZOOM, save_pdf=save_pdf)
+    cent_rows = []
+    for k, (lo, hi) in enumerate(CLASSES20):
+        st = proj_stats(h[k].sum(axis=0), te)
+        cent_rows.append({"slice": "cent", "lo": lo, "hi": hi, **st})
+        draw_proj(st, te, title(rf"{lo}-{hi}\%"), out_dir / f"T4proj_{r_tag}_dijet_cent_{lo}_{hi}.png",
+                  runs, r_tag, lumi, zoom=PROJ_ZOOM, save_pdf=save_pdf)
+    rows += pt_rows + cent_rows
+    panel_head = [r"$\bf{Dijet,\ leading\ jet}$"] + common
+    draw_proj_panels(pt_rows, [rf"${lo:g} \leq p_{{T}} < {hi:g}$ GeV" for lo, hi in LEAD_PT_WINDOWS[r_tag]], te,
+                     panel_head + ["0-60%"], out_dir / f"T4proj_{r_tag}_dijet_pt_panels.png", runs, r_tag, lumi,
+                     save_pdf=save_pdf)
+    draw_proj_panels(cent_rows, [f"{lo}-{hi}%" for lo, hi in CLASSES20], te, panel_head + [r"All leading-jet $p_{T}$"],
+                     out_dir / f"T4proj_{r_tag}_dijet_cent_panels.png", runs, r_tag, lumi, save_pdf=save_pdf)
+
+    if full["fit"] is not None:
+        head = [r"$\bf{Dijet,\ leading\ jet}$", common[0]]
+        plot_fit_summary(pt_rows, full, r"Leading jet raw $p_{T}$ [GeV]", out_dir / f"T4proj_{r_tag}_dijet_fits_vs_pt.png",
+                         runs, r_tag, lumi, head + [r"0-60%"], save_pdf)
+        plot_fit_summary(cent_rows, full, "Centrality [%]", out_dir / f"T4proj_{r_tag}_dijet_fits_vs_cent.png",
+                         runs, r_tag, lumi, head + [r"All leading-jet $p_{T}$"], save_pdf)
+
+    # table: every slice, with the mu +- 3 sigma edges and their shift against the full range
+    rf = full["fit"]
+    out = []
+    for r in rows:
+        f = r["fit"]
+        row = {"radius": r_tag, "slice": r["slice"], "lo": f"{r['lo']:g}" if r["lo"] != "" else "", "hi": f"{r['hi']:g}" if r["hi"] != "" else "",
+               "n": f"{r['tot']:.0f}", "mean": f"{r['mean']:.4f}", "rms": f"{r['rms']:.4f}"}
+        if f is not None:
+            lo3, hi3 = f["mu"] - 3 * f["sigma"], f["mu"] + 3 * f["sigma"]
+            row.update({"mu": f"{f['mu']:.4f}", "mu_err": f"{f['err'][1]:.4f}", "sigma": f"{f['sigma']:.4f}",
+                        "sigma_err": f"{f['err'][2]:.4f}", "chi2": f"{f['chi2']:.1f}", "ndf": f["ndf"],
+                        "mu_minus_3sigma": f"{lo3:.4f}", "mu_plus_3sigma": f"{hi3:.4f}",
+                        "shift_lo_vs_all": f"{lo3 - (rf['mu'] - 3 * rf['sigma']):.4f}" if rf else "",
+                        "shift_hi_vs_all": f"{hi3 - (rf['mu'] + 3 * rf['sigma']):.4f}" if rf else "",
+                        "frac_outside_3sigma": f"{r['out3'] / r['tot']:.5f}"})
+        out.append(row)
+        if f is not None:
+            print(f"  lead dijet {r_tag} {r['slice']:4s} {str(r['lo']):>5s}-{str(r['hi']):<5s} N {r['tot']:7.0f}: mu {f['mu']:+.3f}+-{f['err'][1]:.3f} "
+                  f"sigma {f['sigma']:.3f}+-{f['err'][2]:.3f} chi2/ndf {f['chi2']:.0f}/{f['ndf']} 3sigma [{f['mu'] - 3 * f['sigma']:+.3f}, {f['mu'] + 3 * f['sigma']:+.3f}]")
+        else:
+            print(f"  lead dijet {r_tag} {r['slice']} {r['lo']}-{r['hi']}: fit failed (N {r['tot']:.0f})")
+    keys = list(dict.fromkeys(k for row in out for k in row))
+    for row in out:
+        for k in keys:
+            row.setdefault(k, "")
+    write_csv([{k: row[k] for k in keys} for row in out], out_dir / f"T4proj_{r_tag}_dijet_fits.csv")
+    return full["fit"]
+
+
+CUT_PT_MAX = 150                                           # [GeV] pT axis of the cut-effect plot (jets above counted in the text)
+
+
+def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, save_pdf=False):
+    """Effect of a single timing window, the dijet leading-jet full-range fit's mu +- nsig sigma, on every jet of every
+    selected event (h2JetTimeCorrPt_<r>_all, 0-60%): the raw pT spectrum before and after the cut, and the fraction
+    kept per pT bin (binomial errors). Jets count as inside when their t bin centre is inside the window (the window
+    edges fall inside 0.1 ns bins, so the edges are good to +-0.05 ns). pT bins: PT_PLOT_EDGES from 7 GeV."""
+    key = ("jet", r_tag, "all")
+    if key not in inputs.get("tpt", {}):
+        return
+    hep.style.use("ATLAS")
+    xe, te = inputs["layout"]["tpt_edges"][key]
+    hf = inputs["tpt"][key].sum(axis=0)                                  # (pT + 2, t + 2)
+    tc = 0.5 * (te[1:] + te[:-1])
+    lo_t, hi_t = fit["mu"] - nsig * fit["sigma"], fit["mu"] + nsig * fit["sigma"]
+    inside = np.r_[False, (tc >= lo_t) & (tc <= hi_t), False]             # t flow bins are outside
+    n_all1 = hf[1:-1].sum(axis=1)                                        # per 1 GeV pT bin, every t (flow included)
+    n_in1 = hf[1:-1][:, inside].sum(axis=1)
+    edges = np.array([e for e in PT_PLOT_EDGES if e >= xe[0]], dtype=float)
+    idx = np.searchsorted(xe, edges[:-1] - 1e-9)
+    n_all = np.add.reduceat(n_all1, idx)
+    n_in = np.add.reduceat(n_in1, idx)
+    w = np.diff(edges)
+    cen = 0.5 * (edges[1:] + edges[:-1])
+    tot_all, tot_in = hf.sum(), hf[:, inside].sum()
+    above = n_all1[xe[:-1] >= CUT_PT_MAX].sum() + hf[-1].sum()
+    with np.errstate(invalid="ignore", divide="ignore"):
+        frac = n_in / n_all
+        efrac = np.sqrt(frac * (1 - frac) / n_all)
+
+    fig = plt.figure(figsize=(11, 10))
+    gs = fig.add_gridspec(2, 1, height_ratios=(3, 1.3), hspace=0.05)
+    ax, axr = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+    gap_steps(ax, n_all / w, edges, color="black", linewidth=2.2, label=f"Every jet: {fmt_n(tot_all)}")
+    gap_steps(ax, n_in / w, edges, color="#e41a1c", linewidth=2.2,
+              label=rf"$|t_{{\mathrm{{corr}}}} - \mu| \leq {nsig}\sigma$: {fmt_n(tot_in)} ({tot_in / tot_all:.3f})")
+    ok = n_all > 0
+    axr.errorbar(cen[ok], frac[ok], xerr=w[ok] / 2, yerr=efrac[ok], fmt="o", color="#e41a1c", markersize=3.5, capsize=0)
+    axr.axhline(1, color="gray", linestyle="--")
+    ax.set_yscale("log")
+    ax.yaxis.set_major_locator(LogLocator(base=10.0, numticks=20))
+    ax.yaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10), numticks=50))
+    ax.yaxis.set_minor_formatter(NullFormatter())
+    pos = (n_all > 0) & (cen < CUT_PT_MAX)
+    ax.set_ylim(0.3 * np.min(n_in[pos & (n_in > 0)] / w[pos & (n_in > 0)]), 100 * np.max(n_all / w))
+    for a in (ax, axr):
+        a.set_xlim(edges[0], CUT_PT_MAX)
+    ax.tick_params(labelbottom=False)
+    ax.set_ylabel(r"Jets / GeV")
+    lines = [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:] + [
+        rf"Timing window: dijet leading-jet fit $\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}, {hi_t:+.2f}] ns",
+        rf"($\mu$ = {fit['mu']:+.3f} ns, $\sigma$ = {fit['sigma']:.3f} ns, full $p_{{T}}$ range, 0-60%)"] + (
+        [f"{above:.0f} jets above {CUT_PT_MAX} GeV, not shown"] if above else [])
+    t = ax.text(0.97, 0.97, "\n".join(lines), transform=ax.transAxes, ha="right", va="top", fontsize=14, linespacing=1.3)
+    ax.legend(loc="upper right", bbox_to_anchor=(0.985, axes_bottom(fig, ax, t) - 0.01), fontsize=15, frameon=False)
+    header(ax, runs, r_tag, lumi)
+    axr.set_ylim(0, 1.1)
+    axr.set_xlabel(r"Jet raw $p_{T}$ [GeV]")
+    axr.set_ylabel("Kept fraction", fontsize=16)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.09, top=0.95)
+    save_fig(fig, out_dir / f"C1_jetpt_{nsig}sigma_{r_tag}.png", save_pdf)
+    plt.close(fig)
+    show = [(7, 10), (10, 15), (15, 20), (20, 30), (30, 40), (40, 60), (60, 150)]
+    print(f"  C1 {r_tag}: window [{lo_t:+.3f}, {hi_t:+.3f}] ns, kept {tot_in:.0f} / {tot_all:.0f} = {tot_in / tot_all:.4f}; kept fraction: "
+          + ", ".join(f"{a}-{b} GeV {n_in1[(xe[:-1] >= a) & (xe[:-1] < b)].sum() / max(n_all1[(xe[:-1] >= a) & (xe[:-1] < b)].sum(), 1):.3f}"
+                      for a, b in show))
+
+
+CUT_LOG_BIN = 2.5                                          # [ns] t bins of the log (whole-axis) C2 plot
+CUT_PT_CLASSES = ((7, 10), (10, 15), (15, 20), (20, 30), (30, 40), (40, 60), (60, 150))   # [GeV]
+
+
+def cut_tdist_classes(inputs, r_tag, fit, nsig, zoom):
+    """Per CUT_PT_CLASSES class of h2JetTimeCorrPt_<r>_all (0-60%): (lo, hi, N with flow, fraction outside mu +- nsig
+    sigma, counts per ns, t edges). zoom None: CUT_LOG_BIN wide t bins (the sparse high-pT classes would be noise in the
+    hist bins); otherwise the hist bins. None if the hist is missing."""
+    key = ("jet", r_tag, "all")
+    if key not in inputs.get("tpt", {}):
+        return None
+    xe, te = inputs["layout"]["tpt_edges"][key]
+    hf = inputs["tpt"][key].sum(axis=0)                                  # (pT + 2, t + 2)
+    tc = 0.5 * (te[1:] + te[:-1])
+    lo_t, hi_t = fit["mu"] - nsig * fit["sigma"], fit["mu"] + nsig * fit["sigma"]
+    inside = np.r_[False, (tc >= lo_t) & (tc <= hi_t), False]
+    rows = []
+    for lo, hi in CUT_PT_CLASSES:
+        sel = (xe[:-1] >= lo - 1e-9) & (xe[1:] <= hi + 1e-9)
+        nf = hf[1:-1][sel].sum(axis=0)                                   # t with flow
+        tot = nf.sum()
+        if tot <= 0:
+            continue
+        nd, ted = merge_t(nf[1:-1], te, CUT_LOG_BIN) if zoom is None else (nf[1:-1], te)
+        rows.append((lo, hi, tot, 1 - nf[inside].sum() / tot, nd / np.diff(ted), ted))
+    return rows, (lo_t, hi_t), te
+
+
+def log_ylim(d, frac):
+    """(lo, hi) of a log y axis with the lowest nonzero point near the bottom and the highest at frac of the height."""
+    lo_y = 10 ** np.floor(np.log10(d[d > 0].min())) * 0.5
+    return lo_y, lo_y * (d.max() / lo_y) ** (1 / frac)
+
+
+def cut_tdist_text(r_tag, nsig):
+    return [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:] + [
+        rf"Window: dijet leading-jet fit $\mu \pm {nsig}\sigma$ (full $p_{{T}}$ range)",
+        "Counts per ns; outside = fraction beyond the window"]
+
+
+T_LABEL = r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]"
+
+
+def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, save_pdf=False):
+    """The corrected time of every jet of every selected event (h2JetTimeCorrPt_<r>_all, 0-60%) in the raw pT classes
+    CUT_PT_CLASSES as counts per ns (dN/dt, not normalized to the class total), overlaid (light: low pT, dark: high pT),
+    with the single timing window of C1 (the dijet leading-jet full-range fit's mu +- nsig sigma) and the fraction of each
+    class outside it. Log y, since the classes differ by many decades. zoom None: the whole axis in CUT_LOG_BIN wide t
+    bins; zoom z: +-z ns in the hist bins. The legend is upper left, the text upper right."""
+    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom)
+    if got is None:
+        return
+    rows, (lo_t, hi_t), te = got
+    hep.style.use("ATLAS")
+    cols = plt.get_cmap("viridis")(np.linspace(0.85, 0.0, len(CUT_PT_CLASSES)))
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    for k, (lo, hi, tot, out_frac, d, ted) in enumerate(rows):
+        ax.stairs(np.where(d > 0, d, np.nan), ted, color=cols[k], linewidth=1.8,
+                  label=rf"${lo} \leq p_{{T}} < {hi}$ GeV: $N$ = {fmt_n(tot)}, outside {out_frac:.3f}")
+    for k, x3 in enumerate((lo_t, hi_t)):
+        ax.axvline(x3, color="#e41a1c", linestyle="--", linewidth=1.8,
+                   label=rf"$\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}, {hi_t:+.2f}] ns" if k == 0 else None)
+    t = ax.text(0.97, 0.97, "\n".join(cut_tdist_text(r_tag, nsig)), transform=ax.transAxes, ha="right", va="top",
+                fontsize=12, linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3), zorder=5)
+    leg = ax.legend(loc="upper left", fontsize=11, frameon=True, facecolor="white", framealpha=0.8, edgecolor="none")
+    leg.set_zorder(5)
+    ax.set_yscale("log")
+    ax.set_xlim(*((te[0], te[-1]) if zoom is None else (-zoom, zoom)))
+    ax.set_ylim(*log_ylim(np.concatenate([r[4] for r in rows]), axes_bottom(fig, ax, t) - 0.03))   # peak just below the text
+    ax.set_xlabel(T_LABEL)
+    ax.set_ylabel(r"$dN/dt$ [ns$^{-1}$]")
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
+    save_fig(fig, out_dir / f"C2_jett_{nsig}sigma_{r_tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    plt.close(fig)
+    if zoom is None:
+        print(f"  C2 {r_tag}: fraction outside [{lo_t:+.3f}, {hi_t:+.3f}] ns: " + ", ".join(f"{lo}-{hi} GeV {f:.3f} (N {n:.0f})" for lo, hi, n, f, *_ in rows))
+
+
+def split_commas(line):
+    """Pieces of line split at ", " outside $...$ math; each but the last keeps its comma."""
+    parts, cur, in_math = [], "", False
+    i = 0
+    while i < len(line):
+        c = line[i]
+        if c == "$":
+            in_math = not in_math
+        if not in_math and line.startswith(", ", i):
+            parts.append(cur + ",")
+            cur, i = "", i + 2
+            continue
+        cur += c
+        i += 1
+    return parts + [cur]
+
+
+def fit_text_box(fig, ax, lines, fs_max=24, fs_min=10, top=0.98, bottom=0.0, linespacing=1.35):
+    """Write lines into the (hidden) axes ax at the largest font size that fits its width and height, wrapping long lines
+    at commas (continuations indented), between top and bottom (axes fractions). Call after the figure layout is
+    final."""
+    ax.axis("off")
+    rend = fig.canvas.get_renderer()
+    box = ax.get_window_extent(rend)
+
+    def width(txt, fs):
+        t = ax.text(0, 0, txt, fontsize=fs, transform=ax.transAxes)
+        w = t.get_window_extent(rend).width
+        t.remove()
+        return w
+
+    for fs in range(fs_max, fs_min - 1, -1):
+        out = []
+        for line in lines:
+            parts = split_commas(line)
+            cur = parts[0]
+            for p_ in parts[1:]:
+                if width(cur + " " + p_, fs) <= box.width:
+                    cur = cur + " " + p_
+                else:
+                    out.append(cur)
+                    cur = "    " + p_
+            out.append(cur)
+        if max(width(o, fs) for o in out) > box.width:
+            continue
+        t = ax.text(0.0, top, "\n".join(out), transform=ax.transAxes, ha="left", va="top", fontsize=fs,
+                    linespacing=linespacing)
+        bb = t.get_window_extent(rend)
+        if bb.height <= (top - bottom) * box.height or fs == fs_min:
+            return t
+        t.remove()
+
+
+def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, save_pdf=False):
+    """C2 with one panel per pT class: 2 rows (4 + 3), each panel with its own log y range, the window, N and the
+    fraction outside; the last slot holds the selection text. Same binning as plot_cut_tdist."""
+    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom)
+    if got is None:
+        return
+    rows, (lo_t, hi_t), te = got
+    hep.style.use("ATLAS")
+    cols = plt.get_cmap("viridis")(np.linspace(0.85, 0.0, len(CUT_PT_CLASSES)))
+    fig, axs = plt.subplots(2, 4, figsize=(22, 10.5), sharex=True)
+    for k, ax in enumerate(axs.flat):
+        if k >= len(rows):
+            ax.axis("off")
+            continue
+        lo, hi, tot, out_frac, d, ted = rows[k]
+        ax.stairs(np.where(d > 0, d, np.nan), ted, color=cols[k], linewidth=1.8)
+        for x3 in (lo_t, hi_t):
+            ax.axvline(x3, color="#e41a1c", linestyle="--", linewidth=1.5)
+        ax.set_yscale("log")
+        ax.set_xlim(*((te[0], te[-1]) if zoom is None else (-zoom, zoom)))
+        vis = d if zoom is None else d[(ted[1:] > -zoom) & (ted[:-1] < zoom)]   # y range from the visible bins
+        ax.set_ylim(*log_ylim(vis, 0.72))
+        ax.text(0.04, 0.96, rf"${lo} \leq p_{{T}} < {hi}$ GeV" + f"\n$N$ = {fmt_n(tot)}\noutside {out_frac:.3f}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=14, linespacing=1.3)
+        if k % 4 == 0:
+            ax.set_ylabel(r"$dN/dt$ [ns$^{-1}$]")
+        if k >= len(rows) - 4:                                           # bottom of each column
+            ax.set_xlabel(T_LABEL, fontsize=16)
+            ax.xaxis.set_tick_params(labelbottom=True)
+    header(axs[0, -1], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
+    if len(rows) < axs.size:                                             # selection text filling the empty slot
+        fit_text_box(fig, axs.flat[len(rows)], [
+            r"$\bf{Every\ jet,\ every\ selected\ event}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
+            "Window (dashed): dijet leading-jet fit",
+            rf"$\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}," + "\u00a0" + f"{hi_t:+.2f}] ns",          # no-break space: no wrap there
+            rf"(full $p_{{T}}$ range)",
+            "Counts per ns",
+            "Outside = fraction beyond the window"], top=0.88)
+    save_fig(fig, out_dir / f"C2_jett_{nsig}sigma_{r_tag}_panels{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
     plt.close(fig)
 
 
@@ -798,7 +1301,16 @@ def fmt_mean(m, e):
 
 
 def fmt_n(n):
-    return f"{n / 1e6:.2f} M" if n >= 1e6 else (f"{n / 1e3:.1f} k" if n >= 1e3 else f"{n:.0f}")
+    """Counts: every digit below 1000, otherwise 3 significant figures with k, M or B (5578 -> 5.58 k,
+    2873552053 -> 2.87 B)."""
+    n = float(n)
+    if round(n) < 1000:
+        return f"{n:.0f}"
+    n = float(f"{n:.3g}")                                               # round first, so 999.6 k becomes 1.00 M
+    for div, unit in ((1e9, "B"), (1e6, "M"), (1e3, "k")):
+        if n >= div:
+            v = n / div
+            return f"{v:.{max(0, 2 - int(np.floor(np.log10(v))))}f} {unit}"
 
 
 def axes_bottom(fig, ax, artist):
@@ -1018,7 +1530,7 @@ def write_csv(rows, path):
 def main():
     parser = argparse.ArgumentParser(description="Leading-jet checks in the clean dijet sample: jet pT tail and OHCal "
                                                  "fraction (Jet-Dijet output with the dijet timing hists).")
-    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26-v2/test.list"),
+    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26-v3/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
                         help="List of Event QA ROOT files named <run>.root with hLuminosity (default: %(default)s)")
@@ -1101,9 +1613,18 @@ def main():
                     plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", x_max=TPT_MAX, save_pdf=args.save_pdf)
                     plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", x_max=TPT_ZOOM,
                              suffix=f"_zoom{TPT_ZOOM:g}", save_pdf=args.save_pdf)
-        for tag in ("dijet", "all"):
+        pdir = out / "timing" / "projections"
+        lead_fit = plot_lead_dijet_proj(inputs, r_tag, cut, runs, lumi, pdir / "lead_dijet", save_pdf=args.save_pdf)
+        if lead_fit is not None:
+            plot_cut_effect(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", save_pdf=args.save_pdf)
             for zoom in (None, PROJ_ZOOM):
-                plot_t5_proj(inputs, r_tag, cut, tag, runs, lumi, out / "timing" / "projections", zoom=zoom, save_pdf=args.save_pdf)
+                plot_cut_tdist(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
+                plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
+        for zoom in (None, PROJ_ZOOM):                                   # every jet; with the dijet leading-jet window
+            plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / "all_jets", zoom=zoom, save_pdf=args.save_pdf)
+            if lead_fit is not None:
+                plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / "all_jets", zoom=zoom, ref_fit=lead_fit,
+                             save_pdf=args.save_pdf)
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
