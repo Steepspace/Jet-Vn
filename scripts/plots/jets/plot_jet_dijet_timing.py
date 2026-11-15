@@ -46,6 +46,9 @@ This script makes:
    timing window (the dijet leading-jet full-range fit's mu +- 3 sigma), with the fraction kept per pT bin;
    timing/cut/C2_jett_3sigma_<r>[_panels][_zoom10]: the corrected time of those jets per raw pT class (counts per ns,
    overlaid, or one class per panel) with the same window and the fraction of each class outside it.
+   timing/cut/C3_x_<pt40_60|pt60>_3sigma_<r>: the OHCal fraction x of the C1 jets at 40-60 GeV and above 60 GeV (all or
+   nearly all leading jets of their event, so taken from the inclusive timing grid and its corrected hists), all and
+   split by the same window.
    With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
    (files/calib/timing_dijet_fit_iternf.csv).
 """
@@ -1078,7 +1081,85 @@ def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, save_pdf=Fa
                       for a, b in show))
 
 
-CUT_LOG_BIN = 2.5                                          # [ns] t bins of the log (whole-axis) C2 plot
+CUT_X_PT_RANGES = ((40, 60), (60, None))                   # [GeV] raw pT ranges of C3 (None: no upper edge)
+CUT_X_REBIN = 4                                            # x bins of C3 merged (0.025 -> 0.1: few jets)
+
+
+def plot_cut_x_highpt(inputs, r_tag, fit, runs, lumi, out_dir, pt_lo, pt_hi=None, nsig=3, save_pdf=False):
+    """C3: OHCal fraction x of the C1 jets with pt_lo <= raw pT < pt_hi (None: no upper edge), all and split by the same
+    single timing window (dijet leading-jet fit mu +- nsig sigma), counts per bin, 0-60%. Every jet above 60 GeV, and
+    nearly every one at 40-60 GeV, is the leading jet of its event (the cut is far below), so they are taken as the
+    inclusive leading jets of the pT_lead bins in the range: x from the timing grid (every t), the time from its
+    corrected hists (t - t0 - f(x), |t| < 25 ns; jets outside that range are outside the window). Inside as in C1: t
+    bin centre inside the window. The edges must be pT_lead bin edges. The C1 count in the range is printed for
+    comparison (the difference: jets that are not the leading jet)."""
+    key = (r_tag, "incl")
+    if key not in inputs.get("tx_corr", {}):
+        return
+    hep.style.use("ATLAS")
+    le = inputs["layout"]["lead_edges"][r_tag]
+    il = [i for i in range(len(le) - 1) if le[i] >= pt_lo and (pt_hi is None or le[i + 1] <= pt_hi)]
+    if not il:
+        return
+    tag = f"pt{pt_lo:g}_{pt_hi:g}" if pt_hi is not None else f"pt{pt_lo:g}"
+    n_c1 = None
+    ckey = ("jet", r_tag, "all")
+    if ckey in inputs.get("tpt", {}):
+        pe = np.asarray(inputs["layout"]["tpt_edges"][ckey][0])
+        hp = inputs["tpt"][ckey].sum(axis=0).sum(axis=1)                  # (pT + 2), every t
+        sel_pt = (pe[:-1] >= pt_lo) & ((pe[:-1] < pt_hi) if pt_hi is not None else True)
+        n_c1 = hp[1:-1][sel_pt].sum() + (hp[-1] if pt_hi is None else 0)
+    xe = np.asarray(inputs["layout"]["x_edges"])
+    te = np.asarray(inputs["layout"]["t_edges"])
+    tc = 0.5 * (te[1:] + te[:-1])
+    lo_t, hi_t = fit["mu"] - nsig * fit["sigma"], fit["mu"] + nsig * fit["sigma"]
+    inside = (tc >= lo_t) & (tc <= hi_t)
+    g = inputs["grids"][key].sum(axis=0, dtype=np.float64)                # (cent, lead, x), every t, all runs
+    txc = inputs["tx_corr"][key].astype(np.float64)                       # (cent, lead, x, t), |t| < 25 ns
+    n_all = rebin(g[:, il].sum(axis=(0, 1)), CUT_X_REBIN)
+    n_in = rebin(txc[:, il][..., inside].sum(axis=(0, 1, 3)), CUT_X_REBIN)
+    n_out = n_all - n_in
+    xr = xe[::CUT_X_REBIN]
+    flow = inputs["xflow"].get(key, 0)
+    per_bin = [(le[i], le[i + 1], g[:, i].sum(), txc[:, i][..., inside].sum()) for i in il]
+    per_cent = [(c, g[k][il].sum(), txc[k][il][..., inside].sum()) for k, c in enumerate(inputs["layout"]["cent_classes"])]
+    tot, tin = n_all.sum(), n_in.sum()
+
+    fig, ax = plt.subplots(figsize=(11, 9))
+    gap_steps(ax, n_all, xr, color="black", linewidth=2.5, label=f"All: {tot:.0f}")
+    gap_steps(ax, n_out, xr, color="#377eb8", linewidth=2.2, linestyle="--",
+              label=rf"$|t_{{\mathrm{{corr}}}} - \mu| > {nsig}\sigma$ (cut): {n_out.sum():.0f}")
+    gap_steps(ax, n_in, xr, color="#e41a1c", linewidth=2.5,
+              label=rf"$|t_{{\mathrm{{corr}}}} - \mu| \leq {nsig}\sigma$ (kept): {tin:.0f}")
+    ax.set_xlim(xe[0], xe[-1])
+    ax.set_ylim(0, max(n_all.max(), 1) * 1.1)
+    ax.set_xlabel(r"Jet OHCal energy fraction $x$")
+    ax.set_ylabel(f"Jets / {xr[1] - xr[0]:g}")
+    # the jets sit at x ~ 0 and x ~ 1: the selection text and the legend go in the middle, over the gap between them
+    head_rng = (rf"\geq\ {pt_lo:g}\ GeV" if pt_hi is None else rf"\ {pt_lo:g}-{pt_hi:g}\ GeV")
+    lines = [rf"$\bf{{Leading\ jets,\ raw\ p_{{T}}{head_rng}}}$",
+             "0–60%" + (f", {n_c1 - tot:.0f} more jets in range not leading (not shown)"
+                        if n_c1 is not None and n_c1 > tot else ""),
+             r"$|z| < 10$ cm & MB, Good Calo-Cent", "Iterative No Flow",
+             rf"Jets: $|\eta| < {RADII[r_tag]['eta_max']:g}$, $E > 0$, raw $p_{{T}} \geq {JET_PT_MIN}$ GeV",
+             rf"Window: $\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}, {hi_t:+.2f}] ns"]
+    if len(per_bin) > 1:
+        lines.append("Kept / all: " + ", ".join(f"{a:g}–{b:g} GeV {ni:.0f}/{na:.0f}" for a, b, na, ni in per_bin))
+    lines.append("Kept / all: " + ", ".join(f"{c[0]}–{c[1]}% {ni:.0f}/{na:.0f}" for c, na, ni in per_cent))
+    t = ax.text(0.5, 0.97, "\n".join(lines), transform=ax.transAxes, ha="center", va="top", fontsize=17,
+                linespacing=1.3)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, axes_bottom(fig, ax, t) - 0.01), fontsize=18, frameon=False)
+    fit_ylim(fig, ax, type("E", (), {"xe": xr})(), [n_all], [t, ax.get_legend()])
+    header(ax, runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.11, right=0.96, bottom=0.1, top=0.94)
+    save_fig(fig, out_dir / f"C3_x_{tag}_{nsig}sigma_{r_tag}.png", save_pdf)
+    plt.close(fig)
+    print(f"  C3 {r_tag} {tag}: leading jets {tot:.0f} (C1 every jet {n_c1}; x outside the axis in the whole sample: {flow:.0f}), kept {tin:.0f}; "
+          f"x >= 0.9: every {n_all[xr[:-1] >= 0.9 - 1e-9].sum():.0f}, kept {n_in[xr[:-1] >= 0.9 - 1e-9].sum():.0f}; "
+          f"x < 0.1: every {n_all[xr[1:] <= 0.1 + 1e-9].sum():.0f}, kept {n_in[xr[1:] <= 0.1 + 1e-9].sum():.0f}")
+
+
+CUT_LOG_BIN = 2.5                                         # [ns] t bins of the log (whole-axis) C2 plot
 CUT_PT_CLASSES = ((7, 10), (10, 15), (15, 20), (20, 30), (30, 40), (40, 60), (60, 150))   # [GeV]
 
 
@@ -1671,6 +1752,9 @@ def main():
         lead_fit = plot_lead_dijet_proj(inputs, r_tag, cut, runs, lumi, pdir / "lead_dijet", save_pdf=args.save_pdf)
         if lead_fit is not None:
             plot_cut_effect(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", save_pdf=args.save_pdf)
+            for pt_lo, pt_hi in CUT_X_PT_RANGES:
+                plot_cut_x_highpt(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", pt_lo, pt_hi,
+                                  save_pdf=args.save_pdf)
             for zoom in (None, PROJ_ZOOM):
                 plot_cut_tdist(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
                 plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
