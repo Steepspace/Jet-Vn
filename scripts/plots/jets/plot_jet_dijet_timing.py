@@ -18,7 +18,11 @@ This script makes:
 2. ohcal_frac/: the OHCal fraction x of the leading jet (the x projection of the timing hists, every filled jet), as
    unit-area shapes, all pT_lead:
    - X1_cent20_<r>: inclusive (left) and dijet (right), the three 20% classes, ratio to 0-60%;
+   - X4_ptlead/X4_cent20_<r>_incl_ptlead<a>_<b>: the inclusive panel of X1 per pT_lead bin (bins from
+     --merge-lead-above up merged into one), ratio to 0-60% of the same bin;
    - X2_runs_<r>: inclusive (left) and dijet (right), 0-60%, the run groups (light: early, dark: late), ratio to all runs;
+     X2_runs2_<r>: the same with two groups, before and from --run-split (75256) on;
+   - X5_ptlead/X5_runs2_<r>_incl_ptlead<a>_<b>: the inclusive panel of X2_runs2 per pT_lead bin (as X4);
    - X3_runs_cent20_<r>_<incl|dijet>: one selection, one panel per 20% class, the run groups as in X2, ratio to all runs
      of the class;
    - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, grid class / 20% class or 0-60%,
@@ -80,6 +84,8 @@ CLASSES20 = ((0, 20), (20, 40), (40, 60))
 # First runs of the blocks in b_run of the timing study (tasks/jet-iternf-timing-ohcal.md, X_RUN_BLOCKS of
 # plot_jet_iternf_timing.py): the run groups
 RUN_BLOCKS = (67701, 68335, 69129, 73816, 75256, 77680)
+# First run of the late group of X2_runs2: the X2 run groups fall into two shapes, before and from this run on
+RUN_SPLIT = 75256
 # Leading-jet raw pT bins of P1 [GeV]: 1 GeV to 30, 2 GeV to 40, then wider so the tail stays visible
 PT_PLOT_EDGES = (list(range(0, 30)) + list(range(30, 40, 2))
                  + [40, 45, 50, 55, 60, 70, 80, 90, 100, 120, 140, 160, 200, 250, 300])
@@ -1319,6 +1325,45 @@ def axes_bottom(fig, ax, artist):
     return ax.transAxes.inverted().transform((bb.x0, bb.y0))[1]
 
 
+def draw_cent_panel(fig, ax, axr, X, sel, title_lines, leads=None, common=None, text_fs=15, legend_fs=14):
+    """One centrality panel (X1, X4): the three 20% classes of sel in the merged pT_lead bins leads (all if None) as
+    unit-area shapes, ratio of each class to 0-60% of the same pT_lead bins. Inside the panel, top right: title_lines
+    (first line bold), the legend below it and the event and jet cuts common below that (each placed under the measured
+    bottom of the one above)."""
+    rd, red = density(X.get(sel, leads=leads), X.xe)
+    ymax = 0
+    dens = []
+    for k, c in enumerate(CLASSES20):
+        n = X.get(sel, cents=cent_idx(c, X.classes), leads=leads)
+        d, ed = density(n, X.xe)
+        N, m, em, _ = moments(n, X.xc)
+        ymax = max(ymax, np.nanmax(d))
+        dens.append(d)
+        gap_steps(ax, d, X.xe, color=X1_COLORS[k], linewidth=2.5,
+                  label=rf"{cent_label(c)}: $\langle x\rangle$ = {fmt_mean(m, em)}, $N$ = {fmt_n(N)}")
+        r_, e_ = ratio(d, ed, rd, red)
+        ok = np.isfinite(r_) & (n > 0)
+        axr.errorbar(X.xc[ok], r_[ok], yerr=e_[ok], fmt="o", color=X1_COLORS[k], markersize=4, linewidth=1.2)
+    ax.set_ylim(0, ymax * 1.12)
+    t = ax.text(0.97, 0.96, "\n".join([rf"$\bf{{{title_lines[0]}}}$"] + list(title_lines[1:])), transform=ax.transAxes,
+                ha="right", va="top", fontsize=text_fs, linespacing=1.3)
+    leg = ax.legend(loc="upper right", bbox_to_anchor=(0.985, axes_bottom(fig, ax, t) - 0.01), fontsize=legend_fs,
+                    frameon=False)
+    boxes = [t, leg]
+    if common:
+        boxes.append(ax.text(0.97, axes_bottom(fig, ax, leg) - 0.02, "\n".join(common), transform=ax.transAxes, ha="right",
+                             va="top", fontsize=legend_fs, linespacing=1.3, color="0.25"))
+    fit_ylim(fig, ax, X, dens, boxes)
+    ax.set_xlim(X.xe[0], X.xe[-1])
+    ax.tick_params(labelbottom=False)
+    axr.axhline(1, color="gray", linestyle="--")
+    axr.set_ylim(0, 2)
+    axr.set_xlim(X.xe[0], X.xe[-1])
+    axr.set_xlabel(X_LABEL)
+    axr.set_ylabel("Class / 0–60%", fontsize=15)
+    ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
+
+
 def plot_x1(X, runs, lumi, out_dir, save_pdf=False):
     """1 x 2: inclusive (left) and dijet (right), the three 20% classes, all pT_lead; ratio to 0-60% of the selection.
     The selection and cuts are written inside the panels."""
@@ -1328,46 +1373,30 @@ def plot_x1(X, runs, lumi, out_dir, save_pdf=False):
     sel_text, common = x_sel_text(X)
     for col, sel in enumerate(("incl", "dijet")):
         ax, axr = fig.add_subplot(gs[0, col]), fig.add_subplot(gs[1, col])
-        ref = X.get(sel)
-        rd, red = density(ref, X.xe)
-        ymax = 0
-        dens = []
-        for k, c in enumerate(CLASSES20):
-            n = X.get(sel, cents=cent_idx(c, X.classes))
-            d, ed = density(n, X.xe)
-            N, m, em, _ = moments(n, X.xc)
-            ymax = max(ymax, np.nanmax(d))
-            dens.append(d)
-            gap_steps(ax, d, X.xe, color=X1_COLORS[k], linewidth=2.5,
-                      label=rf"{cent_label(c)}: $\langle x\rangle$ = {fmt_mean(m, em)}, $N$ = {fmt_n(N)}")
-            r_, e_ = ratio(d, ed, rd, red)
-            ok = np.isfinite(r_) & (n > 0)
-            axr.errorbar(X.xc[ok], r_[ok], yerr=e_[ok], fmt="o", color=X1_COLORS[k], markersize=4, linewidth=1.2)
-        # inside the panel, top right: the selection, the legend below it and, in the right panel, the event and jet
-        # cuts below that (each placed under the measured bottom of the one above)
-        ax.set_ylim(0, ymax * 1.12)
-        t = ax.text(0.97, 0.96, "\n".join([rf"$\bf{{{sel_text[sel][0]}}}$"] + sel_text[sel][1:]), transform=ax.transAxes,
-                    ha="right", va="top", fontsize=15, linespacing=1.3)
-        leg = ax.legend(loc="upper right", bbox_to_anchor=(0.985, axes_bottom(fig, ax, t) - 0.01), fontsize=14, frameon=False)
-        boxes = [t, leg]
+        draw_cent_panel(fig, ax, axr, X, sel, sel_text[sel], common=common if col == 1 else None)
         if col == 1:
-            boxes.append(ax.text(0.97, axes_bottom(fig, ax, leg) - 0.02, "\n".join(common), transform=ax.transAxes, ha="right",
-                                 va="top", fontsize=14, linespacing=1.3, color="0.25"))
-        fit_ylim(fig, ax, X, dens, boxes)
-        ax.set_xlim(X.xe[0], X.xe[-1])
-        ax.tick_params(labelbottom=False)
-        axr.axhline(1, color="gray", linestyle="--")
-        axr.set_ylim(0, 2)
-        axr.set_xlim(X.xe[0], X.xe[-1])
-        axr.set_xlabel(X_LABEL)
-        axr.set_ylabel("Class / 0–60%", fontsize=15)
-        if col == 0:
-            ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
-        else:
+            ax.set_ylabel("")
             header(ax, runs, X.r_tag, lumi)
     fig.subplots_adjust(left=0.07, right=0.965, bottom=0.09, top=0.95)
     save_fig(fig, out_dir / f"X1_cent20_{X.r_tag}.png", save_pdf)
     plt.close(fig)
+
+
+def plot_x4(X, runs, lumi, out_dir, sel="incl", save_pdf=False):
+    """One figure per merged pT_lead bin: the X1 panel of sel (the three 20% classes, ratio to 0-60%) for the leading
+    jets in that bin."""
+    hep.style.use("ATLAS")
+    sel_text, common = x_sel_text(X)
+    for j, (lo, hi) in enumerate(X.lead_bins):
+        fig = plt.figure(figsize=(10, 9.5))
+        gs = fig.add_gridspec(2, 1, height_ratios=(3, 1), hspace=0.05)
+        ax, axr = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+        lines = [sel_text[sel][0], rf"Leading jet raw $p_{{T}}$: {lo:g}–{hi:g} GeV"] + sel_text[sel][2:]
+        draw_cent_panel(fig, ax, axr, X, sel, lines, leads=[j], common=common, text_fs=14, legend_fs=13)
+        header(ax, runs, X.r_tag, lumi)
+        fig.subplots_adjust(left=0.13, right=0.96, bottom=0.09, top=0.95)
+        save_fig(fig, out_dir / f"X4_cent20_{X.r_tag}_{sel}_ptlead{edge_tag(lo)}_{edge_tag(hi)}.png", save_pdf)
+        plt.close(fig)
 
 
 def fit_ylim(fig, ax, X, dens, boxes):
@@ -1401,20 +1430,20 @@ def group_colors(n):
 
 
 def draw_group_panel(fig, ax, axr, X, sel, gi, glabels, title_lines, cents=None, left_lines=None, legend_fs=11.5,
-                     text_fs=15):
+                     text_fs=15, leads=None):
     """One run-group panel (X2, X3): the run groups of sel in the classes cents (light: early, dark: late) and all runs
-    (grey dashed) as unit-area shapes, ratio of each group to all runs. title_lines top right (first line bold), the
+    (grey dashed) as unit-area shapes in the merged pT_lead bins leads (all if None), ratio of each group to all runs. title_lines top right (first line bold), the
     legend under them, left_lines (grey) top left."""
     groups = [g for g in range(len(glabels)) if glabels[g]]
     cols = group_colors(len(groups))
-    ref = X.get(sel, cents=cents)
+    ref = X.get(sel, cents=cents, leads=leads)
     rd, red = density(ref, X.xe)
     N, m, em, _ = moments(ref, X.xc)
     gap_steps(ax, rd, X.xe, color="0.5", linewidth=1.5, linestyle="--",
               label=rf"All runs: $\langle x\rangle$ = {fmt_mean(m, em)}, $N$ = {fmt_n(N)}")
     dens = [rd]
     for k, g in enumerate(groups):
-        n = X.get(sel, runs_mask=(gi == g), cents=cents)
+        n = X.get(sel, runs_mask=(gi == g), cents=cents, leads=leads)
         d, ed = density(n, X.xe)
         N, m, em, _ = moments(n, X.xc)
         dens.append(d)
@@ -1443,7 +1472,7 @@ def draw_group_panel(fig, ax, axr, X, sel, gi, glabels, title_lines, cents=None,
     axr.set_ylabel("Group / all runs", fontsize=15)
 
 
-def plot_x2(X, gi, glabels, runs, lumi, out_dir, save_pdf=False):
+def plot_x2(X, gi, glabels, runs, lumi, out_dir, name="X2_runs", save_pdf=False):
     """1 x 2: inclusive (left) and dijet (right), 0-60%, all pT_lead, one curve per run group (light: early, dark: late);
     ratio to all runs of the selection."""
     hep.style.use("ATLAS")
@@ -1460,8 +1489,27 @@ def plot_x2(X, gi, glabels, runs, lumi, out_dir, save_pdf=False):
         else:
             header(ax, runs, X.r_tag, lumi)
     fig.subplots_adjust(left=0.07, right=0.965, bottom=0.09, top=0.95)
-    save_fig(fig, out_dir / f"X2_runs_{X.r_tag}.png", save_pdf)
+    save_fig(fig, out_dir / f"{name}_{X.r_tag}.png", save_pdf)
     plt.close(fig)
+
+
+def plot_x5(X, gi, glabels, runs, lumi, out_dir, sel="incl", name="X5_runs2", save_pdf=False):
+    """One figure per merged pT_lead bin: the X2 panel of sel (0-60%, one curve per run group, ratio to all runs) for
+    the leading jets in that bin."""
+    hep.style.use("ATLAS")
+    sel_text, common = x_sel_text(X)
+    for j, (lo, hi) in enumerate(X.lead_bins):
+        fig = plt.figure(figsize=(10, 9.5))
+        gs = fig.add_gridspec(2, 1, height_ratios=(3, 1), hspace=0.05)
+        ax, axr = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
+        lines = [sel_text[sel][0], rf"Leading jet raw $p_{{T}}$: {lo:g}–{hi:g} GeV"] + sel_text[sel][2:] + ["0–60%"]
+        draw_group_panel(fig, ax, axr, X, sel, gi, glabels, lines, left_lines=common, legend_fs=12, text_fs=14,
+                         leads=[j])
+        ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
+        header(ax, runs, X.r_tag, lumi)
+        fig.subplots_adjust(left=0.13, right=0.96, bottom=0.09, top=0.95)
+        save_fig(fig, out_dir / f"{name}_{X.r_tag}_{sel}_ptlead{edge_tag(lo)}_{edge_tag(hi)}.png", save_pdf)
+        plt.close(fig)
 
 
 def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, save_pdf=False):
@@ -1540,9 +1588,11 @@ def main():
     parser.add_argument("--radii", nargs="+", choices=list(RADII), default=list(RADII), help="Jet radii (default: both)")
     parser.add_argument("--x-rebin", type=int, default=2, help="Merge this many OHCal fraction bins (60 bins of 0.025; default: %(default)s)")
     parser.add_argument("--merge-lead-above", type=float, default=30,
-                        help="Merge the pT_lead bins from this edge up into one, for the pT_lead bins of x_moments_<r>.csv (default: %(default)s GeV)")
+                        help="Merge the pT_lead bins from this edge up into one, for the pT_lead bins of X4, X5 and x_moments_<r>.csv (default: %(default)s GeV)")
     parser.add_argument("--run-blocks", nargs="*", type=int, default=list(RUN_BLOCKS),
                         help="First runs of the run groups after the first (default: the b_run blocks %(default)s)")
+    parser.add_argument("--run-split", type=int, default=RUN_SPLIT,
+                        help="First run of the late group of X2_runs2 (default: %(default)s)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1), help="Parallel workers (default: %(default)s)")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF versions in addition to PNG")
     parser.add_argument("--cache-dir", type=Path, default=None, help="Input cache directory (default: <output-dir>/cache)")
@@ -1585,6 +1635,7 @@ def main():
     tick("inputs")
     runs, lumi = inputs["runs"], inputs["lumi"]
     gi, glabels = run_groups(runs, args.run_blocks)
+    gi2, glabels2 = run_groups(runs, [args.run_split])
     print(f"{len(runs)} runs; run groups: " + ", ".join(f"{l} ({(gi == g).sum()} runs)" for g, l in enumerate(glabels) if l))
 
     out = args.output_dir
@@ -1628,7 +1679,10 @@ def main():
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
-        plot_x2(X, gi, glabels, runs, lumi, xd, args.save_pdf)
+        plot_x4(X, runs, lumi, xd / "X4_ptlead", sel="incl", save_pdf=args.save_pdf)
+        plot_x2(X, gi, glabels, runs, lumi, xd, save_pdf=args.save_pdf)
+        plot_x2(X, gi2, glabels2, runs, lumi, xd, name="X2_runs2", save_pdf=args.save_pdf)
+        plot_x5(X, gi2, glabels2, runs, lumi, xd / "X5_ptlead", sel="incl", save_pdf=args.save_pdf)
         for sel in ("incl", "dijet"):
             plot_x3(X, sel, gi, glabels, runs, lumi, xd, args.save_pdf)
         write_csv(x_moment_rows(X, gi, glabels), xd / f"x_moments_{r_tag}.csv")
