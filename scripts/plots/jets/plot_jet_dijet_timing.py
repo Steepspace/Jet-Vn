@@ -19,12 +19,12 @@ This script makes:
    unit-area shapes, all pT_lead:
    - X1_cent20_<r>: inclusive (left) and dijet (right), the three 20% classes, ratio to 0-60%;
    - X4_ptlead/X4_cent20_<r>_incl_ptlead<a>_<b>: the inclusive panel of X1 per pT_lead bin (bins from
-     --merge-lead-above up merged into one), ratio to 0-60% of the same bin;
+     --merge-lead-above up merged into one; R = 0.3 from 40 GeV, PTLEAD_PLOT_MERGE_ABOVE), ratio to 0-60% of the same bin;
    - X2_runs_<r>: inclusive (left) and dijet (right), 0-60%, the run groups (light: early, dark: late), ratio to all runs;
      X2_runs2_<r>: the same with two groups, before and from --run-split (75256) on;
-   - X5_ptlead/X5_runs2_<r>_incl_ptlead<a>_<b>: the inclusive panel of X2_runs2 per pT_lead bin (as X4);
+   - X5_ptlead/X5_runs2_<r>_incl_ptlead<a>_<b>: the inclusive panel of X2_runs2 per pT_lead bin (the X4 bins);
    - X3_runs_cent20_<r>_<incl|dijet>: one selection, one panel per 20% class, the run groups as in X2, ratio to all runs
-     of the class;
+     of the class; X3_runs2_cent20_<r>_<incl|dijet>: the same with the two groups of X2_runs2;
    - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, grid class / 20% class or 0-60%,
      pT_lead bin or all).
 3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
@@ -86,6 +86,9 @@ CLASSES20 = ((0, 20), (20, 40), (40, 60))
 RUN_BLOCKS = (67701, 68335, 69129, 73816, 75256, 77680)
 # First run of the late group of X2_runs2: the X2 run groups fall into two shapes, before and from this run on
 RUN_SPLIT = 75256
+# X4 and X5 merge the pT_lead bins from this edge up [GeV], per radius (others: --merge-lead-above); R = 0.3 keeps
+# 30-40 GeV separate (20.7 k inclusive jets), the bins above 40 GeV hold about 1 k together
+PTLEAD_PLOT_MERGE_ABOVE = {"r03": 40}
 # Leading-jet raw pT bins of P1 [GeV]: 1 GeV to 30, 2 GeV to 40, then wider so the tail stays visible
 PT_PLOT_EDGES = (list(range(0, 30)) + list(range(30, 40, 2))
                  + [40, 45, 50, 55, 60, 70, 80, 90, 100, 120, 140, 160, 200, 250, 300])
@@ -1512,7 +1515,7 @@ def plot_x5(X, gi, glabels, runs, lumi, out_dir, sel="incl", name="X5_runs2", sa
         plt.close(fig)
 
 
-def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, save_pdf=False):
+def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, name="X3_runs", save_pdf=False):
     """1 x 3: one selection, one panel per 20% class, all pT_lead, one curve per run group (as X2); ratio to all runs of
     the class."""
     hep.style.use("ATLAS")
@@ -1530,7 +1533,7 @@ def plot_x3(X, sel, gi, glabels, runs, lumi, out_dir, save_pdf=False):
         if col == 2:
             header(ax, runs, X.r_tag, lumi)
     fig.subplots_adjust(left=0.05, right=0.975, bottom=0.09, top=0.95)
-    save_fig(fig, out_dir / f"X3_runs_cent20_{X.r_tag}_{sel}.png", save_pdf)
+    save_fig(fig, out_dir / f"{name}_cent20_{X.r_tag}_{sel}.png", save_pdf)
     plt.close(fig)
 
 
@@ -1592,7 +1595,7 @@ def main():
     parser.add_argument("--run-blocks", nargs="*", type=int, default=list(RUN_BLOCKS),
                         help="First runs of the run groups after the first (default: the b_run blocks %(default)s)")
     parser.add_argument("--run-split", type=int, default=RUN_SPLIT,
-                        help="First run of the late group of X2_runs2 (default: %(default)s)")
+                        help="First run of the late group of X2_runs2, X3_runs2 and X5 (default: %(default)s)")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1), help="Parallel workers (default: %(default)s)")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF versions in addition to PNG")
     parser.add_argument("--cache-dir", type=Path, default=None, help="Input cache directory (default: <output-dir>/cache)")
@@ -1679,12 +1682,14 @@ def main():
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
-        plot_x4(X, runs, lumi, xd / "X4_ptlead", sel="incl", save_pdf=args.save_pdf)
+        Xp = X if r_tag not in PTLEAD_PLOT_MERGE_ABOVE else XGrid(inputs, r_tag, args.x_rebin, PTLEAD_PLOT_MERGE_ABOVE[r_tag])
+        plot_x4(Xp, runs, lumi, xd / "X4_ptlead", sel="incl", save_pdf=args.save_pdf)
         plot_x2(X, gi, glabels, runs, lumi, xd, save_pdf=args.save_pdf)
         plot_x2(X, gi2, glabels2, runs, lumi, xd, name="X2_runs2", save_pdf=args.save_pdf)
-        plot_x5(X, gi2, glabels2, runs, lumi, xd / "X5_ptlead", sel="incl", save_pdf=args.save_pdf)
+        plot_x5(Xp, gi2, glabels2, runs, lumi, xd / "X5_ptlead", sel="incl", save_pdf=args.save_pdf)
         for sel in ("incl", "dijet"):
-            plot_x3(X, sel, gi, glabels, runs, lumi, xd, args.save_pdf)
+            plot_x3(X, sel, gi, glabels, runs, lumi, xd, save_pdf=args.save_pdf)
+            plot_x3(X, sel, gi2, glabels2, runs, lumi, xd, name="X3_runs2", save_pdf=args.save_pdf)
         write_csv(x_moment_rows(X, gi, glabels), xd / f"x_moments_{r_tag}.csv")
         tick(r_tag)
 
