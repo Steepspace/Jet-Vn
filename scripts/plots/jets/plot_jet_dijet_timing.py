@@ -42,10 +42,14 @@ This script makes:
    timing/projections/all_jets/T5proj_<r>_all[_leaddijet3sigma][_zoom10]: every jet of every selected event projected
    on t - t0 - f(x) (every pT), log and +-10 ns; _leaddijet3sigma with the dijet leading-jet full-range mu +- 3 sigma
    marked and the jets outside counted.
+   timing/projections/lead_jets/T4proj_<r>_lead[_leaddijet3sigma][_zoom10]: the same for the leading jet of every
+   selected event (h2LeadTimeCorrPt_<r>_lead, raw pT >= 7 GeV).
    timing/cut/C1_jetpt_3sigma_<r>: the raw pT spectrum of every jet of every selected event before and after a single
    timing window (the dijet leading-jet full-range fit's mu +- 3 sigma), with the fraction kept per pT bin;
    timing/cut/C2_jett_3sigma_<r>[_panels][_zoom10]: the corrected time of those jets per raw pT class (counts per ns,
    overlaid, or one class per panel) with the same window and the fraction of each class outside it.
+   timing/cut/C1_leadpt_3sigma_<r>, C2_leadt_3sigma_<r>[_panels][_zoom10]: C1 and C2 for the leading jet of every
+   selected event (h2LeadTimeCorrPt_<r>_lead, raw pT >= 7 GeV, no pT_lead cut).
    timing/cut/C3_x_<pt40_60|pt60>_3sigma_<r>: the OHCal fraction x of the C1 jets at 40-60 GeV and above 60 GeV (all or
    nearly all leading jets of their event, so taken from the inclusive timing grid and its corrected hists), all and
    split by the same window.
@@ -705,11 +709,13 @@ def fit_gauss_core(n, edges, nsig=PROJ_FIT_NSIG, max_iter=20):
     return res
 
 
-def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=None, save_pdf=False):
-    """The T5 hist of every jet in every selected event (h2JetTimeCorrPt_<r>_all) projected on t - t0 - f(x), every pT,
-    0-60%. zoom None: log scale over the whole axis; zoom z: linear over +-z ns. ref_fit: the dijet leading-jet
+def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=None, sample="all", save_pdf=False):
+    """The T5 hist of every jet in every selected event (sample "all": h2JetTimeCorrPt_<r>_all, file T5proj_<r>_all) or
+    the T4 hist of the leading jet of every selected event (sample "lead": h2LeadTimeCorrPt_<r>_lead, file
+    T4proj_<r>_lead; CUT_SAMPLES) projected on t - t0 - f(x), every pT, 0-60%. zoom None: log scale over the whole axis; zoom z: linear over +-z ns. ref_fit: the dijet leading-jet
     full-range fit (plot_lead_dijet_proj), whose mu +- 3 sigma is marked and counted (file suffix _leaddijet3sigma)."""
-    key = ("jet", r_tag, "all")
+    (kind, tag), title, noun, _ = CUT_SAMPLES[sample]
+    key = (kind, r_tag, tag)
     if key not in inputs.get("tpt", {}):
         return
     hep.style.use("ATLAS")
@@ -722,9 +728,10 @@ def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=Non
     mean = (n * tc).sum() / n.sum()
     rms = np.sqrt((n * tc ** 2).sum() / n.sum() - mean ** 2)
     far = n[np.abs(tc) > PROJ_FAR].sum() + n_out
+    stem = "T5proj" if sample == "all" else "T4proj"
 
     fig, ax = plt.subplots(figsize=(10.5, 8))
-    ax.stairs(dens, te, color="black", linewidth=1.6, label="Jets")
+    ax.stairs(dens, te, color="black", linewidth=1.6, label=f"{noun}s")
     lines = [rf"$N$ = {fmt_n(tot)}" + (rf", {n_out:.0f} outside $\pm${te[-1]:g} ns" if n_out else ""),
              rf"Mean {mean:+.3f} ns, RMS {rms:.3f} ns (within $\pm${te[-1]:g} ns)",
              rf"$|t_{{\mathrm{{corr}}}}| > {PROJ_FAR}$ ns: {fmt_n(far)} ({far / tot:.2e})"]
@@ -739,9 +746,9 @@ def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=Non
                   rf"Outside: {fmt_n(out3)} ({out3 / tot:.2e}); below {fmt_n(n[tc < lo3].sum() + hf[0])}, "
                   rf"above {fmt_n(n[tc > hi3].sum() + hf[-1])}"]
         if zoom is None:
-            print(f"  T5proj {r_tag} all: outside the dijet leading-jet mu +- 3 sigma [{lo3:+.3f}, {hi3:+.3f}]: "
+            print(f"  {stem} {r_tag} {sample}: outside the dijet leading-jet mu +- 3 sigma [{lo3:+.3f}, {hi3:+.3f}]: "
                   f"{out3:.0f} / {tot:.0f} ({out3 / tot:.4f})")
-    head = [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, cut, "dijet")[1:]
+    head = [rf"$\bf{{{title},\ 0-60\%}}$"] + sel_lines(r_tag, cut, "dijet")[1:]
     ax.text(0.97, 0.97, "\n".join(head + lines), transform=ax.transAxes, ha="right", va="top", fontsize=12,
             linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3))
     ax.legend(loc="upper left", fontsize=13, frameon=False)
@@ -752,12 +759,12 @@ def plot_t5_proj(inputs, r_tag, cut, runs, lumi, out_dir, zoom=None, ref_fit=Non
     else:
         ax.set_xlim(-zoom, zoom)
         ax.set_ylim(0, dens.max() * 1.6)
-    ax.set_xlabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
-    ax.set_ylabel("Jets / ns")
+    ax.set_xlabel(noun + r" $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    ax.set_ylabel(f"{noun}s / ns")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
     suffix = ("_leaddijet3sigma" if ref_fit is not None else "") + ("" if zoom is None else f"_zoom{zoom:g}")
-    save_fig(fig, out_dir / f"T5proj_{r_tag}_all{suffix}.png", save_pdf)
+    save_fig(fig, out_dir / f"{stem}_{r_tag}_{tag}{suffix}.png", save_pdf)
     plt.close(fig)
 
 
@@ -1013,14 +1020,21 @@ def plot_lead_dijet_proj(inputs, r_tag, cut, runs, lumi, out_dir, save_pdf=False
 
 
 CUT_PT_MAX = 150                                           # [GeV] pT axis of the cut-effect plot (jets above counted in the text)
+# C1 / C2 samples: the tpt key, the bold title, the jet noun, the file stems (C1, C2)
+CUT_SAMPLES = {
+    "all": (("jet", "all"), r"Every\ jet,\ every\ selected\ event", "Jet", ("C1_jetpt", "C2_jett")),
+    "lead": (("lead", "lead"), r"Leading\ jet,\ every\ selected\ event", "Leading jet", ("C1_leadpt", "C2_leadt")),
+}
 
 
-def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, save_pdf=False):
+def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, sample="all", save_pdf=False):
     """Effect of a single timing window, the dijet leading-jet full-range fit's mu +- nsig sigma, on every jet of every
-    selected event (h2JetTimeCorrPt_<r>_all, 0-60%): the raw pT spectrum before and after the cut, and the fraction
-    kept per pT bin (binomial errors). Jets count as inside when their t bin centre is inside the window (the window
+    selected event (sample "all": h2JetTimeCorrPt_<r>_all) or on the leading jet of every selected event (sample "lead":
+    h2LeadTimeCorrPt_<r>_lead), 0-60%: the raw pT spectrum before and after the cut, and the fraction kept per pT bin
+    (binomial errors). Jets count as inside when their t bin centre is inside the window (the window
     edges fall inside 0.1 ns bins, so the edges are good to +-0.05 ns). pT bins: PT_PLOT_EDGES from 7 GeV."""
-    key = ("jet", r_tag, "all")
+    (kind, tag), title, noun, (stem, _) = CUT_SAMPLES[sample]
+    key = (kind, r_tag, tag)
     if key not in inputs.get("tpt", {}):
         return
     hep.style.use("ATLAS")
@@ -1046,7 +1060,7 @@ def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, save_pdf=Fa
     fig = plt.figure(figsize=(11, 10))
     gs = fig.add_gridspec(2, 1, height_ratios=(3, 1.3), hspace=0.05)
     ax, axr = fig.add_subplot(gs[0]), fig.add_subplot(gs[1])
-    gap_steps(ax, n_all / w, edges, color="black", linewidth=2.2, label=f"Every jet: {fmt_n(tot_all)}")
+    gap_steps(ax, n_all / w, edges, color="black", linewidth=2.2, label=f"Every {noun.lower()}: {fmt_n(tot_all)}")
     gap_steps(ax, n_in / w, edges, color="#e41a1c", linewidth=2.2,
               label=rf"$|t_{{\mathrm{{corr}}}} - \mu| \leq {nsig}\sigma$: {fmt_n(tot_in)} ({tot_in / tot_all:.3f})")
     ok = n_all > 0
@@ -1061,22 +1075,22 @@ def plot_cut_effect(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, save_pdf=Fa
     for a in (ax, axr):
         a.set_xlim(edges[0], CUT_PT_MAX)
     ax.tick_params(labelbottom=False)
-    ax.set_ylabel(r"Jets / GeV")
-    lines = [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:] + [
+    ax.set_ylabel(f"{noun}s / GeV")
+    lines = [rf"$\bf{{{title},\ 0-60\%}}$"] + sel_lines(r_tag, 0, "all")[1:] + [
         rf"Timing window: dijet leading-jet fit $\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}, {hi_t:+.2f}] ns",
         rf"($\mu$ = {fit['mu']:+.3f} ns, $\sigma$ = {fit['sigma']:.3f} ns, full $p_{{T}}$ range, 0-60%)"] + (
-        [f"{above:.0f} jets above {CUT_PT_MAX} GeV, not shown"] if above else [])
+        [f"{above:.0f} {noun.lower()}s above {CUT_PT_MAX} GeV, not shown"] if above else [])
     t = ax.text(0.97, 0.97, "\n".join(lines), transform=ax.transAxes, ha="right", va="top", fontsize=14, linespacing=1.3)
     ax.legend(loc="upper right", bbox_to_anchor=(0.985, axes_bottom(fig, ax, t) - 0.01), fontsize=15, frameon=False)
     header(ax, runs, r_tag, lumi)
     axr.set_ylim(0, 1.1)
-    axr.set_xlabel(r"Jet raw $p_{T}$ [GeV]")
+    axr.set_xlabel(noun + r" raw $p_{T}$ [GeV]")
     axr.set_ylabel("Kept fraction", fontsize=16)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.09, top=0.95)
-    save_fig(fig, out_dir / f"C1_jetpt_{nsig}sigma_{r_tag}.png", save_pdf)
+    save_fig(fig, out_dir / f"{stem}_{nsig}sigma_{r_tag}.png", save_pdf)
     plt.close(fig)
     show = [(7, 10), (10, 15), (15, 20), (20, 30), (30, 40), (40, 60), (60, 150)]
-    print(f"  C1 {r_tag}: window [{lo_t:+.3f}, {hi_t:+.3f}] ns, kept {tot_in:.0f} / {tot_all:.0f} = {tot_in / tot_all:.4f}; kept fraction: "
+    print(f"  C1 {r_tag} {sample}: window [{lo_t:+.3f}, {hi_t:+.3f}] ns, kept {tot_in:.0f} / {tot_all:.0f} = {tot_in / tot_all:.4f}; kept fraction: "
           + ", ".join(f"{a}-{b} GeV {n_in1[(xe[:-1] >= a) & (xe[:-1] < b)].sum() / max(n_all1[(xe[:-1] >= a) & (xe[:-1] < b)].sum(), 1):.3f}"
                       for a, b in show))
 
@@ -1163,11 +1177,12 @@ CUT_LOG_BIN = 2.5                                         # [ns] t bins of the l
 CUT_PT_CLASSES = ((7, 10), (10, 15), (15, 20), (20, 30), (30, 40), (40, 60), (60, 150))   # [GeV]
 
 
-def cut_tdist_classes(inputs, r_tag, fit, nsig, zoom):
-    """Per CUT_PT_CLASSES class of h2JetTimeCorrPt_<r>_all (0-60%): (lo, hi, N with flow, fraction outside mu +- nsig
+def cut_tdist_classes(inputs, r_tag, fit, nsig, zoom, sample="all"):
+    """Per CUT_PT_CLASSES class of the CUT_SAMPLES hist of sample (0-60%): (lo, hi, N with flow, fraction outside mu +- nsig
     sigma, counts per ns, t edges). zoom None: CUT_LOG_BIN wide t bins (the sparse high-pT classes would be noise in the
     hist bins); otherwise the hist bins. None if the hist is missing."""
-    key = ("jet", r_tag, "all")
+    kind, tag = CUT_SAMPLES[sample][0]
+    key = (kind, r_tag, tag)
     if key not in inputs.get("tpt", {}):
         return None
     xe, te = inputs["layout"]["tpt_edges"][key]
@@ -1193,8 +1208,8 @@ def log_ylim(d, frac):
     return lo_y, lo_y * (d.max() / lo_y) ** (1 / frac)
 
 
-def cut_tdist_text(r_tag, nsig):
-    return [r"$\bf{Every\ jet,\ every\ selected\ event,\ 0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:] + [
+def cut_tdist_text(r_tag, nsig, sample="all"):
+    return [rf"$\bf{{{CUT_SAMPLES[sample][1]},\ 0-60\%}}$"] + sel_lines(r_tag, 0, "all")[1:] + [
         rf"Window: dijet leading-jet fit $\mu \pm {nsig}\sigma$ (full $p_{{T}}$ range)",
         "Counts per ns; outside = fraction beyond the window"]
 
@@ -1202,13 +1217,13 @@ def cut_tdist_text(r_tag, nsig):
 T_LABEL = r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]"
 
 
-def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, save_pdf=False):
-    """The corrected time of every jet of every selected event (h2JetTimeCorrPt_<r>_all, 0-60%) in the raw pT classes
+def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, sample="all", save_pdf=False):
+    """The corrected time of the C1 sample (every jet or the leading jet of every selected event, CUT_SAMPLES; 0-60%) in the raw pT classes
     CUT_PT_CLASSES as counts per ns (dN/dt, not normalized to the class total), overlaid (light: low pT, dark: high pT),
     with the single timing window of C1 (the dijet leading-jet full-range fit's mu +- nsig sigma) and the fraction of each
     class outside it. Log y, since the classes differ by many decades. zoom None: the whole axis in CUT_LOG_BIN wide t
     bins; zoom z: +-z ns in the hist bins. The legend is upper left, the text upper right."""
-    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom)
+    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom, sample)
     if got is None:
         return
     rows, (lo_t, hi_t), te = got
@@ -1221,7 +1236,7 @@ def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, s
     for k, x3 in enumerate((lo_t, hi_t)):
         ax.axvline(x3, color="#e41a1c", linestyle="--", linewidth=1.8,
                    label=rf"$\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}, {hi_t:+.2f}] ns" if k == 0 else None)
-    t = ax.text(0.97, 0.97, "\n".join(cut_tdist_text(r_tag, nsig)), transform=ax.transAxes, ha="right", va="top",
+    t = ax.text(0.97, 0.97, "\n".join(cut_tdist_text(r_tag, nsig, sample)), transform=ax.transAxes, ha="right", va="top",
                 fontsize=12, linespacing=1.3, bbox=dict(facecolor="white", alpha=0.8, edgecolor="none", pad=3), zorder=5)
     leg = ax.legend(loc="upper left", fontsize=11, frameon=True, facecolor="white", framealpha=0.8, edgecolor="none")
     leg.set_zorder(5)
@@ -1232,10 +1247,10 @@ def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, s
     ax.set_ylabel(r"$dN/dt$ [ns$^{-1}$]")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
-    save_fig(fig, out_dir / f"C2_jett_{nsig}sigma_{r_tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    save_fig(fig, out_dir / f"{CUT_SAMPLES[sample][3][1]}_{nsig}sigma_{r_tag}{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
     plt.close(fig)
     if zoom is None:
-        print(f"  C2 {r_tag}: fraction outside [{lo_t:+.3f}, {hi_t:+.3f}] ns: " + ", ".join(f"{lo}-{hi} GeV {f:.3f} (N {n:.0f})" for lo, hi, n, f, *_ in rows))
+        print(f"  C2 {r_tag} {sample}: fraction outside [{lo_t:+.3f}, {hi_t:+.3f}] ns: " + ", ".join(f"{lo}-{hi} GeV {f:.3f} (N {n:.0f})" for lo, hi, n, f, *_ in rows))
 
 
 def split_commas(line):
@@ -1291,10 +1306,10 @@ def fit_text_box(fig, ax, lines, fs_max=24, fs_min=10, top=0.98, bottom=0.0, lin
         t.remove()
 
 
-def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, save_pdf=False):
+def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, sample="all", save_pdf=False):
     """C2 with one panel per pT class: 2 rows (4 + 3), each panel with its own log y range, the window, N and the
     fraction outside; the last slot holds the selection text. Same binning as plot_cut_tdist."""
-    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom)
+    got = cut_tdist_classes(inputs, r_tag, fit, nsig, zoom, sample)
     if got is None:
         return
     rows, (lo_t, hi_t), te = got
@@ -1324,13 +1339,13 @@ def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=
     fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
     if len(rows) < axs.size:                                             # selection text filling the empty slot
         fit_text_box(fig, axs.flat[len(rows)], [
-            r"$\bf{Every\ jet,\ every\ selected\ event}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
+            rf"$\bf{{{CUT_SAMPLES[sample][1]}}}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
             "Window (dashed): dijet leading-jet fit",
             rf"$\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}," + "\u00a0" + f"{hi_t:+.2f}] ns",          # no-break space: no wrap there
             rf"(full $p_{{T}}$ range)",
             "Counts per ns",
             "Outside = fraction beyond the window"], top=0.88)
-    save_fig(fig, out_dir / f"C2_jett_{nsig}sigma_{r_tag}_panels{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    save_fig(fig, out_dir / f"{CUT_SAMPLES[sample][3][1]}_{nsig}sigma_{r_tag}_panels{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
     plt.close(fig)
 
 
@@ -1751,18 +1766,20 @@ def main():
         pdir = out / "timing" / "projections"
         lead_fit = plot_lead_dijet_proj(inputs, r_tag, cut, runs, lumi, pdir / "lead_dijet", save_pdf=args.save_pdf)
         if lead_fit is not None:
-            plot_cut_effect(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", save_pdf=args.save_pdf)
+            cd = out / "timing" / "cut"
+            for sample in CUT_SAMPLES:                                   # every jet, and the leading jet, of every selected event
+                plot_cut_effect(inputs, r_tag, lead_fit, runs, lumi, cd, sample=sample, save_pdf=args.save_pdf)
+                for zoom in (None, PROJ_ZOOM):
+                    plot_cut_tdist(inputs, r_tag, lead_fit, runs, lumi, cd, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
+                    plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, cd, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
             for pt_lo, pt_hi in CUT_X_PT_RANGES:
-                plot_cut_x_highpt(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", pt_lo, pt_hi,
-                                  save_pdf=args.save_pdf)
+                plot_cut_x_highpt(inputs, r_tag, lead_fit, runs, lumi, cd, pt_lo, pt_hi, save_pdf=args.save_pdf)
+        for sample, sub in (("all", "all_jets"), ("lead", "lead_jets")):   # every jet / the leading jet; with the dijet leading-jet window
             for zoom in (None, PROJ_ZOOM):
-                plot_cut_tdist(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
-                plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, out / "timing" / "cut", zoom=zoom, save_pdf=args.save_pdf)
-        for zoom in (None, PROJ_ZOOM):                                   # every jet; with the dijet leading-jet window
-            plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / "all_jets", zoom=zoom, save_pdf=args.save_pdf)
-            if lead_fit is not None:
-                plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / "all_jets", zoom=zoom, ref_fit=lead_fit,
-                             save_pdf=args.save_pdf)
+                plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / sub, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
+                if lead_fit is not None:
+                    plot_t5_proj(inputs, r_tag, cut, runs, lumi, pdir / sub, zoom=zoom, ref_fit=lead_fit, sample=sample,
+                                 save_pdf=args.save_pdf)
         X = XGrid(inputs, r_tag, args.x_rebin, args.merge_lead_above)
         xd = out / "ohcal_frac"
         plot_x1(X, runs, lumi, xd, args.save_pdf)
