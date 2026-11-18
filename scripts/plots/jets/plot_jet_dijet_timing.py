@@ -1559,7 +1559,7 @@ def plot_r1(inputs, r_tag, cut, x_rebin, fit, glabels, runs, lumi, out_dir, sel=
         if key == "tx":
             title = r"$\bf{Uncorrected}$: $t - t_{0}$"
             ref = lambda a: a.plot(xs, np.polyval(fit["c"], xs), "-", color="#e41a1c", linewidth=2.2, zorder=2,
-                                   label="Dijet T1 quartic $f(x)$, all runs")
+                                   label="Dijet quartic fit $f(x)$, all runs")
             ylab = r"$\langle t - t_{0}^{\mathrm{MBD}} \rangle$ [ns]"
         else:
             title = r"$\bf{Corrected}$: $t - t_{0} - f(x)$"
