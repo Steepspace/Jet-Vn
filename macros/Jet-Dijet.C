@@ -16,7 +16,8 @@
 // f (fitted to the dijet sample) is applied to both. With the file it also fills, per 20 % class, the corrected time
 // vs raw pT (+-75 ns, 1 GeV pT bins): of the leading jet (h2LeadTimeCorrPt_<r>_<dijet|lead>, "lead" = the leading jet of
 // every selected event, raw pT >= jet_pt_raw_min) and of every jet passing the cuts (h2JetTimeCorrPt_<r>_<dijet|all>);
-// the dijet versions end at 60 GeV.
+// the dijet versions end at 60 GeV. The uncorrected time t - t0 vs raw pT of every jet passing the cuts in all selected
+// events (h2JetTimePt_<r>_all, the binning of h2JetTimeCorrPt_<r>_all) is filled with or without the file.
 
 // -- utils
 #include "myUtils.C"
@@ -221,6 +222,9 @@ class JetDijet
     // every jet passing the jet cuts: in dijet events, in all selected events (SEL_INCL slot, tag "all")
     std::array<std::array<TH2 *, m_n_tcent>, N_SEL> h2LeadTimeCorrPt{};
     std::array<std::array<TH2 *, m_n_tcent>, N_SEL> h2JetTimeCorrPt{};
+    // Uncorrected time t - t0 vs raw pT of every jet passing the jet cuts in all selected events, [timing class]; always
+    // booked, the binning of h2JetTimeCorrPt[SEL_INCL]
+    std::array<TH2 *, m_n_tcent> h2JetTimePt{};
     // Raw pT x centrality of every jet passing the jet cuts, [selection]: in dijet events, in all selected events
     std::array<TH2 *, N_SEL> h2JetPtCent{};
     // Raw pT x centrality of the leading jet, [selection]: dijet sample, inclusive (pT_lead >= pt_sub_min)
@@ -277,7 +281,7 @@ class JetDijet
   void setup_calo_mbd_cut();
   void setup_timing_corr();
   double timing_f(size_t ir, size_t tc, double x) const;
-  void fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx) const;
+  void fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx, bool corr = true) const;
   static std::vector<double> unit_edges(double lo, double hi);
   static std::vector<double> time_edges(double t_max);
   void setup_chain();
@@ -674,6 +678,21 @@ void JetDijet::init_hists()
                                       m_bins_jet_pt, 0, m_jet_pt_high, 60, -0.5, 59.5);
     }
 
+    // Uncorrected time vs raw pT of every jet in all selected events, per 20 % class (always)
+    {
+      const std::vector<double> edges = unit_edges(m_jet_pt_raw_min, m_tpt_pt_high_incl);
+      const std::vector<double> dt_edges_pt = time_edges(m_tpt_dt_max);
+      for (size_t k = 0; k < m_n_tcent; ++k)
+      {
+        const auto clo = static_cast<int>(m_tcent_edges[k]);
+        const auto chi = static_cast<int>(m_tcent_edges[k + 1]);
+        h.h2JetTimePt[k] = book<TH2F>(
+            std::format("h2JetTimePt_{}_{}_cent_{}_{}", r, m_sel_jet_tag[SEL_INCL], clo, chi),
+            std::format("Jets in all selected events ({}, {}-{}%); Jet raw p_{{T}} [GeV]; Jet t - MBD t_{{0}} [ns]", jet_label, clo, chi).c_str(),
+            static_cast<int>(edges.size()) - 1, edges.data(), static_cast<int>(dt_edges_pt.size()) - 1, dt_edges_pt.data());
+      }
+    }
+
     // Corrected time vs raw pT, per 20 % class (with the timing correction only)
     if (m_has_timing_corr)
     {
@@ -749,7 +768,8 @@ std::vector<double> JetDijet::time_edges(double t_max)
 
 // Corrected time t - t0 - f(x) of jet idx (with its own OHCal fraction x) vs its raw pT, in timing class tc; jets with t,
 // t0 or x NaN are skipped
-void JetDijet::fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx) const
+// corr false: the uncorrected time t - t0 (no f(x))
+void JetDijet::fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx, bool corr) const
 {
   const JetData &jd = m_event_data.jets[ir];
   const double t = jd.t->at(idx);
@@ -758,7 +778,7 @@ void JetDijet::fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx) const
   {
     return;
   }
-  h->Fill(jd.pt->at(idx), t - m_event_data.t0 - timing_f(ir, tc, frac));
+  h->Fill(jd.pt->at(idx), t - m_event_data.t0 - (corr ? timing_f(ir, tc, frac) : 0.0));
 }
 
 // The jet cuts: E > 0, |eta| < eta_max of the radius, raw pT >= m_jet_pt_raw_min
@@ -853,6 +873,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
     const double pt = jd.pt->at(idx);
     ++njets;
     h.h2JetPtCent[SEL_INCL]->Fill(pt, cent);  // every jet of every selected event
+    fill_time_corr_pt(h.h2JetTimePt[tc], ir, tc, idx, false);
     if (m_has_timing_corr)
     {
       fill_time_corr_pt(h.h2JetTimeCorrPt[SEL_INCL][tc], ir, tc, idx);
