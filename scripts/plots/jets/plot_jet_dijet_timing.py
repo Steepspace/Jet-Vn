@@ -27,14 +27,16 @@ This script makes:
      of the class; X3_runs2_cent20_<r>_<incl|dijet>: the same with the two groups of X2_runs2;
    - x_moments_<r>.csv: N, <x> and its error, RMS for every (selection, run group or all, grid class / 20% class or 0-60%,
      pT_lead bin or all).
-3. timing/T1_time_vs_x_<r>_dijet: leading jet t - MBD t0 vs x of the dijet sample, 0-60% and all pT_lead, with the
-   profile <t - t0> per x bin, its standard deviation and a quartic fitted to the profile;
+3. timing/T1_time_vs_x_<r>_<dijet|incl>: leading jet t - MBD t0 vs x of the dijet sample (and of the inclusive leading
+   jets, pT_lead >= the cut), 0-60% and all pT_lead, with the profile <t - t0> per x bin, its standard deviation and a
+   quartic fitted to the profile (the dijet one is the correction f(x));
    timing/T2_profiles_cent20_<r>_dijet: the profiles of the three 20% classes with the T1 fit, and profile - fit [ns].
    timing/T3_closure_<r>_dijet: uncorrected (left) and corrected (right) t vs x of the dijet sample, with their profiles
    (the _corr hists of Jet-Dijet.C with a timing correction file, production 11-12-26 on).
    timing/T4_leadpt_<r>_<dijet|lead>[_zoom60], T5_jetpt_<r>_<dijet|all>[_zoom60]: the corrected t - t0 - f(x) vs raw pT
    (h2LeadTimeCorrPt / h2JetTimeCorrPt, production 11-12-26-v2 on), summed over the 20% classes, with the profile per
-   pT bin; lead / all shown to 150 GeV, and zoomed to 60 GeV.
+   pT bin; lead / all shown to 150 GeV, and zoomed to 60 GeV. T5_jetpt_<r>_all_uncorr[_zoom60]: T5 all before the
+   correction, t - t0 (h2JetTimePt, productions after 11-17-26).
    timing/projections/lead_dijet/T4proj_<r>_dijet*: the corrected time of the dijet leading jets (the sample the
    correction was fitted to), each with a Gaussian fitted iteratively within +-2 sigma of its peak and its mu +- 3 sigma
    marked: full pT range (log over +-75 ns and linear over +-10 ns), per pT window and per 20% class (single plots and
@@ -53,6 +55,11 @@ This script makes:
    timing/cut/C3_x_<pt40_60|pt60>_3sigma_<r>: the OHCal fraction x of the C1 jets at 40-60 GeV and above 60 GeV (all or
    nearly all leading jets of their event, so taken from the inclusive timing grid and its corrected hists), all and
    split by the same window.
+   timing/run_groups/: the two run groups of X2_runs2 (before and from --run-split on), late - early in the lower panels:
+   R1_time_vs_x_<r>_<dijet|incl>_runs2: the T1 profile (uncorrected, with the dijet T1 quartic) and the corrected
+   profile per group;
+   R2_jetpt_<r>_all_runs2[_zoom60]: the T5 all profile <t> vs raw pT per group, uncorrected (h2JetTimePt, productions
+   after 11-17-26) and corrected; R2_leadpt_<r>_lead_runs2[_zoom60]: the T4 lead profile per group, corrected.
    With --write-calib PATH, the T1 fits are written as the timing correction file of Jet-Dijet.C
    (files/calib/timing_dijet_fit_iternf.csv).
 """
@@ -83,7 +90,7 @@ from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header
 from plot_jet_dijet_control import RADII, JET_PT_MIN, cent_label
 
-CACHE_VERSION = 6                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names; 6: corrected t vs pT (11-12-26-v2 on)
+CACHE_VERSION = 7                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names; 6: corrected t vs pT (11-12-26-v2 on); 7: sums per X2_runs2 run group, uncorrected lead t vs pT
 
 SELS = ("dijet", "incl")                                   # timing hists: dijet sample, inclusive comparison
 SEL_LABEL = {"dijet": "Dijet", "incl": "Inclusive"}
@@ -104,7 +111,10 @@ X_LABEL = r"Leading jet OHCal energy fraction $x$"
 # Corrected time vs raw pT hists of Jet-Dijet.C (with a timing correction file, 11-12-26-v2 on), per 20% class:
 # (kind, name prefix, sample tags)
 TPT_HISTS = (("lead", "h2LeadTimeCorrPt", ("dijet", "lead")), ("jet", "h2JetTimeCorrPt", ("dijet", "all")))
-TPT_PREFIX = {kind: pre for kind, pre, _ in TPT_HISTS}
+# Uncorrected time t - t0 vs raw pT of every jet in all selected events (h2JetTimePt, the binning of h2JetTimeCorrPt_all;
+# productions after 11-17-26): T5 uncorrected and R2
+TPT_UNC_HISTS = (("jet_unc", "h2JetTimePt", ("all",)),)
+TPT_PREFIX = {kind: pre for kind, pre, _ in TPT_HISTS + TPT_UNC_HISTS}
 TPT_MAX = 150                                              # [GeV] pT axis of the lead / all plots (jets above are counted in the text)
 TPT_ZOOM = 60                                              # [GeV] pT axis of their zoomed versions
 NAME_RE = re.compile(r"h2LeadTimeOHCalFrac_(r0\d)_(dijet|incl)_cent_(\d+)_(\d+)_ptlead_([\dp]+)_([\dp]+)$")
@@ -144,7 +154,7 @@ def read_layout(path):
                   "pt_edges": hp.axis(0).edges(),
                   "cent_edges": hp.axis(1).edges(),
                   "tpt_edges": {}}
-        for kind, pre, tags in TPT_HISTS:                               # from production 11-12-26-v2 on
+        for kind, pre, tags in TPT_HISTS + TPT_UNC_HISTS:               # from production 11-12-26-v2 on (h2JetTimePt later)
             for r in RADII:
                 for tag in tags:
                     name = f"{pre}_{r}_{tag}_cent_{CLASSES20[0][0]}_{CLASSES20[0][1]}"
@@ -210,8 +220,8 @@ def load_run(task):
     return run, d
 
 
-def cache_key(tasks, lumi_paths):
-    h = hashlib.sha1(f"v{CACHE_VERSION}".encode())
+def cache_key(tasks, lumi_paths, run_split):
+    h = hashlib.sha1(f"v{CACHE_VERSION}|split{run_split}".encode())
     for run, path in tasks:
         st = path.stat()
         h.update(f"{run}|{path}|{st.st_size}|{st.st_mtime_ns}\n".encode())
@@ -221,17 +231,24 @@ def cache_key(tasks, lumi_paths):
     return h.hexdigest()[:16]
 
 
-def load_inputs(tasks, lumi_files, n_jobs):
+def load_inputs(tasks, lumi_files, n_jobs, run_split):
+    """Every per-run hist summed over the runs. tx, tx_corr and tpt are also summed per X2_runs2 run group ("grp":
+    {name: {(key, group): sum}}, group 0: runs before run_split, 1: from it on)."""
     layout = read_layout(tasks[0][1])
     runs, grids, xflow, jetpt, status, leadpt, tx, tx_corr = [], {}, {}, {}, {}, {}, {}, {}
     ex = concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
     n_corr = 0                                                          # runs with the corrected dijet timing hists
     tpt, n_tpt = {}, {}                                                 # corrected t vs pT, and the runs that have it
+    grp = {"tx": {}, "tx_corr": {}, "tpt": {}}                          # per run group
     jobs = [(r, p, layout) for r, p in tasks]
     for run, d in (ex.map(load_run, jobs, chunksize=8) if ex else map(load_run, jobs)):
         if d is None:
             continue
         runs.append(run)
+        g = int(run >= run_split)
+        for name in grp:
+            for k, v in d[name].items():
+                grp[name][(k, g)] = grp[name].get((k, g), 0) + v.astype(np.float64)
         for k, v in d["grid"].items():
             grids.setdefault(k, []).append(v)
         for k, v in d["xflow"].items():
@@ -265,7 +282,10 @@ def load_inputs(tasks, lumi_files, n_jobs):
         lumi = None if any(l is None for l in lumis) else float(sum(lumis))
     return {"runs": runs, "grids": grids, "xflow": xflow, "jetpt": jetpt, "status": status, "leadpt": leadpt,
             "tx": tx, "tx_corr": tx_corr if n_corr == len(runs) else {},
-            "tpt": {k: v for k, v in tpt.items() if n_tpt[k] == len(runs)}, "layout": layout, "lumi": lumi}
+            "tpt": {k: v for k, v in tpt.items() if n_tpt[k] == len(runs)}, "layout": layout, "lumi": lumi,
+            "grp": {"tx": grp["tx"], "tx_corr": grp["tx_corr"] if n_corr == len(runs) else {},
+                    "tpt": {(k, g): v for (k, g), v in grp["tpt"].items() if n_tpt[k] == len(runs)}},
+            "run_split": run_split}
 
 
 # Helpers
@@ -419,13 +439,13 @@ def merge_t(h, te, width=T_DISPLAY_BIN):
     return np.add.reduceat(h, idx[:-1], axis=-1), new
 
 
-def time_profile(inputs, r_tag, sel, x_rebin, cents=None, key="tx"):
+def time_profile(inputs, r_tag, sel, x_rebin, cents=None, key="tx", arr=None):
     """t - t0 vs x summed over runs, pT_lead and the grid classes cents (all if None), with x rebinned, and its profile:
     <t - t0> per x bin from the bin centres of the t axis, the standard deviation, and the mask of bins with N >= PROFILE_MIN_N."""
     xe = inputs["layout"]["x_edges"][::x_rebin]
     te = inputs["layout"]["t_edges"]
     tc = 0.5 * (te[1:] + te[:-1])
-    g = inputs[key][(r_tag, sel)]                                        # (cent, pT_lead, x, t), fine x bins
+    g = inputs[key][(r_tag, sel)] if arr is None else arr              # (cent, pT_lead, x, t), fine x bins
     h = (g if cents is None else g[list(cents)]).sum(axis=(0, 1))
     h = h.reshape(len(xe) - 1, x_rebin, len(tc)).sum(axis=1)
     n = h.sum(axis=1)
@@ -614,8 +634,10 @@ def plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out_dir, x_max=None, suf
     x_max: upper end of the pT axis (no rebinning; default the hist's top edge); suffix: added to the file name."""
     key = (kind, r_tag, tag)
     if key not in inputs.get("tpt", {}):
-        print(f"Warning: no {TPT_PREFIX[kind]}_{r_tag}_{tag} hists in every run (production 11-12-26-v2 on), skipping")
+        print(f"Warning: no {TPT_PREFIX[kind]}_{r_tag}_{tag} hists in every run (production 11-12-26-v2 on; "
+              "h2JetTimePt after 11-17-26), skipping")
         return
+    unc = kind.endswith("_unc")                                          # uncorrected t - t0
     hep.style.use("ATLAS")
     xe, te = inputs["layout"]["tpt_edges"][key]
     hf = inputs["tpt"][key].sum(axis=0)                                  # (pT + 2, t + 2), with flow
@@ -637,13 +659,15 @@ def plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out_dir, x_max=None, suf
     z = np.where(hd > 0, hd, np.nan)
     pcm = ax.pcolormesh(xe, ted, z.T, cmap="viridis", norm=LogNorm(vmin=1, vmax=np.nanmax(z)), rasterized=True)
     fig.colorbar(pcm, ax=ax, pad=0.02).set_label("Leading jets" if kind == "lead" else "Jets")
-    ax.axhline(0, color="#e41a1c", linewidth=1.8, zorder=2, label="0")
+    if not unc:
+        ax.axhline(0, color="#e41a1c", linewidth=1.8, zorder=2, label="0")
     ax.errorbar(xc[ok], mean[ok], yerr=rms[ok], fmt="none", color="black", alpha=0.35, linewidth=3, capsize=0,
                 label=r"$\sigma$ (std. dev.)", zorder=3)
     ax.errorbar(xc[ok], mean[ok], yerr=rms[ok] / np.sqrt(n[ok]), fmt="o", color="black", markersize=3, capsize=0,
                 linewidth=1.2, label=rf"Profile ($N \geq {PROFILE_MIN_N}$ per bin)", zorder=4)
     title = {("lead", "dijet"): "Dijet, leading jet", ("lead", "lead"): "Leading jet, every selected event",
-             ("jet", "dijet"): "Every jet in dijet events", ("jet", "all"): "Every jet, every selected event"}[(kind, tag)]
+             ("jet", "dijet"): "Every jet in dijet events", ("jet", "all"): "Every jet, every selected event",
+             ("jet_unc", "all"): "Every jet, every selected event, uncorrected"}[(kind, tag)]
     common = sel_lines(r_tag, cut, "dijet")
     bold = title.replace(" ", r"\ ") + r",\ 0-60\%"
     lines = ([rf"$\bf{{{bold}}}$"]
@@ -656,10 +680,10 @@ def plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out_dir, x_max=None, suf
     ax.set_xlim(xe[0], hi)
     ax.set_ylim(te[0], te[-1])
     ax.set_xlabel(("Leading jet" if kind == "lead" else "Jet") + r" raw $p_{T}$ [GeV]")
-    ax.set_ylabel(r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
+    ax.set_ylabel(r"Jet $t - t_{0}^{\mathrm{MBD}}$ [ns]" if unc else r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
-    stem = f"{'T4_leadpt' if kind == 'lead' else 'T5_jetpt'}_{r_tag}_{tag}{suffix}"
+    stem = f"{'T4_leadpt' if kind == 'lead' else 'T5_jetpt'}_{r_tag}_{tag}{'_uncorr' if unc else ''}{suffix}"
     save_fig(fig, out_dir / f"{stem}.png", save_pdf)
     plt.close(fig)
     print(f"  {stem}: N {n_tot:.0f}, outside +-{te[-1]:g} ns {n_t_out:.0f}, above {hi:g} GeV {n_above:.0f}")
@@ -1214,7 +1238,7 @@ def cut_tdist_text(r_tag, nsig, sample="all"):
         "Counts per ns; outside = fraction beyond the window"]
 
 
-T_LABEL = r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]"
+T_CORR_LABEL = r"Jet $t - t_{0}^{\mathrm{MBD}} - f(x)$ [ns]"
 
 
 def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, sample="all", save_pdf=False):
@@ -1243,7 +1267,7 @@ def plot_cut_tdist(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=None, s
     ax.set_yscale("log")
     ax.set_xlim(*((te[0], te[-1]) if zoom is None else (-zoom, zoom)))
     ax.set_ylim(*log_ylim(np.concatenate([r[4] for r in rows]), axes_bottom(fig, ax, t) - 0.03))   # peak just below the text
-    ax.set_xlabel(T_LABEL)
+    ax.set_xlabel(T_CORR_LABEL)
     ax.set_ylabel(r"$dN/dt$ [ns$^{-1}$]")
     header(ax, runs, r_tag, lumi)
     fig.subplots_adjust(left=0.12, right=0.96, bottom=0.11, top=0.94)
@@ -1333,7 +1357,7 @@ def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=
         if k % 4 == 0:
             ax.set_ylabel(r"$dN/dt$ [ns$^{-1}$]")
         if k >= len(rows) - 4:                                           # bottom of each column
-            ax.set_xlabel(T_LABEL, fontsize=16)
+            ax.set_xlabel(T_CORR_LABEL, fontsize=16)
             ax.xaxis.set_tick_params(labelbottom=True)
     header(axs[0, -1], runs, r_tag, lumi)
     fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
@@ -1346,6 +1370,263 @@ def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=
             "Counts per ns",
             "Outside = fraction beyond the window"], top=0.88)
     save_fig(fig, out_dir / f"{CUT_SAMPLES[sample][3][1]}_{nsig}sigma_{r_tag}_panels{'' if zoom is None else f'_zoom{zoom:g}'}.png", save_pdf)
+    plt.close(fig)
+
+
+# R1 / R2: timing profiles of the two run groups of X2_runs2 (before and from --run-split on)
+# ---------------------------------------------------------------------------------------------------------------------
+
+RG_DIFF_ERR_RANGE = 0.3                                    # [ns] late - early points with larger errors do not set the lower panel range
+
+
+def pt_profile(hf, xe, te, edges):
+    """Profile <t> per pT bin of a (pT + 2, t + 2) hist with flow, its 1 GeV pT bins merged to edges (every edge must be
+    an edge of xe; the flow is left out, as in T4)."""
+    h = hf[1:-1, 1:-1]
+    i0, i1 = np.searchsorted(xe, [edges[0] - 1e-9, edges[-1] - 1e-9])
+    idx = np.searchsorted(xe, np.asarray(edges[:-1]) - 1e-9) - i0
+    h = np.add.reduceat(h[i0:i1], idx, axis=0)
+    tc = 0.5 * (te[1:] + te[:-1])
+    n = h.sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        mean = (h * tc).sum(axis=1) / n
+        rms = np.sqrt(np.maximum((h * tc ** 2).sum(axis=1) / n - mean ** 2, 0))
+    edges = np.asarray(edges, dtype=float)
+    return {"xe": edges, "xc": 0.5 * (edges[1:] + edges[:-1]), "n": n, "mean": mean, "rms": rms, "err": rms / np.sqrt(n),
+            "ok": n >= PROFILE_MIN_N}
+
+
+RG_RANGE_ERR = 0.5                                         # [ns] points with larger errors do not set the top panel range
+RG_FS = {"title": 22, "legend": 17, "text": 16, "label": 22, "rlabel": 18, "header": 16}
+RG_CORNERS = ("upper left", "upper right", "lower left", "lower right")
+
+
+def draw_runs2_column(ax, axr, P, glabels, ref=None, dx=0.0):
+    """Top: the profiles of all runs (grey open squares) and of the two run groups (light: early, dark: late; offset by
+    -dx / +dx); ref(ax) draws the reference (the fit or 0). Bottom: late - early, errors in quadrature. Returns the
+    points that set the top panel range (x, y - err, y + err; err < RG_RANGE_ERR) and the late - early weighted mean,
+    its error, chi2 against 0 and the number of points."""
+    cols = group_colors(2)
+    A = P["all"]
+    ok = A["ok"]
+    ax.errorbar(A["xc"][ok], A["mean"][ok], yerr=A["err"][ok], fmt="s", mfc="none", color="0.45", markersize=7,
+                capsize=0, linewidth=1.4, zorder=3, label=rf"All runs: $N$ = {fmt_n(A['n'].sum())}")
+    pts, soft = [], []
+    for g in (0, 1):
+        Q = P[g]
+        k = Q["ok"]
+        ax.errorbar(Q["xc"][k] + (2 * g - 1) * dx, Q["mean"][k], yerr=Q["err"][k], fmt="o", color=cols[g], markersize=6,
+                    capsize=0, linewidth=1.5, zorder=4, label=rf"Runs {glabels[g]}: $N$ = {fmt_n(Q['n'].sum())}")
+    for Q in (A, P[0], P[1]):
+        k = Q["ok"] & (Q["err"] < RG_RANGE_ERR)
+        pts.append(np.c_[Q["xc"][k], Q["mean"][k] - Q["err"][k], Q["mean"][k] + Q["err"][k]])
+        k = Q["ok"]
+        soft.append(np.c_[Q["xc"][k], Q["mean"][k] - Q["err"][k], Q["mean"][k] + Q["err"][k]])
+    if ref is not None:
+        ref(ax)
+    both = P[0]["ok"] & P[1]["ok"]
+    d = P[1]["mean"] - P[0]["mean"]
+    e = np.sqrt(P[0]["err"] ** 2 + P[1]["err"] ** 2)
+    x = P[0]["xc"]
+    axr.errorbar(x[both], d[both], yerr=e[both], fmt="o", color=cols[1], markersize=5, capsize=0, linewidth=1.4)
+    axr.axhline(0, color="gray", linestyle="--")
+    well = both & (e < RG_DIFF_ERR_RANGE)
+    dmax = np.max(np.abs(d[well]) + e[well]) if well.any() else 0.2
+    lim = np.ceil(1.15 * max(dmax, 0.2) * 10) / 10
+    axr.set_ylim(-lim, lim)
+    pts = (np.vstack(pts), np.vstack(soft))                            # (range-setting points, every drawn point)
+    if not both.any():
+        return pts, (np.nan, np.nan, np.nan, 0)
+    w = 1 / e[both] ** 2
+    wm = (d[both] * w).sum() / w.sum()
+    return pts, (wm, 1 / np.sqrt(w.sum()), ((d[both] / e[both]) ** 2).sum(), int(both.sum()))
+
+
+def ylim_for_boxes(fig, ax, pts, boxes, pad=0.05, gap=0.02):
+    """y range of ax that holds pts (x, ylo, yhi) with pad (fraction of their span) above and below, raised (boxes at the
+    top) or lowered (boxes at the bottom) until no point under a box reaches into it; the boxes sit at fixed axes
+    positions."""
+    lo0, hi0 = pts[:, 1].min(), pts[:, 2].max()
+    span = max(hi0 - lo0, 0.1)
+    lo, hi = lo0 - pad * span, hi0 + pad * span
+    rend = fig.canvas.get_renderer()
+    xf = ax.transAxes.inverted().transform(ax.transData.transform(np.c_[pts[:, 0], np.zeros(len(pts))]))[:, 0]
+    bbs = [b.get_window_extent(rend).transformed(ax.transAxes.inverted()) for b in boxes]
+    for _ in range(30):
+        for bb in bbs:
+            under = (xf >= bb.x0 - 0.01) & (xf <= bb.x1 + 0.01)
+            if not under.any():
+                continue
+            if bb.y0 > 0.5:                                              # top box: points below it
+                f = bb.y0 - gap
+                hi = max(hi, lo + (pts[under, 2].max() - lo) / f)
+            else:                                                        # bottom box: points above it
+                f = bb.y1 + gap
+                lo = min(lo, (pts[under, 1].min() - f * hi) / (1 - f))
+    return lo, hi
+
+
+def place_box(fig, ax, pts, make):
+    """make(loc) draws a box (legend or text) in the corner loc of ax and returns it. pts: (range-setting points, every
+    drawn point), each (x, ylo, yhi). Kept: the corner whose box covers the fewest drawn points (error bars included)
+    once the y range is set, then the one needing the smallest y range. Sets the y range and returns the box."""
+    hard, soft = pts
+    rend = fig.canvas.get_renderer()
+    best = None
+    for loc in RG_CORNERS:
+        box = make(loc)
+        lo, hi = ylim_for_boxes(fig, ax, hard, [box])
+        ax.set_ylim(lo, hi)
+        bb = box.get_window_extent(rend).transformed(ax.transData.inverted())
+        cover = int(((soft[:, 0] >= bb.x0) & (soft[:, 0] <= bb.x1) & (soft[:, 2] >= bb.y0) & (soft[:, 1] <= bb.y1)
+                     & (soft[:, 2] >= lo) & (soft[:, 1] <= hi)).sum())
+        score = (cover, hi - lo)
+        if best is None or score < best[0]:
+            best = (score, loc, lo, hi)
+        box.remove()
+    box = make(best[1])
+    ax.set_ylim(best[2], best[3])
+    return box
+
+
+def corner_text(ax, lines, fs):
+    """A make(loc) for place_box: lines as a text block in the corner loc."""
+    def make(loc):
+        top, left = loc.startswith("upper"), loc.endswith("left")
+        return ax.text(0.03 if left else 0.97, 0.96 if top else 0.04, "\n".join(lines), transform=ax.transAxes,
+                       ha="left" if left else "right", va="top" if top else "bottom", fontsize=fs, linespacing=1.3,
+                       zorder=6, bbox=dict(facecolor="white", alpha=0.85, edgecolor="none", pad=2))
+    return make
+
+
+def corner_legend(ax, fs, title=None):
+    def make(loc):
+        return ax.legend(loc=loc, fontsize=fs, frameon=True, framealpha=0.85, facecolor="white", edgecolor="none",
+                         title=title, title_fontsize=fs - 1, alignment="left")
+    return make
+
+
+def finish_runs2(fig, axes, pts, sel_lines_, runs, r_tag, lumi):
+    """Legend in the first panel and the selection text in the last (one box with the legend if there is one panel),
+    each in the corner that needs the least y range; larger header."""
+    fig.canvas.draw()
+    if len(axes) == 1:
+        place_box(fig, axes[0][0], pts[0], corner_legend(axes[0][0], RG_FS["legend"], title="\n".join(sel_lines_)))
+    else:
+        place_box(fig, axes[0][0], pts[0], corner_legend(axes[0][0], RG_FS["legend"]))
+        place_box(fig, axes[-1][0], pts[-1], corner_text(axes[-1][0], sel_lines_, RG_FS["text"]))
+    header(axes[-1][0], runs, r_tag, lumi)
+    axes[-1][0].texts[-1].set_fontsize(RG_FS["header"])
+
+
+def runs2_figure(ncol):
+    fig = plt.figure(figsize=(11.5 * ncol, 10))
+    gs = fig.add_gridspec(2, ncol, height_ratios=(3, 1), hspace=0.05, wspace=0.2)
+    axes = [(fig.add_subplot(gs[0, c]), fig.add_subplot(gs[1, c])) for c in range(ncol)]
+    for ax, axr in axes:
+        ax.tick_params(labelbottom=False)
+        for a in (ax, axr):
+            a.tick_params(labelsize=18)
+    fig.subplots_adjust(left=0.08 if ncol > 1 else 0.13, right=0.98, bottom=0.1, top=0.93)
+    return fig, axes
+
+
+def set_runs2_labels(ax, axr, title, ylab, xlab):
+    ax.set_title(title, loc="left", fontsize=RG_FS["title"], pad=8)
+    ax.set_ylabel(ylab, fontsize=RG_FS["label"])
+    axr.set_xlabel(xlab, fontsize=RG_FS["label"])
+    axr.set_ylabel("Late − early [ns]", fontsize=RG_FS["rlabel"])
+
+
+def plot_r1(inputs, r_tag, cut, x_rebin, fit, glabels, runs, lumi, out_dir, sel="dijet", save_pdf=False):
+    """R1: the T1 profile <t - t0> vs x of the two run groups of X2_runs2 and of all runs (sel, 0-60%, all pT_lead), with
+    the dijet T1 quartic f(x) (all runs, the correction; also for sel incl); right, the same for the corrected
+    t - t0 - f(x), with 0. Lower panels: late - early."""
+    grp = inputs.get("grp", {})
+    if ((r_tag, sel), 0) not in grp.get("tx", {}):
+        print(f"Warning: no per-run-group timing sums in the inputs, skipping R1")
+        return
+    hep.style.use("ATLAS")
+    keys = ["tx"] + (["tx_corr"] if ((r_tag, sel), 0) in grp.get("tx_corr", {}) else [])
+    fig, axes = runs2_figure(len(keys))
+    sel_txt = [rf"$\bf{{{SEL_LABEL[sel]},\ 0\text{{–}}60\%}}$".replace(r"\text{–}", "-")] + sel_lines(r_tag, cut, sel)
+    xs = np.linspace(fit["x_lo"], fit["x_hi"], 300)
+    all_pts = []
+    for (ax, axr), key in zip(axes, keys):
+        P = {"all": time_profile(inputs, r_tag, sel, x_rebin, key=key)}
+        for g in (0, 1):
+            P[g] = time_profile(inputs, r_tag, sel, x_rebin, key=key, arr=grp[key][((r_tag, sel), g)])
+        if key == "tx":
+            title = r"$\bf{Uncorrected}$: $t - t_{0}$"
+            ref = lambda a: a.plot(xs, np.polyval(fit["c"], xs), "-", color="#e41a1c", linewidth=2.2, zorder=2,
+                                   label="Dijet T1 quartic $f(x)$, all runs")
+            ylab = r"$\langle t - t_{0}^{\mathrm{MBD}} \rangle$ [ns]"
+        else:
+            title = r"$\bf{Corrected}$: $t - t_{0} - f(x)$"
+            ref = lambda a: a.axhline(0, color="#e41a1c", linewidth=2, zorder=2, label="0")
+            ylab = r"$\langle t - t_{0}^{\mathrm{MBD}} - f(x) \rangle$ [ns]"
+        pts, (wm, ewm, chi2, npt) = draw_runs2_column(ax, axr, P, glabels, ref=ref, dx=0.006)
+        if key == "tx":                                                  # the fit curve is part of the range too
+            curve = np.c_[xs, np.polyval(fit["c"], xs), np.polyval(fit["c"], xs)]
+            pts = (np.vstack([pts[0], curve]), np.vstack([pts[1], curve]))
+        all_pts.append(pts)
+        xc_ok = P["all"]["xc"][P["all"]["ok"]]                           # the filled x bins, with a half-bin margin
+        hw = 0.5 * (P["all"]["xe"][1] - P["all"]["xe"][0])
+        ax.set_xlim(min(xc_ok.min(), fit["x_lo"]) - 2 * hw, max(xc_ok.max(), fit["x_hi"]) + 2 * hw)
+        axr.set_xlim(*ax.get_xlim())
+        set_runs2_labels(ax, axr, title, ylab, X_LABEL)
+        print(f"  R1 {r_tag} {sel} {key}: late - early weighted mean {wm:+.3f} +- {ewm:.3f} ns, chi2/n vs 0 = {chi2:.1f}/{npt}; "
+              + ", ".join(f"x={x:.3f}: {d:+.3f}" for x, d, k in zip(P[0]["xc"], P[1]["mean"] - P[0]["mean"], P[0]["ok"] & P[1]["ok"]) if k))
+    finish_runs2(fig, axes, all_pts, sel_txt, runs, r_tag, lumi)
+    save_fig(fig, out_dir / f"R1_time_vs_x_{r_tag}_{sel}_runs2.png", save_pdf)
+    plt.close(fig)
+
+
+# R2 samples: (uncorrected kind or None, corrected kind, tag, bold title, pT axis noun, file stem)
+R2_SAMPLES = {"lead": (None, "lead", "lead", "Leading jet, every selected event", "Leading jet", "R2_leadpt"),
+              "all": ("jet_unc", "jet", "all", "Every jet, every selected event", "Jet", "R2_jetpt")}
+
+
+def plot_r2(inputs, r_tag, cut, glabels, runs, lumi, out_dir, sample="all", x_max=TPT_MAX, suffix="", save_pdf=False):
+    """R2: the T4 / T5 profile <t> vs raw pT of the two run groups of X2_runs2 and of all runs, 0-60%. sample lead: the
+    leading jet of every selected event (corrected only); all: every jet of every selected event, left uncorrected
+    t - t0 (h2JetTimePt; skipped in productions without it), right corrected t - t0 - f(x). pT bins: PT_PLOT_EDGES up
+    to x_max. Lower panels: late - early. The top panel range is set by the points with errors below RG_RANGE_ERR."""
+    unc_kind, corr_kind, tag, head, noun, stem = R2_SAMPLES[sample]
+    grp = inputs.get("grp", {}).get("tpt", {})
+    cols = [(k, t) for k, t in ((unc_kind, r"$\bf{Uncorrected}$: $t - t_{0}$"),
+                               (corr_kind, r"$\bf{Corrected}$: $t - t_{0} - f(x)$"))
+            if k is not None and ((k, r_tag, tag), 0) in grp]
+    if not cols:
+        print(f"Warning: no {sample} time vs pT hists per run group, skipping R2")
+        return
+    if unc_kind is not None and cols[0][0] != unc_kind:
+        print(f"Warning: no {TPT_PREFIX[unc_kind]}_{r_tag}_{tag} in every run (productions after 11-17-26), "
+              "R2 without the uncorrected panel")
+    hep.style.use("ATLAS")
+    fig, axes = runs2_figure(len(cols))
+    all_pts = []
+    for (ax, axr), (kind, title) in zip(axes, cols):
+        key = (kind, r_tag, tag)
+        unc = kind.endswith("_unc")
+        xe, te = inputs["layout"]["tpt_edges"][key]
+        edges = [xe[0]] + [e for e in PT_PLOT_EDGES if xe[0] + 1e-9 < e <= min(x_max, xe[-1])]
+        P = {"all": pt_profile(inputs["tpt"][key].sum(axis=0), xe, te, edges)}
+        for g in (0, 1):
+            P[g] = pt_profile(grp[(key, g)].sum(axis=0), xe, te, edges)
+        ref = None if unc else (lambda a: a.axhline(0, color="#e41a1c", linewidth=2, zorder=2, label="0"))
+        pts, (wm, ewm, chi2, npt) = draw_runs2_column(ax, axr, P, glabels, ref=ref, dx=0.15 if x_max <= 60 else 0.3)
+        all_pts.append(pts)
+        for a in (ax, axr):
+            a.set_xlim(xe[0], x_max)
+        set_runs2_labels(ax, axr, title, r"$\langle t - t_{0}^{\mathrm{MBD}} \rangle$ [ns]" if unc
+                         else r"$\langle t - t_{0}^{\mathrm{MBD}} - f(x) \rangle$ [ns]", noun + r" raw $p_{T}$ [GeV]")
+        print(f"  R2 {r_tag} {sample} {kind}{suffix}: late - early weighted mean {wm:+.4f} +- {ewm:.4f} ns, chi2/n vs 0 = {chi2:.1f}/{npt}")
+    common = sel_lines(r_tag, cut, "dijet")
+    lines = [rf"$\bf{{{head.replace(' ', chr(92) + ' ')},\ 0-60\%}}$"] + common[1:] + [
+        rf"Profile over $\pm${te[-1]:g} ns ($N \geq {PROFILE_MIN_N}$ per bin)"]
+    finish_runs2(fig, axes, all_pts, lines, runs, r_tag, lumi)
+    save_fig(fig, out_dir / f"{stem}_{r_tag}_{tag}_runs2{suffix}.png", save_pdf)
     plt.close(fig)
 
 
@@ -1677,7 +1958,7 @@ def write_csv(rows, path):
 def main():
     parser = argparse.ArgumentParser(description="Leading-jet checks in the clean dijet sample: jet pT tail and OHCal "
                                                  "fraction (Jet-Dijet output with the dijet timing hists).")
-    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-12-26-v3/test.list"),
+    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-17-26/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
                         help="List of Event QA ROOT files named <run>.root with hLuminosity (default: %(default)s)")
@@ -1717,7 +1998,7 @@ def main():
     cache_path = None
     if not args.no_cache:
         cache_dir = args.cache_dir if args.cache_dir is not None else args.output_dir / "cache"
-        cache_path = cache_dir / f"inputs_{cache_key(tasks, lumi_paths)}.pkl"
+        cache_path = cache_dir / f"inputs_{cache_key(tasks, lumi_paths, args.run_split)}.pkl"
     if cache_path is not None and cache_path.exists() and not args.refresh_cache:
         print(f"Reading the inputs from the cache {cache_path}")
         with cache_path.open("rb") as f:
@@ -1725,7 +2006,7 @@ def main():
     else:
         n_jobs = max(1, min(args.jobs, len(tasks)))
         print(f"Reading {len(tasks)} runs with {n_jobs} worker(s)")
-        inputs = load_inputs(tasks, lumi_files, n_jobs)
+        inputs = load_inputs(tasks, lumi_files, n_jobs, args.run_split)
         if cache_path is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             with cache_path.open("wb") as f:
@@ -1755,7 +2036,15 @@ def main():
         fits[r_tag] = fit
         plot_t2(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
         plot_t3(inputs, r_tag, cut, args.x_rebin, fit, runs, lumi, out / "timing", save_pdf=args.save_pdf)
-        for kind, _, tags in TPT_HISTS:
+        plot_t1(inputs, r_tag, cut, args.x_rebin, runs, lumi, out / "timing", sel="incl", save_pdf=args.save_pdf)
+        rd = out / "timing" / "run_groups"                               # the two run groups of X2_runs2
+        for sel in SELS:                                                 # the dijet f(x) as the reference for both
+            plot_r1(inputs, r_tag, cut, args.x_rebin, fit, glabels2, runs, lumi, rd, sel=sel, save_pdf=args.save_pdf)
+        for sample in R2_SAMPLES:
+            plot_r2(inputs, r_tag, cut, glabels2, runs, lumi, rd, sample=sample, save_pdf=args.save_pdf)
+            plot_r2(inputs, r_tag, cut, glabels2, runs, lumi, rd, sample=sample, x_max=TPT_ZOOM,
+                    suffix=f"_zoom{TPT_ZOOM:g}", save_pdf=args.save_pdf)
+        for kind, _, tags in TPT_HISTS + TPT_UNC_HISTS:
             for tag in tags:
                 if tag == "dijet":                                       # up to 60 GeV: the whole hist
                     plot_t45(inputs, r_tag, cut, kind, tag, runs, lumi, out / "timing", save_pdf=args.save_pdf)
