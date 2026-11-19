@@ -65,6 +65,7 @@ CDB_TYPES = [
     ("Centrality Scale", "CentralityScale"),
     ("Centrality Vertex Scale", "CentralityVertexScale"),
     ("MBD QFIT", "MBD_QFIT"),
+    ("MBD T0CORR", "MBD_T0CORR"),
     ("EMCal Calib", "CEMC_calib_ADC_to_ETower"),
     ("EMCal Bad Tower Map", "CEMC_BadTowerMap"),
     ("EMCal Frac Bad Chi2", "CEMC_hotTowers_fracBadChi2"),
