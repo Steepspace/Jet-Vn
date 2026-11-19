@@ -17,7 +17,10 @@
 // vs raw pT (+-75 ns, 1 GeV pT bins): of the leading jet (h2LeadTimeCorrPt_<r>_<dijet|lead>, "lead" = the leading jet of
 // every selected event, raw pT >= jet_pt_raw_min) and of every jet passing the cuts (h2JetTimeCorrPt_<r>_<dijet|all>);
 // the dijet versions end at 60 GeV. The uncorrected time t - t0 vs raw pT of every jet passing the cuts in all selected
-// events (h2JetTimePt_<r>_all, the binning of h2JetTimeCorrPt_<r>_all) is filled with or without the file.
+// events (h2JetTimePt_<r>_all, the binning of h2JetTimeCorrPt_<r>_all) is filled with or without the file. With the file,
+// per 20 % class and raw pT class (the classes of the C2 plots of plot_jet_dijet_timing.py), the OHCal fraction x vs
+// the corrected time (+-75 ns), for every jet in all selected events and for their leading jet
+// (h2TimeCorrOHCalFrac_<r>_<all|lead>_cent_<c>_pt_<a>_<b>), so x can be split by a timing window per pT class.
 
 // -- utils
 #include "myUtils.C"
@@ -166,6 +169,10 @@ class JetDijet
   static constexpr double m_tpt_dt_max = 75; /*ns*/
   static constexpr double m_tpt_pt_high_dijet = 60;
   static constexpr double m_tpt_pt_high_incl = 300;
+  // Raw pT classes [GeV] of the x vs corrected time hists (the C2 classes of plot_jet_dijet_timing.py, then 150-300;
+  // jets outside are not filled)
+  static constexpr std::array<int, 9> m_txpt_pt_edges = {7, 10, 15, 20, 30, 40, 60, 150, 300};
+  static constexpr size_t m_n_txpt = m_txpt_pt_edges.size() - 1;
   // Jet raw pT x centrality: 1 GeV over [0, 300], 1 % centrality bins
   static constexpr int m_bins_jet_pt = 300;
   static constexpr double m_jet_pt_high = 300;
@@ -222,6 +229,11 @@ class JetDijet
     // every jet passing the jet cuts: in dijet events, in all selected events (SEL_INCL slot, tag "all")
     std::array<std::array<TH2 *, m_n_tcent>, N_SEL> h2LeadTimeCorrPt{};
     std::array<std::array<TH2 *, m_n_tcent>, N_SEL> h2JetTimeCorrPt{};
+    // OHCal fraction x vs corrected time t - t0 - f(x), [timing class][raw pT class of m_txpt_pt_edges]; booked only with
+    // the timing correction. Every jet passing the jet cuts in all selected events (tag "all"), and the leading jet of
+    // every selected event (tag "lead", no pT_lead cut)
+    std::array<std::array<TH2 *, m_n_txpt>, m_n_tcent> h2JetTimeCorrOHCalFrac{};
+    std::array<std::array<TH2 *, m_n_txpt>, m_n_tcent> h2LeadTimeCorrOHCalFracAll{};
     // Uncorrected time t - t0 vs raw pT of every jet passing the jet cuts in all selected events, [timing class]; always
     // booked, the binning of h2JetTimeCorrPt[SEL_INCL]
     std::array<TH2 *, m_n_tcent> h2JetTimePt{};
@@ -282,6 +294,7 @@ class JetDijet
   void setup_timing_corr();
   double timing_f(size_t ir, size_t tc, double x) const;
   void fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx, bool corr = true) const;
+  void fill_time_corr_x(const std::array<TH2 *, m_n_txpt> &row, size_t ir, size_t tc, size_t idx) const;
   static std::vector<double> unit_edges(double lo, double hi);
   static std::vector<double> time_edges(double t_max);
   void setup_chain();
@@ -722,6 +735,28 @@ void JetDijet::init_hists()
               static_cast<int>(jet_edges[is].size()) - 1, jet_edges[is].data(), static_cast<int>(tpt_dt_edges.size()) - 1, tpt_dt_edges.data());
         }
       }
+
+      // x vs corrected time per raw pT class: the x axis of the timing grid, the time axis of the hists above
+      for (size_t k = 0; k < m_n_tcent; ++k)
+      {
+        const auto clo = static_cast<int>(m_tcent_edges[k]);
+        const auto chi = static_cast<int>(m_tcent_edges[k + 1]);
+        for (size_t ip = 0; ip < m_n_txpt; ++ip)
+        {
+          const int plo = m_txpt_pt_edges[ip];
+          const int phi = m_txpt_pt_edges[ip + 1];
+          const auto book_x = [&](const char *tag, const char *label)
+          {
+            return book<TH2F>(
+                std::format("h2TimeCorrOHCalFrac_{}_{}_cent_{}_{}_pt_{}_{}", r, tag, clo, chi, plo, phi),
+                std::format("{} ({}, {}-{}%, {} #leq raw p_{{T}} < {} GeV); OHCal Energy Fraction; Jet t - MBD t_{{0}} - f(x) [ns]",
+                            label, jet_label, clo, chi, plo, phi).c_str(),
+                m_bins_frac, m_frac_low, m_frac_high, static_cast<int>(tpt_dt_edges.size()) - 1, tpt_dt_edges.data());
+          };
+          h.h2JetTimeCorrOHCalFrac[k][ip] = book_x("all", "Jets in all selected events");
+          h.h2LeadTimeCorrOHCalFracAll[k][ip] = book_x("lead", "Leading jet of every selected event");
+        }
+      }
     }
   }
 }
@@ -779,6 +814,26 @@ void JetDijet::fill_time_corr_pt(TH2 *h, size_t ir, size_t tc, size_t idx, bool 
     return;
   }
   h->Fill(jd.pt->at(idx), t - m_event_data.t0 - (corr ? timing_f(ir, tc, frac) : 0.0));
+}
+
+// OHCal fraction x vs corrected time t - t0 - f(x) of jet idx, in the hist of its raw pT class in row (timing class tc);
+// the same jets as fill_time_corr_pt (t, t0 or x NaN skipped), and only those inside the m_txpt_pt_edges range
+void JetDijet::fill_time_corr_x(const std::array<TH2 *, m_n_txpt> &row, size_t ir, size_t tc, size_t idx) const
+{
+  const JetData &jd = m_event_data.jets[ir];
+  const double pt = jd.pt->at(idx);
+  const auto it = std::upper_bound(m_txpt_pt_edges.begin(), m_txpt_pt_edges.end(), pt);
+  if (it == m_txpt_pt_edges.begin() || it == m_txpt_pt_edges.end())
+  {
+    return;
+  }
+  const double t = jd.t->at(idx);
+  const double frac = jd.ohcal_frac->at(idx);
+  if (!std::isfinite(t) || !std::isfinite(frac) || !std::isfinite(m_event_data.t0))
+  {
+    return;
+  }
+  row[static_cast<size_t>(std::distance(m_txpt_pt_edges.begin(), it) - 1)]->Fill(frac, t - m_event_data.t0 - timing_f(ir, tc, frac));
 }
 
 // The jet cuts: E > 0, |eta| < eta_max of the radius, raw pT >= m_jet_pt_raw_min
@@ -877,6 +932,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
     if (m_has_timing_corr)
     {
       fill_time_corr_pt(h.h2JetTimeCorrPt[SEL_INCL][tc], ir, tc, idx);
+      fill_time_corr_x(h.h2JetTimeCorrOHCalFrac[tc], ir, tc, idx);
     }
     const int i = static_cast<int>(idx);
     if (lead < 0 || pt > jd.pt->at(static_cast<size_t>(lead)))
@@ -907,6 +963,7 @@ void JetDijet::process_dijet(size_t ir, int cls)
   if (m_has_timing_corr)
   {
     fill_time_corr_pt(h.h2LeadTimeCorrPt[SEL_INCL][tc], ir, tc, il);
+    fill_time_corr_x(h.h2LeadTimeCorrOHCalFracAll[tc], ir, tc, il);
   }
 
   // Inclusive comparison: the leading jet above the cut, no subleading jet required
