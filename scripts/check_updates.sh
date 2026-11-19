@@ -61,7 +61,7 @@ check_pinned() {
 # --- Repository Definitions ---
 MINBIAS_DIR="$HOME/sPHENIX/coresoftware-MinBias"
 JETBG_DIR="$HOME/sPHENIX/coresoftware-jetbackground-v2"
-JETBG_PINNED="aabb69b48"   # upstream commit jetbackground-v2 is built on; bump after each integration
+JETBG_PINNED="2acbb391d"   # upstream commit jetbackground-v2 is built on; bump after each integration
 
 # 1. MinBias: trigger package against master
 check_updates "$MINBIAS_DIR" "MinBias" "master" ":/offline/packages/trigger"
