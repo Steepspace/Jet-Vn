@@ -55,6 +55,10 @@ This script makes:
    timing/cut/C3_x_<pt40_60|pt60>_3sigma_<r>: the OHCal fraction x of the C1 jets at 40-60 GeV and above 60 GeV (all or
    nearly all leading jets of their event, so taken from the inclusive timing grid and its corrected hists), all and
    split by the same window.
+   timing/cut/C4_jetx_3sigma_<r>_panels[_logy], C4_leadx_3sigma_<r>_panels[_logy]: the OHCal fraction x of the C2 jets
+   (every jet / the leading jet of every selected event) inside and outside the same window, one C2 pT class per panel,
+   as unit-area shapes (h2TimeCorrOHCalFrac_<r>_<all|lead>, x vs corrected t per raw pT class, productions after
+   11-19-26), and C4_<jetx|leadx>_3sigma_<r>.csv with N, <x> and the fractions at x < 0.05 and x >= 0.95.
    timing/run_groups/: the two run groups of X2_runs2 (before and from --run-split on), late - early in the lower panels:
    R1_time_vs_x_<r>_<dijet|incl>_runs2: the T1 profile (uncorrected, with the dijet T1 quartic) and the corrected
    profile per group;
@@ -90,7 +94,7 @@ from plot_jet_noflow_compare import parse_list_file, load_luminosity
 from plot_jet_iternf_timing import StageTimer, add_header
 from plot_jet_dijet_control import RADII, JET_PT_MIN, cent_label
 
-CACHE_VERSION = 7                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names; 6: corrected t vs pT (11-12-26-v2 on); 7: sums per X2_runs2 run group, uncorrected lead t vs pT
+CACHE_VERSION = 8                                          # 2: leading-jet raw pT per selection (11-11-26 on); 3: t vs x per (class, pT_lead) bin; 4: corrected dijet t (11-12-26 on); 5: grid classes from the hist names; 6: corrected t vs pT (11-12-26-v2 on); 7: sums per X2_runs2 run group, uncorrected lead t vs pT; 8: x vs corrected t per raw pT class (after 11-19-26)
 
 SELS = ("dijet", "incl")                                   # timing hists: dijet sample, inclusive comparison
 SEL_LABEL = {"dijet": "Dijet", "incl": "Inclusive"}
@@ -118,6 +122,13 @@ TPT_PREFIX = {kind: pre for kind, pre, _ in TPT_HISTS + TPT_UNC_HISTS}
 TPT_MAX = 150                                              # [GeV] pT axis of the lead / all plots (jets above are counted in the text)
 TPT_ZOOM = 60                                              # [GeV] pT axis of their zoomed versions
 NAME_RE = re.compile(r"h2LeadTimeOHCalFrac_(r0\d)_(dijet|incl)_cent_(\d+)_(\d+)_ptlead_([\dp]+)_([\dp]+)$")
+# OHCal fraction x vs corrected time per 20% class and raw pT class (productions after 11-19-26): every jet ("all") and
+# the leading jet ("lead") of every selected event; the pT classes from the names of the first 20% class
+TXPT_RE = re.compile(rf"h2TimeCorrOHCalFrac_(r0\d)_(all|lead)_cent_{CLASSES20[0][0]}_{CLASSES20[0][1]}_pt_(\d+)_(\d+)$")
+
+
+def txpt_name(r, tag, c, lo, hi):
+    return f"h2TimeCorrOHCalFrac_{r}_{tag}_cent_{c[0]}_{c[1]}_pt_{lo}_{hi}"
 
 
 def edge_tag(x):
@@ -160,6 +171,17 @@ def read_layout(path):
                     name = f"{pre}_{r}_{tag}_cent_{CLASSES20[0][0]}_{CLASSES20[0][1]}"
                     if name in f:
                         layout["tpt_edges"][(kind, r, tag)] = (f[name].axis(0).edges(), f[name].axis(1).edges())
+        # x vs corrected t per raw pT class (after 11-19-26): {(r, tag): {"classes": [(lo, hi)], "x_edges", "t_edges"}}
+        txpt = {}
+        for k in names:
+            m = TXPT_RE.match(k)
+            if m:
+                txpt.setdefault((m.group(1), m.group(2)), {"classes": []})["classes"].append((int(m.group(3)), int(m.group(4))))
+        for (r, tag), v in txpt.items():
+            v["classes"].sort()
+            h = f[txpt_name(r, tag, CLASSES20[0], *v["classes"][0])]
+            v["x_edges"], v["t_edges"] = h.axis(0).edges(), h.axis(1).edges()
+        layout["txpt"] = txpt
     return layout
 
 
@@ -172,7 +194,7 @@ def load_run(task):
     """Per run: the x projection (all t, flow included) of every timing hist as (cent, pT_lead, x) per (radius,
     selection), the x under/overflow per (radius, selection), the jet pT x centrality hists and the status hists."""
     run, path, layout = task
-    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}, "tx_corr": {}, "tpt": {}}
+    d = {"grid": {}, "xflow": {}, "jetpt": {}, "status": {}, "leadpt": {}, "tx": {}, "tx_corr": {}, "tpt": {}, "txpt": {}}
     try:
         with uproot.open(path) as f:
             for r in RADII:
@@ -214,6 +236,11 @@ def load_run(task):
                 names = [f"{TPT_PREFIX[kind]}_{r}_{tag}_cent_{lo}_{hi}" for lo, hi in CLASSES20]
                 if all(n in f for n in names):
                     d["tpt"][key] = np.stack([f[n].values(flow=True) for n in names]).astype(np.float32)
+            # x vs corrected t per raw pT class, summed over the 20% classes (0-60%), with flow: (pT class, x + 2, t + 2)
+            for (r, tag), v in layout.get("txpt", {}).items():
+                names = [[txpt_name(r, tag, c, lo, hi) for c in CLASSES20] for lo, hi in v["classes"]]
+                if all(n in f for row in names for n in row):
+                    d["txpt"][(r, tag)] = np.stack([sum(f[n].values(flow=True) for n in row) for row in names]).astype(np.float32)
     except (KeyError, OSError) as e:
         print(f"Warning: run {run}: {e}, skipping")
         return run, None
@@ -239,6 +266,7 @@ def load_inputs(tasks, lumi_files, n_jobs, run_split):
     ex = concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
     n_corr = 0                                                          # runs with the corrected dijet timing hists
     tpt, n_tpt = {}, {}                                                 # corrected t vs pT, and the runs that have it
+    txpt, n_txpt = {}, {}                                               # x vs corrected t per pT class, and the runs that have it
     grp = {"tx": {}, "tx_corr": {}, "tpt": {}}                          # per run group
     jobs = [(r, p, layout) for r, p in tasks]
     for run, d in (ex.map(load_run, jobs, chunksize=8) if ex else map(load_run, jobs)):
@@ -267,6 +295,9 @@ def load_inputs(tasks, lumi_files, n_jobs, run_split):
         for k, v in d["tpt"].items():
             tpt[k] = tpt.get(k, 0) + v.astype(np.float64)
             n_tpt[k] = n_tpt.get(k, 0) + 1
+        for k, v in d["txpt"].items():
+            txpt[k] = txpt.get(k, 0) + v.astype(np.float64)
+            n_txpt[k] = n_txpt.get(k, 0) + 1
     if ex:
         ex.shutdown()
     order = np.argsort(runs)
@@ -282,7 +313,8 @@ def load_inputs(tasks, lumi_files, n_jobs, run_split):
         lumi = None if any(l is None for l in lumis) else float(sum(lumis))
     return {"runs": runs, "grids": grids, "xflow": xflow, "jetpt": jetpt, "status": status, "leadpt": leadpt,
             "tx": tx, "tx_corr": tx_corr if n_corr == len(runs) else {},
-            "tpt": {k: v for k, v in tpt.items() if n_tpt[k] == len(runs)}, "layout": layout, "lumi": lumi,
+            "tpt": {k: v for k, v in tpt.items() if n_tpt[k] == len(runs)},
+            "txpt": {k: v for k, v in txpt.items() if n_txpt[k] == len(runs)}, "layout": layout, "lumi": lumi,
             "grp": {"tx": grp["tx"], "tx_corr": grp["tx_corr"] if n_corr == len(runs) else {},
                     "tpt": {(k, g): v for (k, g), v in grp["tpt"].items() if n_tpt[k] == len(runs)}},
             "run_split": run_split}
@@ -1373,6 +1405,122 @@ def plot_cut_tdist_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, zoom=
     plt.close(fig)
 
 
+# C4: OHCal fraction of the C2 jets inside and outside the window, per pT class
+C4_STEMS = {"all": "C4_jetx", "lead": "C4_leadx"}
+C4_REBIN = 2                                               # x bins merged (0.025 -> 0.05)
+C4_REBIN_SPARSE = 4                                        # (-> 0.1) when the inside or outside part has fewer jets than
+C4_SPARSE_N = 2000                                         # this
+C4_X_LO, C4_X_HI = 0.05, 0.95                              # the x regions of the CSV (as the C3 table)
+C_IN, C_OUT = "#e41a1c", "#377eb8"
+
+
+def cut_x_classes(inputs, r_tag, fit, nsig, sample="all"):
+    """Per CUT_PT_CLASSES class of h2TimeCorrOHCalFrac_<r>_<sample> (0-60%): (lo, hi, x+2 counts inside, x+2 counts
+    outside the window mu +- nsig sigma). Inside as in C1 / C2: t bin centre in the window, t flow outside. None if the
+    hists are missing."""
+    key = (r_tag, sample)
+    if key not in inputs.get("txpt", {}):
+        return None
+    lay = inputs["layout"]["txpt"][key]
+    te = np.asarray(lay["t_edges"])
+    tc = 0.5 * (te[1:] + te[:-1])
+    lo_t, hi_t = fit["mu"] - nsig * fit["sigma"], fit["mu"] + nsig * fit["sigma"]
+    inside = np.r_[False, (tc >= lo_t) & (tc <= hi_t), False]
+    rows = []
+    for lo, hi in CUT_PT_CLASSES:
+        if (lo, hi) not in lay["classes"]:
+            continue
+        h = inputs["txpt"][key][lay["classes"].index((lo, hi))]            # (x + 2, t + 2)
+        if h.sum() <= 0:                                                 # empty classes are skipped, as in C2
+            continue
+        n_in = h[:, inside].sum(axis=1)
+        rows.append((lo, hi, n_in, h.sum(axis=1) - n_in))
+    return rows, (lo_t, hi_t), np.asarray(lay["x_edges"])
+
+
+def plot_cut_x_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, sample="all", logy=False, save_pdf=False):
+    """C4: the OHCal fraction x of the C2 jets (every jet, or the leading jet of every selected event; 0-60%) inside
+    (red) and outside (blue dashed) the C1 / C2 window, one C2 pT class per panel in the C2 panel layout, each part as
+    a unit-area shape (1/N dN/dx over the x axis; jets with x outside it count in N only) with statistical errors.
+    x bins of 0.05, or 0.1 when either part has fewer than C4_SPARSE_N jets. The last slot holds the selection text
+    and the legend. logy: log y axis (file suffix _logy). Also checks the counts against C2 and writes the CSV."""
+    got = cut_x_classes(inputs, r_tag, fit, nsig, sample)
+    if got is None:
+        return
+    rows, (lo_t, hi_t), xe = got
+    hep.style.use("ATLAS")
+    fig, axs = plt.subplots(2, 4, figsize=(22, 10.5), sharex=True)
+    csv_rows = []
+    for k, ax in enumerate(axs.flat):
+        if k >= len(rows):
+            ax.axis("off")
+            continue
+        lo, hi, n_in, n_out = rows[k]
+        tot_in, tot_out = n_in.sum(), n_out.sum()
+        kb = C4_REBIN if min(tot_in, tot_out) >= C4_SPARSE_N else C4_REBIN_SPARSE
+        xr = xe[::kb]
+        xc = 0.5 * (xr[1:] + xr[:-1])
+        vis = []
+        for n, tot, col, ls in ((n_in, tot_in, C_IN, "-"), (n_out, tot_out, C_OUT, "--")):
+            if tot <= 0:
+                continue
+            nb = rebin(n[1:-1], kb)
+            d, e = nb / tot / np.diff(xr), np.sqrt(nb) / tot / np.diff(xr)
+            gap_steps(ax, d, xr, color=col, linewidth=2.0, linestyle=ls)
+            ok = nb > 0
+            ax.errorbar(xc[ok], d[ok], yerr=e[ok], fmt="none", ecolor=col, elinewidth=1.0, capsize=0)
+            vis.append(d[ok] + e[ok] if not logy else d[ok])
+        ax.set_xlim(xe[0], xe[-1])
+        if logy:
+            ax.set_yscale("log")
+            ax.set_ylim(*log_ylim(np.concatenate(vis), 0.62))
+        else:
+            ax.set_ylim(0, 1.55 * max(v.max() for v in vis))
+        tot = tot_in + tot_out
+        ax.text(0.04, 0.96, rf"${lo} \leq p_{{T}} < {hi}$ GeV" + "\n" +
+                f"inside: $N$ = {fmt_n(tot_in)}\noutside: $N$ = {fmt_n(tot_out)} ({tot_out / tot:.3f})\nbins of {xr[1] - xr[0]:g}",
+                transform=ax.transAxes, ha="left", va="top", fontsize=13, linespacing=1.3)
+        if k % 4 == 0:
+            ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
+        if k >= len(rows) - 4:                                           # bottom of each column
+            ax.set_xlabel(r"Jet OHCal energy fraction $x$", fontsize=16)
+            ax.xaxis.set_tick_params(labelbottom=True)
+        xcf = 0.5 * (xe[1:] + xe[:-1])
+        for part, n, ntot in (("inside", n_in, tot_in), ("outside", n_out, tot_out)):
+            nd = n[1:-1]
+            csv_rows.append({"radius": r_tag, "sample": sample, "pt_lo": lo, "pt_hi": hi, "part": part,
+                             "n": f"{ntot:.0f}", "n_x_outside_axis": f"{n[0] + n[-1]:.0f}",
+                             "mean_x": f"{(nd * xcf).sum() / nd.sum():.4f}" if nd.sum() else "",
+                             f"frac_x_below_{C4_X_LO:g}": f"{nd[xe[1:] <= C4_X_LO + 1e-9].sum() / ntot:.4f}" if ntot else "",
+                             f"frac_x_above_{C4_X_HI:g}": f"{nd[xe[:-1] >= C4_X_HI - 1e-9].sum() / ntot:.4f}" if ntot else ""})
+    header(axs[0, -1], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
+    stem = C4_STEMS[sample]
+    if len(rows) < axs.size:                                             # selection text and legend in the empty slot
+        tax = axs.flat[len(rows)]
+        fit_text_box(fig, tax, [
+            rf"$\bf{{{CUT_SAMPLES[sample][1]}}}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
+            "Window: dijet leading-jet fit",
+            rf"$\mu \pm {nsig}\sigma$ = [{lo_t:+.2f}," + " " + f"{hi_t:+.2f}] ns",
+            "Each curve: unit area",
+            "(outside) = fraction beyond the window"], top=0.98, bottom=0.3)
+        tax.legend(handles=[plt.Line2D([], [], color=C_IN, linewidth=2.0, label=rf"$|t_{{\mathrm{{corr}}}} - \mu| \leq {nsig}\sigma$ (inside)"),
+                            plt.Line2D([], [], color=C_OUT, linewidth=2.0, linestyle="--", label=rf"$|t_{{\mathrm{{corr}}}} - \mu| > {nsig}\sigma$ (outside)")],
+                   loc="lower left", fontsize=15, frameon=False)
+    save_fig(fig, out_dir / f"{stem}_{nsig}sigma_{r_tag}_panels{'_logy' if logy else ''}.png", save_pdf)
+    plt.close(fig)
+    if logy:
+        return
+    write_csv(csv_rows, out_dir / f"{stem}_{nsig}sigma_{r_tag}.csv")
+    # cross-check: N and the fraction outside per class against C2 (the t vs pT hists; jets with x NaN are in neither)
+    c2 = cut_tdist_classes(inputs, r_tag, fit, nsig, PROJ_ZOOM, sample)
+    c2 = {(lo, hi): (tot, f) for lo, hi, tot, f, *_ in c2[0]} if c2 else {}
+    print(f"  C4 {r_tag} {sample}: N / outside (C2 N / outside): " + ", ".join(
+        f"{lo}-{hi} GeV {n_in.sum() + n_out.sum():.0f} / {n_out.sum() / (n_in.sum() + n_out.sum()):.3f}"
+        + (f" ({c2[(lo, hi)][0]:.0f} / {c2[(lo, hi)][1]:.3f})" if (lo, hi) in c2 else "")
+        for lo, hi, n_in, n_out in rows))
+
+
 # R1 / R2: timing profiles of the two run groups of X2_runs2 (before and from --run-split on)
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -1958,7 +2106,7 @@ def write_csv(rows, path):
 def main():
     parser = argparse.ArgumentParser(description="Leading-jet checks in the clean dijet sample: jet pT tail and OHCal "
                                                  "fraction (Jet-Dijet output with the dijet timing hists).")
-    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-17-26/test.list"),
+    parser.add_argument("-f", "--file", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/jetDijet/11-19-26/test.list"),
                         help="List of Jet-Dijet merged ROOT files named <run>.root (default: %(default)s)")
     parser.add_argument("-l", "--lumi-list", type=Path, default=Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-30-26/test.list"),
                         help="List of Event QA ROOT files named <run>.root with hLuminosity (default: %(default)s)")
@@ -2061,6 +2209,8 @@ def main():
                 for zoom in (None, PROJ_ZOOM):
                     plot_cut_tdist(inputs, r_tag, lead_fit, runs, lumi, cd, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
                     plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, cd, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
+                for logy in (False, True):                               # x inside / outside the window per C2 class
+                    plot_cut_x_panels(inputs, r_tag, lead_fit, runs, lumi, cd, sample=sample, logy=logy, save_pdf=args.save_pdf)
             for pt_lo, pt_hi in CUT_X_PT_RANGES:
                 plot_cut_x_highpt(inputs, r_tag, lead_fit, runs, lumi, cd, pt_lo, pt_hi, save_pdf=args.save_pdf)
         for sample, sub in (("all", "all_jets"), ("lead", "lead_jets")):   # every jet / the leading jet; with the dijet leading-jet window
