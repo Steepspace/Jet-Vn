@@ -173,12 +173,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
       std::cout << "Error: overlay mode needs the DST_TRUTH_JET input" << std::endl;
       return;
     }
-    // the flow and no flow iterative chains are only different with flow modulation
-    if (do_flow == 0)
-    {
-      std::cout << "Error: overlay mode needs do_flow != 0" << std::endl;
-      return;
-    }
+    // do_flow == 0: no event plane (no EpdReco / EventPlaneReco, input_QVecCalib unused) and only the iterative
+    // jets without flow modulation are stored, under "iter" (no "iternf" chain)
 
     const std::vector<std::pair<std::string, std::string>> overlay_inputs = {
         {"calo", overlay_dst_calo},
@@ -195,7 +191,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
       }
     }
 
-    // only the iterative jets (with and without flow modulation) are needed for the overlay
+    // only the iterative jets are needed for the overlay (with and without flow modulation for do_flow != 0)
     do_mult = false;
   }
 
