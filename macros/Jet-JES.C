@@ -34,28 +34,61 @@
 // ====================================================================
 // The Analysis Class
 // ====================================================================
-// Jet energy scale in data+MC overlay: matches the truth jets to the reconstructed (iter / iternf) jets
-// and fills the response pT_reco / pT_truth vs pT_truth in the eta bins of the legacy eta dependent JES.
-// One pT-hat sample per job: the event is kept if the leading truth R=0.4 jet pT is in the sample's
+// Jet energy scale in MC (data+MC overlay, p+p, PYTHIA8 embedded in HIJING): matches the truth jets to the
+// reconstructed jets and fills the response pT_reco / pT_truth vs pT_truth in the eta bins of the legacy eta
+// dependent JES. One pT-hat sample per job: the event is kept if the leading truth R=0.4 jet pT is in the sample's
 // window, and the samples are weighted (1 / IntegratedLumi_job of h_gen_integral) and summed afterwards.
-// p+p MC mode (Fun4All_PP_JES trees): reconstructed jets are unsub / iter (no flow), a single centrality class
-// (0-100) and no event selection besides the window (|z| < 10 cm is applied in Fun4All), no Calo-MBD file.
+// Modes:
+//  OVERLAY (0): data+MC overlay trees made with flow (do_flow != 0): iter / iternf jets; centrality, Calo-MBD,
+//               flow failure and calo v2 selection.
+//  PP      (1): p+p MC trees (Fun4All_PP_JES): unsub and iterative (no flow) jets; a single centrality class
+//               (0-100) and no event selection besides the window (|z| < 10 cm is applied in Fun4All).
+//  NOFLOW  (2): Au+Au trees made without flow (do_flow = 0): HIJING embedded MC (Fun4All_HIJING_JES) or data+MC
+//               overlay; iterative (no flow) jets only; centrality selection, Calo-MBD selection only if a file
+//               is given (not "none").
+// Trees made with do_flow = 0 store the no-flow iterative jets under "iter": the PP and NOFLOW modes read those
+// branches and name their histograms "iternf", as the OVERLAY mode does for the no-flow jets.
 class JetJES
 {
  public:
-  JetJES(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir, bool is_pp = false)
+  enum class Mode : std::uint8_t
+  {
+    OVERLAY = 0,
+    PP = 1,
+    NOFLOW = 2
+  };
+
+  JetJES(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir, Mode mode = Mode::OVERLAY)
     : m_input_file(std::move(input_file))
     , m_calo_mbd_file(std::move(calo_mbd_file))
     , m_events_to_process(events)
     , m_output_dir(std::move(output_dir))
-    , m_is_pp(is_pp)
-    , m_ue_list(is_pp ? m_ue_list_pp : m_ue_list_overlay)
+    , m_mode(mode)
+    , m_is_pp(mode == Mode::PP)
+    , m_ue_list(ue_list(mode))
   {
+  }
+
+  static bool has_calo_mbd_file(const std::string &calo_mbd_file) { return !calo_mbd_file.empty() && calo_mbd_file != "none"; }
+
+  static std::string_view mode_name(Mode mode)
+  {
+    switch (mode)
+    {
+    case Mode::PP:
+      return "p+p MC";
+    case Mode::NOFLOW:
+      return "Au+Au without flow (HIJING embedded MC or no-flow data+MC overlay)";
+    case Mode::OVERLAY:
+    default:
+      return "data+MC overlay";
+    }
   }
 
   void run()
   {
-    if (!m_is_pp)
+    // OVERLAY: Calo-MBD cut required; NOFLOW: only with a file; PP: never
+    if (m_mode == Mode::OVERLAY || (m_mode == Mode::NOFLOW && has_calo_mbd_file(m_calo_mbd_file)))
     {
       setup_calo_mbd_cut();
     }
@@ -102,11 +135,30 @@ class JetJES
       {"r03", 0.3, 0.8, {-0.8, -0.45, 0.0, 0.45, 0.8}}
   }};
 
-  // UE: iter -> Iterative Method, iternf -> Iterative Method w/o flow modulation, unsub -> no subtraction
-  // (p+p: iter is already without flow modulation)
-  static constexpr size_t m_num_ue = 2;
-  static constexpr std::array<std::string_view, m_num_ue> m_ue_list_overlay = {"iter", "iternf"};
-  static constexpr std::array<std::string_view, m_num_ue> m_ue_list_pp = {"unsub", "iter"};
+  // UE: iter -> Iterative Method, iternf -> Iterative Method w/o flow modulation, unsub -> no subtraction.
+  // name: in the histogram names; branch: in the tree branch names. Trees made with do_flow = 0 (p+p, HIJING,
+  // no-flow overlay) store the no-flow iterative jets as "iter".
+  struct UEConfig
+  {
+    std::string_view name;
+    std::string_view branch;
+  };
+
+  static constexpr size_t m_max_ue = 2;
+
+  static std::vector<UEConfig> ue_list(Mode mode)
+  {
+    switch (mode)
+    {
+    case Mode::PP:
+      return {{"unsub", "unsub"}, {"iternf", "iter"}};
+    case Mode::NOFLOW:
+      return {{"iternf", "iter"}};
+    case Mode::OVERLAY:
+    default:
+      return {{"iter", "iter"}, {"iternf", "iternf"}};
+    }
+  }
 
   // Matching radius: Delta R < m_match_radius_frac * R
   static constexpr double m_match_radius_frac = 0.75;
@@ -143,7 +195,7 @@ class JetJES
     // [radius], all truth jets
     std::array<TH2 *, m_radii.size()> h2TruthEta{};
     // [ue][radius]
-    std::array<std::array<ResponseHistSet, m_radii.size()>, m_num_ue> resp{};
+    std::array<std::array<ResponseHistSet, m_radii.size()>, m_max_ue> resp{};
   };
 
   AnalysisHists m_hists;
@@ -181,7 +233,7 @@ class JetJES
     // [radius], truth jets have no pt_calib and e is not read
     std::array<JetData, m_radii.size()> truth;
     // [ue][radius]
-    std::array<std::array<JetData, m_radii.size()>, m_num_ue> reco;
+    std::array<std::array<JetData, m_radii.size()>, m_max_ue> reco;
   };
 
   // fiducial truth jet: index in the event and eta bin
@@ -200,8 +252,9 @@ class JetJES
   std::string m_calo_mbd_file;
   long long m_events_to_process;
   std::string m_output_dir;
+  Mode m_mode{Mode::OVERLAY};
   bool m_is_pp{false};
-  std::array<std::string_view, m_num_ue> m_ue_list;
+  std::vector<UEConfig> m_ue_list;
   int m_verbosity{0};
 
   double m_lead_truth_pt_min{0}; /*GeV*/
@@ -289,11 +342,18 @@ void JetJES::setup_chain()
   if (!m_is_pp)
   {
     set_branch("centrality", &ed.centrality);
+  }
+  if (m_has_calo_mbd_cut)
+  {
     set_branch("emcal_energy", &ed.emcal_energy);
     set_branch("ihcal_energy", &ed.ihcal_energy);
     set_branch("ohcal_energy", &ed.ohcal_energy);
     set_branch("mbd_charge_south", &ed.mbd_charge_south);
     set_branch("mbd_charge_north", &ed.mbd_charge_north);
+  }
+  // flow selection only for trees made with flow modulation
+  if (m_mode == Mode::OVERLAY)
+  {
     set_branch("is_flow_failure_iter", &ed.is_flow_failure_iter);
     set_branch("calo_v2_iter", &ed.calo_v2_iter);
   }
@@ -307,9 +367,9 @@ void JetJES::setup_chain()
     set_branch(std::format("phi_truth_{}", r), &truth.phi);
     set_branch(std::format("eta_truth_{}", r), &truth.eta);
 
-    for (size_t iue = 0; iue < m_num_ue; ++iue)
+    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
     {
-      std::string_view ue = m_ue_list[iue];
+      std::string_view ue = m_ue_list[iue].branch;
       JetData &reco = ed.reco[iue][ir];
       set_branch(std::format("pt_{}_{}", ue, r), &reco.pt);
       set_branch(std::format("pt_calib_{}_{}", ue, r), &reco.pt_calib);
@@ -400,13 +460,23 @@ void JetJES::init_hists()
       {EventType::TRUTH_WINDOW, std::format("Lead Truth R=0.4 p_{{T}} Window [{}, {})", m_lead_truth_pt_min,
                                             m_lead_truth_pt_max < 0 ? "#infty" : std::format("{}", m_lead_truth_pt_max))}};
 
-  if (m_is_pp)
+  switch (m_mode)
   {
+  case Mode::PP:
     m_event_steps = {EventType::ALL, EventType::TRUTH_WINDOW};
-  }
-  else
-  {
+    break;
+  case Mode::NOFLOW:
+    m_event_steps = {EventType::ALL, EventType::CENT};
+    if (m_has_calo_mbd_cut)
+    {
+      m_event_steps.push_back(EventType::CALO_MBD);
+    }
+    m_event_steps.push_back(EventType::TRUTH_WINDOW);
+    break;
+  case Mode::OVERLAY:
+  default:
     m_event_steps = {EventType::ALL, EventType::CENT, EventType::CALO_MBD, EventType::FLOW_PASS_ITER, EventType::CALO_V2, EventType::TRUTH_WINDOW};
+    break;
   }
 
   int bins_event = static_cast<int>(m_event_steps.size());
@@ -453,9 +523,9 @@ void JetJES::init_hists()
         m_hists1D[truth_name] = std::make_unique<TH1F>(truth_name.c_str(), std::format("{}; p_{{T}}^{{truth}} [GeV]; Jets", label).c_str(), bins_pt, pt_low, pt_high);
         m_hists.hTruth[ir][ieta][icent] = m_hists1D[truth_name].get();
 
-        for (size_t iue = 0; iue < m_num_ue; ++iue)
+        for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
         {
-          std::string_view ue = m_ue_list[iue];
+          std::string_view ue = m_ue_list[iue].name;
           ResponseHistSet &h = m_hists.resp[iue][ir];
           std::string ue_label = std::format("{}, {}", ue, label);
 
@@ -474,9 +544,9 @@ void JetJES::init_hists()
       }
     }
 
-    for (size_t iue = 0; iue < m_num_ue; ++iue)
+    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
     {
-      std::string_view ue = m_ue_list[iue];
+      std::string_view ue = m_ue_list[iue].name;
       ResponseHistSet &h = m_hists.resp[iue][ir];
 
       std::string deta_name = std::format("h2DeltaEta_{}_{}", r, ue);
@@ -636,7 +706,7 @@ void JetJES::process_jets(size_t icent)
 
     double dr_max = m_match_radius_frac * rc.radius;
 
-    for (size_t iue = 0; iue < m_num_ue; ++iue)
+    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
     {
       const JetData &reco = ed.reco[iue][ir];
       const ResponseHistSet &h = m_hists.resp[iue][ir];
@@ -741,26 +811,34 @@ void JetJES::process_events()
     {
       fill_event(EventType::CENT);
 
-      if (!check_CaloMBD())
+      // OVERLAY: always; NOFLOW: only with a Calo-MBD file
+      if (m_has_calo_mbd_cut)
       {
-        ++m_ctr["events_bad_calo_mbd"];
-        continue;
+        if (!check_CaloMBD())
+        {
+          ++m_ctr["events_bad_calo_mbd"];
+          continue;
+        }
+        fill_event(EventType::CALO_MBD);
       }
-      fill_event(EventType::CALO_MBD);
 
-      if (ed.is_flow_failure_iter)
+      // the flow selection only applies to trees made with flow modulation
+      if (m_mode == Mode::OVERLAY)
       {
-        ++m_ctr["events_flow_failure_iter"];
-        continue;
-      }
-      fill_event(EventType::FLOW_PASS_ITER);
+        if (ed.is_flow_failure_iter)
+        {
+          ++m_ctr["events_flow_failure_iter"];
+          continue;
+        }
+        fill_event(EventType::FLOW_PASS_ITER);
 
-      if (std::abs(ed.calo_v2_iter) >= m_calo_v2_max)
-      {
-        ++m_ctr["events_calo_v2_iter"];
-        continue;
+        if (std::abs(ed.calo_v2_iter) >= m_calo_v2_max)
+        {
+          ++m_ctr["events_calo_v2_iter"];
+          continue;
+        }
+        fill_event(EventType::CALO_V2);
       }
-      fill_event(EventType::CALO_V2);
     }
     m_hists.hMaxPtTruthR04->Fill(ed.max_pt_truth_r04);
 
@@ -821,9 +899,9 @@ void JetJES::print_event_info(long long event_idx) const
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
     print_jets(std::format("{}_truth", m_radii[ir].tag), ed.truth[ir]);
-    for (size_t iue = 0; iue < m_num_ue; ++iue)
+    for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
     {
-      print_jets(std::format("{}_{}", m_radii[ir].tag, m_ue_list[iue]), ed.reco[iue][ir]);
+      print_jets(std::format("{}_{}", m_radii[ir].tag, m_ue_list[iue].name), ed.reco[iue][ir]);
     }
   }
   std::cout << std::format("{:=^70}\n", "");
@@ -871,8 +949,10 @@ int main(int argc, const char *const argv[])
 
   if (argc < 3 || argc > 10)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity] [pp]" << std::endl;
-    std::cout << "  pp: 1 for p+p MC trees (Fun4All_PP_JES), calo_mbd_file is then not used (pass none)" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity] [mode]" << std::endl;
+    std::cout << "  mode: 0 data+MC overlay made with flow (iter / iternf, Calo-MBD file required; default)" << std::endl;
+    std::cout << "        1 p+p MC (Fun4All_PP_JES; unsub / iternf, calo_mbd_file not used: pass none)" << std::endl;
+    std::cout << "        2 Au+Au without flow (HIJING embedded MC or no-flow overlay; iternf; calo_mbd_file optional: none = no Calo-MBD cut)" << std::endl;
     return 1;
   }
 
@@ -885,17 +965,24 @@ int main(int argc, const char *const argv[])
   double lead_truth_pt_max = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : -1;
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
-  bool is_pp = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) != 0 : false;
+  int mode_value = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
+  if (mode_value < 0 || mode_value > 2)
+  {
+    std::cout << std::format("Invalid mode {}: expected 0 (overlay), 1 (p+p) or 2 (Au+Au without flow)", mode_value) << std::endl;
+    return 1;
+  }
+  const auto mode = static_cast<JetJES::Mode>(mode_value);
+  const bool use_calo_mbd = (mode == JetJES::Mode::OVERLAY) || (mode == JetJES::Mode::NOFLOW && JetJES::has_calo_mbd_file(calo_mbd_file));
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");
-  std::cout << std::format("Mode: {}\n", is_pp ? "p+p MC" : "data+MC overlay");
+  std::cout << std::format("Mode: {} ({})\n", mode_value, JetJES::mode_name(mode));
   std::cout << std::format("Input: {}\n", input_file);
-  std::cout << std::format("Calo-MBD File: {}\n", is_pp ? "not used" : calo_mbd_file);
+  std::cout << std::format("Calo-MBD File: {}\n", use_calo_mbd ? calo_mbd_file : "not used");
   std::cout << std::format("Events: {}\n", events);
   std::cout << std::format("Output Dir: {}\n", output_dir);
   std::cout << std::format("Lead Truth R=0.4 Jet pT Window: [{}, {}) [GeV]\n", lead_truth_pt_min, lead_truth_pt_max < 0 ? "inf" : std::format("{}", lead_truth_pt_max));
-  if (!is_pp)
+  if (use_calo_mbd)
   {
     std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   }
@@ -904,7 +991,7 @@ int main(int argc, const char *const argv[])
 
   try
   {
-    JetJES analysis(input_file, calo_mbd_file, events, output_dir, is_pp);
+    JetJES analysis(input_file, calo_mbd_file, events, output_dir, mode);
     analysis.set_lead_truth_pt_min(lead_truth_pt_min);
     analysis.set_lead_truth_pt_max(lead_truth_pt_max);
     analysis.set_sigma_cut(sigma_cut);

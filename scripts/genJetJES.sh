@@ -25,14 +25,21 @@ lead_truth_pt_max=${6}
 sigma_cut=${7:-3.5}
 # overlay pT-hat sample (e.g. Jet20): output directory, so hadd merges each sample separately
 sample=${8:-}
-# 1: p+p MC trees (Fun4All_PP_JES), no Calo-MBD file
-pp=${9:-0}
+# Jet-JES mode: 0 data+MC overlay with flow, 1 p+p MC (Fun4All_PP_JES), 2 Au+Au without flow (HIJING embedded MC
+# or no-flow overlay). input_calo_mbd "none": no Calo-MBD cut (p+p, HIJING)
+mode=${9:-0}
 
-# extract runnumber from file name (p+p MC: the sample is the output directory, no run number needed)
+# no Calo-MBD file: MC without a data run (the sample is the output directory, no run number needed)
+no_calo_mbd=0
+if [[ "$mode" == "1" || "$input_calo_mbd" == "none" ]]; then
+    no_calo_mbd=1
+fi
+
+# extract runnumber from file name
 file=$(basename "$input")
 run=$(head -n 1 "$input" | grep -oP '(?<=/)\d+(?=/tree/)' || head -n 1 "$input" | grep -oP '\d{5,8}')
-if [[ "$pp" == "1" ]]; then
-    run=${run:-pp}
+if [[ "$no_calo_mbd" == "1" ]]; then
+    run=${run:-mc}
 fi
 if [ -z "$run" ]; then
     echo "Error: Could not extract run number from $input at $(date) on $(hostname)!" >&2
@@ -41,7 +48,7 @@ if [ -z "$run" ]; then
     exit 1
 fi
 input_file="$file"
-if [[ "$pp" == "1" ]]; then
+if [[ "$no_calo_mbd" == "1" ]]; then
     input_calo_mbd_file="none"
 else
     input_calo_mbd_file=$(basename "$input_calo_mbd")
@@ -66,8 +73,8 @@ then
         exit 1
     fi
 
-    if [[ "$pp" == "1" ]]; then
-        echo "p+p MC mode: no Calo-MBD file"
+    if [[ "$no_calo_mbd" == "1" ]]; then
+        echo "MC without a data run (mode $mode): no Calo-MBD file"
     elif [ -n "$input_calo_mbd" ]; then
         if ! cp -v "$input_calo_mbd" .; then
             echo "Error: Failed to copy Calo-MBD file $input_calo_mbd in $file at $(date) on $(hostname)" >&2
@@ -93,7 +100,7 @@ out_dir="${sample:-$run}"
 mkdir -p "$out_dir"
 
 echo "Starting Jet-JES binary at $(date) on $(hostname)"
-$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0 "$pp"
+$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0 "$mode"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then
