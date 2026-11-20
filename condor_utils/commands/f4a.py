@@ -555,17 +555,20 @@ def create_f4a_mc_jobs(args):
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
-PP_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', 'dst_truth_jet.list')
+MC_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', 'dst_truth_jet.list')
 
-def create_f4a_pp_jes_jobs(args):
+def create_mc_jes_jobs(args, job_name):
     """
-    p+p MC JES (Fun4All_PP_JES): -i lists the pT-hat samples, one per line, either as a sample list file
-    (e.g. files/MC/run-28/jet12.list, holding the paths of its dst_calo_cluster/dst_global/dst_truth_jet lists;
-    the sample is named after the file) or as a sample directory holding those three lists.
+    MC JES trees (Fun4All_PP_JES, Fun4All_HIJING_JES): -i lists the pT-hat samples, one per line, either as a sample
+    list file (e.g. files/MC/run-28/jet12.list, holding the paths of its dst_calo_cluster/dst_global/dst_truth_jet
+    lists; the sample is named after the file) or as a sample directory holding those three lists.
     The three lists of a sample are aligned by segment. Each job gets dst_per_job segments of all three.
+    The Calo_Calib and HIJetReco macros are copied next to the Fun4All macro, so its #include picks up the local
+    versions and not the release copies in rootmacros (which is on ROOT_INCLUDE_PATH).
     """
-    manager = CondorJobManager(args, job_name="F4A PP JES")
+    manager = CondorJobManager(args, job_name=job_name)
     manager.add_file_to_check(args.f4a_macro)
+    manager.add_file_to_check(args.calo_calib_macro)
     manager.add_file_to_check(args.HIJetReco_macro)
     manager.add_dir_to_check(args.src_dir)
     manager.validate_paths()
@@ -574,12 +577,13 @@ def create_f4a_pp_jes_jobs(args):
         'Jet pT Min': f"{args.jet_pt_min} GeV",
         'Truth Jet pT Min': f"{args.truth_jet_pt_min} GeV",
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
+        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve()
     })
 
     files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro, args.HIJetReco_macro], extra_dirs=[args.src_dir])
+    manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro], extra_dirs=[args.src_dir])
 
     jobs_file = manager.output_dir / 'jobs.list'
     jobs_file.unlink(missing_ok=True)
@@ -603,27 +607,27 @@ def create_f4a_pp_jes_jobs(args):
             # {list name: path} of the sample's three DST lists
             if sample_path.is_dir():
                 sample = sample_path.name
-                list_paths = {name: sample_path / name for name in PP_JES_LISTS}
+                list_paths = {name: sample_path / name for name in MC_JES_LISTS}
             else:
                 sample = sample_path.stem
                 list_paths = {Path(p).name: Path(p) for p in read_lines(sample_path)}
 
-            missing = [name for name in PP_JES_LISTS if name not in list_paths or not list_paths[name].is_file()]
+            missing = [name for name in MC_JES_LISTS if name not in list_paths or not list_paths[name].is_file()]
             if missing:
                 manager.logger.warning(f"Skipping {sample}: missing {', '.join(missing)}")
                 continue
-            lists = [read_lines(list_paths[name]) for name in PP_JES_LISTS]
+            lists = [read_lines(list_paths[name]) for name in MC_JES_LISTS]
 
             # line i of each list must be the same segment (-<run>-<segment>.root)
             suffixes = [[Path(f).name.split('-', 1)[-1] for f in files] for files in lists]
             if not (suffixes[0] == suffixes[1] == suffixes[2]):
-                manager.logger.warning(f"Skipping {sample}: the {', '.join(PP_JES_LISTS)} are not segment aligned")
+                manager.logger.warning(f"Skipping {sample}: the {', '.join(MC_JES_LISTS)} are not segment aligned")
                 continue
 
             chunks = list(zip(*(chunk_list(files, dst_per_job) for files in lists)))
             for ichunk, chunk in enumerate(chunks):
                 chunk_paths = []
-                for name, files in zip(PP_JES_LISTS, chunk):
+                for name, files in zip(MC_JES_LISTS, chunk):
                     chunk_path = files_dir / f"{sample}-{ichunk:05d}-{name}"
                     chunk_path.write_text('\n'.join(files) + '\n', encoding='utf-8')
                     chunk_paths.append(str(chunk_path))
@@ -639,6 +643,14 @@ def create_f4a_pp_jes_jobs(args):
                  f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output")
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="list_calo,list_global,list_truth,sample from jobs.list")
+
+def create_f4a_pp_jes_jobs(args):
+    """p+p MC JES (Fun4All_PP_JES), e.g. files/MC/run-28/jetX.list."""
+    create_mc_jes_jobs(args, job_name="F4A PP JES")
+
+def create_f4a_hijing_jes_jobs(args):
+    """PYTHIA8 embedded in HIJING MC JES (Fun4All_HIJING_JES), e.g. files/MC/run-31/jetX.list."""
+    create_mc_jes_jobs(args, job_name="F4A HIJING JES")
 
 def create_f4a_data_mc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A Data MC")
@@ -827,10 +839,22 @@ def setup_f4a_subparsers(subparsers):
     f4a_pp_jes = subparsers.add_parser('f4a_pp_jes', parents=[get_common_parser()], help='Create condor submission directory for the p+p MC JES (Fun4All_PP_JES).')
     add_build_args(f4a_pp_jes)
     f4a_pp_jes.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_PP_JES.C', help='Fun4All Macro.')
+    f4a_pp_jes.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a_pp_jes.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
     f4a_pp_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
     f4a_pp_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
     f4a_pp_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_pp_jes_jobs)
+
+    # same job layout and worker script as f4a_pp_jes (the first 10 macro arguments are the same; the centrality
+    # calibration files keep the Fun4All_HIJING_JES defaults)
+    f4a_hijing_jes = subparsers.add_parser('f4a_hijing_jes', parents=[get_common_parser()], help='Create condor submission directory for the PYTHIA8 embedded in HIJING MC JES (Fun4All_HIJING_JES).')
+    add_build_args(f4a_hijing_jes)
+    f4a_hijing_jes.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_HIJING_JES.C', help='Fun4All Macro.')
+    f4a_hijing_jes.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
+    f4a_hijing_jes.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
+    f4a_hijing_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
+    f4a_hijing_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
+    f4a_hijing_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=1.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_hijing_jes_jobs)
 
     f4a_data_mc = subparsers.add_parser('f4a_data_mc', parents=[get_common_parser()], help='Create condor submission directory.')
     add_build_args(f4a_data_mc)

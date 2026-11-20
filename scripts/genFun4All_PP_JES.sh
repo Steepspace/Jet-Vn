@@ -16,7 +16,8 @@ if [[ "$myinstall" != "none" ]]; then
     source /opt/sphenix/core/bin/setup_local.sh "$MYINSTALL"
 fi
 
-# p+p MC JES (Fun4All_PP_JES.C): one chunk of aligned DST_CALO_CLUSTER / DST_GLOBAL / DST_TRUTH_JET per job
+# MC JES (Fun4All_PP_JES.C for p+p, Fun4All_HIJING_JES.C for PYTHIA8 embedded in HIJING; both take the same first
+# 10 arguments): one chunk of aligned DST_CALO_CLUSTER / DST_GLOBAL / DST_TRUTH_JET per job
 f4a_macro=${1}
 list_calo=${2}   # lists of LFNs, line i of each list is the same segment
 list_global=${3}
