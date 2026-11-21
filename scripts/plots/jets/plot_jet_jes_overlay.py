@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-Jet energy scale (JES) and resolution (JER) in data+MC overlay, or in pure PYTHIA8 p+p MC with --pp (Jet-JES outputs),
-differential in the 4 eta bins of the legacy eta-dependent JES, to compare mid-rapidity with forward jets.
+Jet energy scale (JES) and resolution (JER) from the Jet-JES outputs, differential in the 4 eta bins of the legacy
+eta-dependent JES, to compare mid-rapidity with forward jets. --mode picks the sample:
+  overlay:        data+MC overlay made with flow (iter / iternf)
+  overlay-noflow: data+MC overlay made with --do-flow 0 (iternf)
+  pp:             pure PYTHIA8 p+p MC (unsub / iternf); --pp is a shortcut
+  hijing:         PYTHIA8 embedded in HIJING (iternf)
 
-Each pT-hat sample (Jet12/20/30/40) is filled unweighted within its leading truth R=0.4 jet pT window by Jet-JES.
+Each pT-hat sample (JetNN) is filled unweighted within its leading truth R=0.4 jet pT window by Jet-JES.
 Here they are weighted and summed, with --weights (from h_gen_integral of the Fun4All hist files in --gen-list):
-  lumi: 1 / IntegratedLumi_job (default for the overlay)
-  wiki: sigma_wiki / NEvents_job, the recommended sample cross sections (default for p+p)
-NEvents_job counts every analyzed event, before the vertex cut, so both include the vertex-cut efficiency of each sample.
+  wiki: sigma_wiki / NEvents_job, the recommended sample cross sections (default for all modes, as used by others)
+  lumi: 1 / IntegratedLumi_job (agrees with wiki to < 1% for these samples)
+NEvents_job counts every analyzed event, before the event selection, so both include the selection efficiency of each sample.
+A per-sample normalization factor (mode "norm", --norm SAMPLE=F) multiplies the weight: HIJING Jet10 is scaled by 0.780,
+the measured Jet20 / Jet10 ratio of the wiki-weighted leading truth R=0.4 jet spectra where both samples are complete (21-31 GeV)
+(0.773 with the lumi weights: use --norm Jet10=0.773 with -w lumi).
+The deficit is in the HIJING Jet20 / Jet30 samples, but only the relative weights matter for the JES.
 
 The response pT_reco / pT_truth of matched jets is fitted with an iterative Gaussian in truth-pT bins:
 JES = Gaussian mean, JER = sigma / mean. Both the raw pT and the stored pt_calib (eta-binned legacy JES) are shown.
@@ -38,7 +46,7 @@ from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_pan
 from plot_jet_noflow_compare import STYLES_WITH_UNSUB as METHODS, add_header
 from plot_jet_jes_z0_compare import legacy_eta_edges, eta_regions, ETA_BIN_COLORS, REGION_COLORS
 
-SAMPLE_COLORS = {"Jet12": "#1b9e77", "Jet20": "#d95f02", "Jet30": "#7570b3", "Jet40": "#e7298a"}
+SAMPLE_COLORS = {"Jet10": "#66a61e", "Jet12": "#1b9e77", "Jet20": "#d95f02", "Jet30": "#7570b3", "Jet40": "#e7298a"}
 
 RADII = {"r02": 0.2, "r03": 0.3}
 CALIBS = {
@@ -55,8 +63,18 @@ PT_BINS = np.array([10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 46, 52, 60])
 FIT_QA_BINS = [(20, 24), (32, 36), (46, 52)]
 MIN_N_EFF = 50  # minimum effective entries for a fit
 
+# Cross sections [pb] of the PYTHIA8 Jet samples recommended on the sPHENIX wiki (the --weights wiki weight factors)
+XSEC_WIKI_RUN28 = {"Jet12": 1.4903e+06, "Jet20": 6.2623e+04, "Jet30": 2.5298e+03, "Jet40": 1.3553e+02}
+# run 31: the same factors for the pure PYTHIA8 (-nop) and the HIJING embedded (-embed -nobkg) samples
+XSEC_WIKI_RUN31 = {"Jet10": 3.997e+06, "Jet20": 6.218e+04, "Jet30": 2.502e+03}
+
+# Selection of the trees made with do_flow = 0 (no flow failure / calo v2 cut)
+NOFLOW_OVERLAY_TEXT = r"$|z| < 10$ cm & MB" "\n" "Good Calo-Cent\n" r"Centrality: 0–60%"
+HIJING_TEXT = r"$|z| < 10$ cm & MB (sim)" "\n" r"Centrality: 0–60%"
+
 # Per-mode settings, passed to the plot functions (and the worker processes) as `mode`.
 # cent_classes: Jet-JES centrality classes, summed into cent_all; selection: Jet-JES event selection (overlay: the Jet-Anav3 v3 one)
+# norm: per-sample normalization factors multiplying the weights (overridden by --norm)
 MODES = {
     "overlay": {
         "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
@@ -67,32 +85,72 @@ MODES = {
         "selection_text": COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$",
         "all_events_text": "All events in the trees (before Jet-JES selection)",
         "truth_headroom": 1e6,  # y range above the truth-jet spectra, for the legend and text
-        "weights": "lumi",
+        "weights": "wiki",
+        "xsec_wiki": XSEC_WIKI_RUN28,
+        "norm": {},
         "run": 68144,
         "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list",
         "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list",
         "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay",
     },
+    "overlay-noflow": {
+        "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
+        "cent_all": "0_60",
+        "cent_label": "0–60%",
+        "methods": ["iternf"],
+        "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
+        "selection_text": NOFLOW_OVERLAY_TEXT,
+        "all_events_text": "All events in the trees (before Jet-JES selection)",
+        "truth_headroom": 1e6,
+        "weights": "wiki",
+        "xsec_wiki": XSEC_WIKI_RUN28,
+        "norm": {},
+        "run": 68144,
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-20-26-overlay-noflow/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/11-19-26-overlay/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay_noflow",
+    },
     "pp": {
         "cent_classes": [(0, 100)],
         "cent_all": "0_100",
         "cent_label": None,
-        "methods": ["unsub", "iter"],
+        "methods": ["unsub", "iternf"],
         "sample_text": "PYTHIA8 p+p (Jet12–40)",
         "selection_text": r"$|z| < 10$ cm (MBD vertex)",
         # the trees only hold events passing EventQA, so the cross section is sigma x the vertex-cut efficiency
         "all_events_text": r"After $|z| < 10$ cm vertex cut (before window)",
         "truth_headroom": 1e3,
         "weights": "wiki",
+        "xsec_wiki": XSEC_WIKI_RUN28,
+        "norm": {},
         "run": 28,
-        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-29-26-Run-28-MC/test.list",
-        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/10-28-26/test.list",
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-20-26-Run-28-MC/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/11-19-26-pythia/test.list",
         "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_pp",
     },
+    "hijing": {
+        "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
+        "cent_all": "0_60",
+        "cent_label": "0–60%",
+        "methods": ["iternf"],
+        "sample_text": "PYTHIA8 + HIJING (Jet10–30)",
+        "selection_text": HIJING_TEXT,
+        # the trees only hold events passing EventQA (|z| < 10 cm, MB, centrality < 80%)
+        "all_events_text": r"After $|z| < 10$ cm, MB, 0–80% (before window)",
+        "truth_headroom": 1e6,
+        "weights": "wiki",
+        "xsec_wiki": XSEC_WIKI_RUN31,
+        # Jet20 / Jet10 = 0.780 +- 0.007 at 21-31 GeV with the wiki weights (0.773 with lumi). Jet10 is the correct one (it matches
+        # run-28 p+p Jet12 in absolute cross section); the Aug 2025 Jet20 / Jet30 embedded productions have ~25% of events with the
+        # leading truth R=0.4 jet below the generator filter, so ~22% too few in their windows. Only the relative weights matter,
+        # so scaling Jet10 by 0.780 is the same as scaling Jet20 / Jet30 by 1.28 (tasks/jet-jes-comparison.md)
+        "norm": {"Jet10": 0.780},
+        "run": 31,
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-20-26-Run-31-HIJING-v2/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/11-19-26-hijing/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_hijing",
+    },
 }
-
-# Cross sections [pb] of the PYTHIA8 Jet samples recommended on the sPHENIX wiki (the --weights wiki weight factors)
-XSEC_WIKI = {"Jet12": 1.4903e+06, "Jet20": 6.2623e+04, "Jet30": 2.5298e+03, "Jet40": 1.3553e+02}
 
 RECO_JET_TEXT = r"Reco jet $E > 0$"
 JES_YLABEL = r"$\langle p_{T}^{\mathrm{reco}} / p_{T}^{\mathrm{truth}} \rangle$ (Gaussian $\mu$)"
@@ -127,17 +185,52 @@ def parse_sample_list(list_file):
     return dict(sorted(samples.items(), key=lambda kv: int(kv[0][3:])))
 
 
-def load_weights(gen_files, samples, source):
+def parse_norm(text):
+    """Parses SAMPLE=FACTOR (e.g. Jet10=0.773) into (sample, factor)."""
+    m = re.fullmatch(r"(\w+)=([^=]+)", text)
+    try:
+        if not m:
+            raise ValueError
+        return m.group(1), float(m.group(2))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid normalization '{text}', expected SAMPLE=FACTOR (e.g. Jet10=0.773)") from None
+
+
+def norm_text(mode):
+    """Text line listing the per-sample normalization factors (None if there are none), or the weights_text of the
+    supplementary plots (which use no normalization)."""
+    if mode.get("weights_text"):
+        return mode["weights_text"]
+    norms = {s: f for s, f in mode["norm"].items() if f != 1.0}
+    return ", ".join(rf"{s} $\times$ {f:g}" for s, f in norms.items()) + " (normalized)" if norms else None
+
+
+def plateau(xsec, lower, higher, lo, hi):
+    """Inverse-variance weighted mean of higher / lower over [lo, hi) (1 GeV bins of the leading truth R=0.4 jet pT)."""
+    a, b = xsec[higher], xsec[lower]
+    centers = 0.5 * (a["edges"][1:] + a["edges"][:-1])
+    sel = (centers > lo) & (centers < hi) & (a["values"] > 0) & (b["values"] > 0)
+    ratio = a["values"][sel] / b["values"][sel]
+    err = calc_ratio_errors(ratio, a["errors"][sel], b["errors"][sel], b["values"][sel])
+    w = 1.0 / err ** 2
+    return np.sum(w * ratio) / np.sum(w), 1.0 / np.sqrt(np.sum(w))
+
+
+def load_weights(gen_files, samples, source, xsec_wiki, norm):
     """Per-sample weight [pb] from h_gen_integral: 1 / IntegratedLumi_job (source="lumi") or sigma_wiki / NEvents_job (source="wiki"),
-    with a bookkeeping table comparing the two (sigma_lumi = NEvents_job / IntegratedLumi_job)."""
+    times the normalization factor of the sample (norm, default 1), with a bookkeeping table comparing the two
+    (sigma_lumi = NEvents_job / IntegratedLumi_job)."""
     weights = {}
     print(f"{'Sample':<8}{'L_job [pb^-1]':>16}{'NEvents_job':>14}{'NEvt/NProc':>12}{'NFiles':>8}"
-          f"{'sigma_lumi [pb]':>17}{'sigma_wiki [pb]':>17}{'lumi / wiki':>13}{f'weight ({source}) [pb]':>22}")
+          f"{'sigma_lumi [pb]':>17}{'sigma_wiki [pb]':>17}{'lumi / wiki':>13}{'norm':>8}{f'weight ({source}) [pb]':>22}")
+    if unknown := sorted(set(norm) - set(samples)):
+        print(f"Error: normalization factors for samples {unknown} that are not in the input list")
+        sys.exit(1)
     for sample in samples:
         if sample not in gen_files:
             print(f"Error: {sample} not in the generator bookkeeping list")
             sys.exit(1)
-        if source == "wiki" and sample not in XSEC_WIKI:
+        if source == "wiki" and sample not in xsec_wiki:
             print(f"Error: no wiki cross section for {sample}")
             sys.exit(1)
         with uproot.open(gen_files[sample]) as rf:
@@ -147,10 +240,11 @@ def load_weights(gen_files, samples, source):
         if lumi <= 0 or n_gen <= 0:
             print(f"Error: {sample} has no integrated luminosity or events in {gen_files[sample]}")
             sys.exit(1)
-        sigma_lumi, sigma_wiki = n_gen / lumi, XSEC_WIKI.get(sample, np.nan)
-        weights[sample] = 1.0 / lumi if source == "lumi" else sigma_wiki / n_gen
+        sigma_lumi, sigma_wiki = n_gen / lumi, xsec_wiki.get(sample, np.nan)
+        factor = norm.get(sample, 1.0)
+        weights[sample] = (1.0 / lumi if source == "lumi" else sigma_wiki / n_gen) * factor
         print(f"{sample:<8}{lumi:>16.4f}{n_gen:>14.0f}{n_gen / info['NProcessed_file']:>12.4f}{info['NFiles']:>8.0f}"
-              f"{sigma_lumi:>17.4e}{sigma_wiki:>17.4e}{sigma_lumi / sigma_wiki:>13.4f}{weights[sample]:>22.4e}")
+              f"{sigma_lumi:>17.4e}{sigma_wiki:>17.4e}{sigma_lumi / sigma_wiki:>13.4f}{factor:>8.4g}{weights[sample]:>22.4e}")
     return weights
 
 
@@ -339,8 +433,9 @@ def draw_ratio(ax_ratio, num, den, key, err_key, color, marker):
 # Stitching (all samples)
 # --------------------------------------------------------------------------------------------------
 
-def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf):
-    """Weighted leading truth R=0.4 jet pT of each sample (all events in the trees, before the Jet-JES selection), with each sample / the next lower one."""
+def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf, plateaus=None):
+    """Weighted leading truth R=0.4 jet pT of each sample (all events in the trees, before the Jet-JES selection), with each sample / the next lower one.
+    plateaus: {higher sample: (lo, hi)}, draws and prints the mean ratio to the next lower sample over [lo, hi)."""
     hep.style.use("ATLAS")
     fig, (ax, ax_ratio) = plt.subplots(2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
     xsec = {}
@@ -359,13 +454,27 @@ def plot_lead_truth_xsec(samples, weights, run, mode, out_path, save_pdf):
         err = calc_ratio_errors(ratio, hi["errors"][ok], lo["errors"][ok], lo["values"][ok])
         ax_ratio.errorbar(centers[ok], ratio, yerr=err, fmt="o", color=SAMPLE_COLORS.get(higher), markersize=3, capsize=1, linewidth=1.0)
 
+    plateau_lines = []
+    for lower, higher in zip(names[:-1], names[1:]):
+        if not plateaus or higher not in plateaus:
+            continue
+        lo, hi = plateaus[higher]
+        mean, err = plateau(xsec, lower, higher, lo, hi)
+        ax_ratio.hlines(mean, lo, hi, color=SAMPLE_COLORS.get(higher), linestyle="-", linewidth=2)
+        plateau_lines.append(rf"{higher} / {lower}, {lo:g}–{hi:g} GeV: {mean:.3f} $\pm$ {err:.3f}")
+        print(f"Plateau {higher} / {lower} [{lo:g}, {hi:g}): {mean:.4f} +- {err:.4f}")
+
     ax.set_yscale("log")
     ax.set_xlim(0, 80)
     ax.set_ylabel(r"$d\sigma / dp_{T}$ [pb/GeV]")
     add_header(ax, run, None, None)
     ax.set_ylim(top=ax.get_ylim()[1] * 1e3)  # room above the spectra for the legend and text
     ax.legend(loc="upper right", frameon=False, fontsize=14)
-    ax.text(0.04, 0.96, f"{mode['sample_text']}\n{mode['all_events_text']}\nLeading truth $R = 0.4$ jet", transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    lines = [mode["sample_text"], mode["all_events_text"], "Leading truth $R = 0.4$ jet"] + ([norm_text(mode)] if norm_text(mode) else [])
+    ax.text(0.04, 0.96, "\n".join(lines), transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    if plateau_lines:
+        # right side below the legend, where the spectra have already fallen
+        ax.text(0.96, 0.68, "Mean ratio:\n" + "\n".join(plateau_lines), transform=ax.transAxes, ha="right", va="top", fontsize=12)
     setup_ratio_panel(ax_ratio, xlabel=r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", ylabel="Sample / Lower", ratio_ylim=(0, 1.5))
     plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
     save_fig(fig, out_path, save_pdf)
@@ -393,7 +502,8 @@ def plot_stitched(samples, weights, name, xlabel, ylabel_tag, run, mode, out_pat
     ax.set_ylabel(rf"$d\sigma / dp_{{T}}$ [pb/GeV] ({ylabel_tag})")
     add_header(ax, run, r_jet, None)
     ax.legend(loc="upper right", frameon=False, fontsize=14)
-    ax.text(0.04, 0.96, f"{mode['sample_text']}\n{text}", transform=ax.transAxes, ha="left", va="top", fontsize=14)
+    lines = [mode["sample_text"], text] + ([norm_text(mode)] if norm_text(mode) else [])
+    ax.text(0.04, 0.96, "\n".join(lines), transform=ax.transAxes, ha="left", va="top", fontsize=14)
     plt.subplots_adjust(left=0.15, right=0.96, bottom=0.12, top=0.94)
     save_fig(fig, out_path, save_pdf)
     plt.close(fig)
@@ -765,36 +875,51 @@ def group_hists(stitched, r_tag, ue):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="JES / JER in data+MC overlay or p+p MC (Jet-JES outputs), mid-rapidity vs forward eta.")
-    parser.add_argument("--pp", action="store_true", help="Pure PYTHIA8 p+p MC (Jet-JES --pp outputs) instead of the data+MC overlay")
+    def per_mode(key):
+        return ", ".join(f"{m}: {' '.join(v) if isinstance(v := MODES[m][key], list) else v}" for m in MODES)
+
+    parser = argparse.ArgumentParser(description="JES / JER from the Jet-JES outputs (data+MC overlay, p+p MC or HIJING embedded MC), mid-rapidity vs forward eta.")
+    parser.add_argument("--mode", choices=list(MODES), default="overlay",
+                        help="Sample: overlay (with flow, iter / iternf), overlay-noflow (--do-flow 0, iternf), pp (unsub / iternf), hijing (iternf). Default: overlay")
+    parser.add_argument("--pp", action="store_true", help="Shortcut for --mode pp")
     parser.add_argument("-i", "--input-list", type=Path, help="List of merged Jet-JES ROOT files, one per sample (JetNN or jetNN in the path)"
-                        f" (default overlay: {MODES['overlay']['input_list']}, p+p: {MODES['pp']['input_list']})")
+                        f" (default {per_mode('input_list')})")
     parser.add_argument("-g", "--gen-list", type=Path, help="List of the merged Fun4All hist files with h_gen_integral, one per sample (JetNN or jetNN in the path)"
-                        f" (default overlay: {MODES['overlay']['gen_list']}, p+p: {MODES['pp']['gen_list']})")
+                        f" (default {per_mode('gen_list')})")
     parser.add_argument("-w", "--weights", choices=["lumi", "wiki"],
-                        help="Sample weights: lumi = 1 / IntegratedLumi_job, wiki = sigma_wiki / NEvents_job (default overlay: lumi, p+p: wiki)")
+                        help=f"Sample weights: lumi = 1 / IntegratedLumi_job, wiki = sigma_wiki / NEvents_job (default {per_mode('weights')})")
+    parser.add_argument("--norm", type=parse_norm, action="append", metavar="SAMPLE=FACTOR",
+                        help="Normalization factor multiplying a sample's weight, overrides the mode default (hijing: Jet10=0.780 for the "
+                             "wiki weights, 0.773 for lumi; Jet10=1 switches it off). Repeatable.")
     parser.add_argument("-o", "--output-dir", type=Path, help="Directory to save the plots"
-                        f" (default overlay: {MODES['overlay']['output_dir']}, p+p: {MODES['pp']['output_dir']})")
+                        f" (default {per_mode('output_dir')})")
     parser.add_argument("--methods", nargs="+", choices=["unsub", "iter", "iternf"],
-                        help="Subtraction methods (default overlay: iter iternf, p+p: unsub iter)")
+                        help=f"Subtraction methods (default {per_mode('methods')})")
     parser.add_argument("--pt-trust-min", type=float, default=20.0, help="Truth pT below which the response is truncated by the reco tree cut, shaded (default: 20 GeV)")
     parser.add_argument("--n-sigma", type=float, default=1.5, help="Gaussian fit range in sigma around the mean (default: 1.5)")
     parser.add_argument("--eta-pt-mins", nargs="+", type=float, default=[10, 15, 20, 30],
                         help="pT cuts of the eta distributions, on the 1 GeV grid (default: 10 15 20 30 GeV; 10 is the data cut)")
-    parser.add_argument("--run", type=int, help="Run for the header: data run of the overlay or MC run of the p+p sample (default overlay: 68144, p+p: 28)")
+    parser.add_argument("--run", type=int, help=f"Run for the header: data run of the overlay or MC run (default {per_mode('run')})")
     parser.add_argument("-j", "--jobs", type=int, default=min(8, os.cpu_count() or 1), help="Number of parallel worker processes")
     parser.add_argument("--save-pdf", action="store_true", help="Save PDF version of plots in addition to PNG")
     args = parser.parse_args()
 
-    mode = MODES["pp" if args.pp else "overlay"]
+    if args.pp:
+        if args.mode not in ("overlay", "pp"):
+            print(f"Error: --pp conflicts with --mode {args.mode}")
+            sys.exit(1)
+        args.mode = "pp"
+    # a copy, with the normalization factors of --norm applied; it goes to the workers with each task
+    mode = {**MODES[args.mode], "norm": {**MODES[args.mode]["norm"], **dict(args.norm or [])}}
     args.input_list = args.input_list or Path(mode["input_list"])
     args.gen_list = args.gen_list or Path(mode["gen_list"])
     args.output_dir = args.output_dir or Path(mode["output_dir"])
     args.weights = args.weights or mode["weights"]
     args.methods = args.methods or mode["methods"]
     args.run = args.run if args.run is not None else mode["run"]
+    print(f"Mode: {args.mode}, weights: {args.weights}, normalization: {mode['norm'] or 'none'}")
     if missing := [ue for ue in args.methods if ue not in mode["methods"]]:
-        print(f"Error: methods {missing} are not in the {'p+p' if args.pp else 'overlay'} Jet-JES outputs (available: {mode['methods']})")
+        print(f"Error: methods {missing} are not in the {args.mode} Jet-JES outputs (available: {mode['methods']})")
         sys.exit(1)
 
     jes_files = parse_sample_list(args.input_list)
@@ -803,7 +928,7 @@ def main():
         print(f"Error: No samples in {args.input_list}")
         sys.exit(1)
 
-    weights = load_weights(gen_files, jes_files, args.weights)
+    weights = load_weights(gen_files, jes_files, args.weights, mode["xsec_wiki"], mode["norm"])
     samples = {sample: load_sample(path) for sample, path in jes_files.items()}
     print_event_summary(samples)
 
@@ -816,7 +941,20 @@ def main():
         if hi != lo:
             print(f"Warning: sample windows do not join ({hi:g} vs {lo:g}): the stitched spectra have a gap or overlap")
     windows = [lo for lo, _ in edges[1:]]
-    plot_lead_truth_xsec(samples, weights, args.run, mode, stitch_dir / "lead_truth_r04_xsec.png", args.save_pdf)
+    # plateau of each sample / the next lower one over the higher sample's window (10 GeV wide if open)
+    plateaus = {s: (lo, hi if np.isfinite(hi) else lo + 10) for s, (lo, hi) in sample_windows.items() if lo != edges[0][0]}
+    plot_lead_truth_xsec(samples, weights, args.run, mode, stitch_dir / "lead_truth_r04_xsec.png", args.save_pdf, plateaus=plateaus)
+    supp = None
+    if any(f != 1.0 for f in mode["norm"].values()):
+        # Supplementary (stitching/supplementary): the same with the wiki weights and no normalization, the motivation for the factors
+        print("\nSupplementary stitching plots: wiki weights, no normalization")
+        supp = {"weights": load_weights(gen_files, jes_files, "wiki", mode["xsec_wiki"], {}),
+                "mode": {**mode, "norm": {}, "weights_text": "Wiki cross-section weights, no normalization"},
+                "dir": stitch_dir / "supplementary"}
+        plot_lead_truth_xsec(samples, supp["weights"], args.run, supp["mode"], supp["dir"] / "lead_truth_r04_xsec_wiki.png", args.save_pdf, plateaus=plateaus)
+        plot_stitched(samples, supp["weights"], "hMaxPtTruthR04_window", r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", "selected", args.run, supp["mode"],
+                      supp["dir"] / "lead_truth_r04_stitched_wiki.png", args.save_pdf, "Event selection + sample windows", vlines=windows)
+        print()
     plot_stitched(samples, weights, "hMaxPtTruthR04_window", r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]", "selected", args.run, mode,
                   stitch_dir / "lead_truth_r04_stitched.png", args.save_pdf, "Event selection + sample windows", vlines=windows)
     for r_tag, r_jet in RADII.items():
@@ -826,8 +964,12 @@ def main():
         eta_max = round(1.1 - r_jet, 1)
         plot_stitched(samples, weights, name, TRUTH_PT_LABEL, "selected", args.run, mode, stitch_dir / f"truth_jet_{r_tag}_stitched.png", args.save_pdf,
                       f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows, headroom=mode["truth_headroom"])
+        if supp:
+            plot_stitched(samples, supp["weights"], name, TRUTH_PT_LABEL, "selected", args.run, supp["mode"], supp["dir"] / f"truth_jet_{r_tag}_stitched_wiki.png",
+                          args.save_pdf, f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows,
+                          headroom=mode["truth_headroom"])
 
-    stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
+    stitched ={name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
 
     # the mode goes with each task, so the workers get it under any multiprocessing start method
     tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, mode, args.pt_trust_min, args.n_sigma, args.eta_pt_mins, args.output_dir, args.save_pdf)
@@ -861,7 +1003,8 @@ def main():
             writer.writeheader()
             writer.writerows(table)
         print(f"Saved: {table_path}")
-    print(f"Generated {3 + len(RADII) + sum(n for n, *_ in outputs)} plots in {args.output_dir}")
+    n_supp = 2 + len(RADII) if supp else 0
+    print(f"Generated {3 + len(RADII) + n_supp + sum(n for n, *_ in outputs)} plots in {args.output_dir}")
 
 
 if __name__ == "__main__":
