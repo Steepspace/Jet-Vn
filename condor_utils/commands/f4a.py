@@ -325,6 +325,9 @@ def parse_data_zdc_sepd_list(data_list, logger=None):
 
     return data_map
 
+# Exit code of genFun4All_BkgSub_Overlay.sh when the input check fails (EX_TEMPFAIL)
+OVERLAY_INPUT_NOT_READY = 75
+
 def create_f4a_overlay_jobs(args):
     """
     Data+MC overlay mode of Fun4All_BkgSub: one job per overlay list line (one OutDir, all its events).
@@ -447,7 +450,8 @@ def create_f4a_overlay_jobs(args):
                  f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
                  f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output "
                  f"{manager.output_dir / Path(args.input_check_macro).name}")
-    manager.write_submit_file(arguments=arguments)
+    # inputs not ready (still being produced) exit with OVERLAY_INPUT_NOT_READY: no retry, resubmit from the failure log
+    manager.write_submit_file(arguments=arguments, retry_until=OVERLAY_INPUT_NOT_READY)
     manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_dst_zdc,input_dst_sepd,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list")
 
 def create_f4a_zdc_jobs(args):

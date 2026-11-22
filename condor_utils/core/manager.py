@@ -410,6 +410,7 @@ class CondorJobManager:
         retry_memory_step=None,
         retry_memory_max=None,
         max_retries=None,
+        retry_until=None,
         sub_file_name="genFun4All.sub",
         stdout_dir="stdout",
         error_dir="error",
@@ -480,10 +481,11 @@ class CondorJobManager:
             env.append(f"SPHENIX_MYINSTALL={self.myinstall}")
         if env:
             lines.append(f'environment          = "{" ".join(env)}"')
-        lines.extend([
-            f"max_retries          = {effective_retries}",
-            "",
-        ])
+        lines.append(f"max_retries          = {effective_retries}")
+        if retry_until is not None:
+            # exit code (or ClassAd expression) after which the job is not retried
+            lines.append(f"retry_until          = {retry_until}")
+        lines.append("")
 
         sub_file = self.output_dir / sub_file_name
         sub_file.write_text("\n".join(lines))

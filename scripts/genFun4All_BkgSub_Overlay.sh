@@ -134,7 +134,9 @@ if [[ $check_exit -ne 0 ]] || ! grep -q "^INPUT_CHECK_OK" <<< "$check_out"; then
     echo "Error: overlay inputs not ready for $input_global: $reason" >&2
     mkdir -p "$submitDir/failures"
     echo "input not ready for $input_global ($reason) on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
-    exit 1
+    # 75 (EX_TEMPFAIL): the submit file has retry_until = 75, so condor does not retry this job right away;
+    # resubmit it from the failure log once the production has finished the OutDir
+    exit 75
 fi
 
 # print the environment - needed for debugging
