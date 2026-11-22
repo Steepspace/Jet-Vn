@@ -339,6 +339,7 @@ def create_f4a_overlay_jobs(args):
 
     manager = CondorJobManager(args, job_name="F4A Overlay")
     manager.add_file_to_check(args.f4a_macro)
+    manager.add_file_to_check(args.input_check_macro)
     data_list = Path(args.data_list).resolve()
     manager.add_file_to_check(data_list)
     manager.add_file_to_check(args.calo_calib_macro)
@@ -373,12 +374,13 @@ def create_f4a_overlay_jobs(args):
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
+        'Input Check Macro': Path(args.input_check_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve()
     })
 
     manager.prepare_directories()
 
-    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, data_list]
+    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, data_list, args.input_check_macro]
     if calib_list:
         extra_files.append(calib_list)
     if eta_calib:
@@ -443,7 +445,8 @@ def create_f4a_overlay_jobs(args):
     arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst_global) $(input_dst_jet) $(input_dst_g4hit) $(input_dst_calo) $(input_dst_zdc) $(input_dst_sepd) $(input_calib) "
                  f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {args.do_flow} {eta_calib_val} "
                  f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
-                 f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output")
+                 f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output "
+                 f"{manager.output_dir / Path(args.input_check_macro).name}")
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_dst_zdc,input_dst_sepd,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list")
 
@@ -817,6 +820,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--data-list', dest='data_list', type=str, default=None, help='Data list(s) with calofit,zdc,sepd per line (e.g. dst_calofitting_zdc_sepd-00068144.list, or a list of such lists), used with --overlay for the ZDC/sEPD DSTs of each segment.')
     f4a.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut, used with --overlay. Default: 10 GeV.')
     f4a.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut, used with --overlay. Default: 5 GeV.')
+    f4a.add_argument('--input-check-macro', type=str, default='macros/check_overlay_inputs.C', help='Input check macro, run by each --overlay job on its DST copies before Fun4All_BkgSub (inputs still being written are logged to failures/failure-log.txt).')
     f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')
