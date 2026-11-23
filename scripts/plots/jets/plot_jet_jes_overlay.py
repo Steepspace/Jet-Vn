@@ -110,8 +110,9 @@ MODES = {
         "xsec_wiki": XSEC_WIKI_RUN28,
         "norm": {},
         "run": 28,
-        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-20-26-Run-28-MC/test.list",
-        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/11-19-26-pythia/test.list",
+        # 11-23: Jet30 / Jet40 trees also hold the true vertex (zvtx_truth, from the G4Hits): the vertex/ plots
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-23-26-Run-28-MC/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/11-23-26-pythia/test.list",
         "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_pp",
     },
     "hijing": {
@@ -287,6 +288,15 @@ def rebin_pt(h, pt_bins):
     """TH1 of truth pT summed into pt_bins."""
     sl = [pt_slice(h["edges"][0], lo, hi) for lo, hi in zip(pt_bins[:-1], pt_bins[1:])]
     return np.array([h["values"][s].sum() for s in sl]), np.array([h["variances"][s].sum() for s in sl])
+
+
+def binomial_eff(passed, total, total_var):
+    """passed / total of weighted counts, with the binomial error on the effective number of entries of total."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        eff = passed / total
+        n_eff = total ** 2 / total_var
+        err = np.sqrt(np.clip(eff * (1 - eff), 0, None) / n_eff)
+    return eff, err
 
 
 def response_in_pt(h2, lo, hi):
@@ -554,10 +564,7 @@ def plot_match_eff(hists, r_tag, ue, run, mode, pt_trust_min, out_path, save_pdf
         matched = sum_bins(hists, lambda ieta, c: f"hTruthMatched_{r_tag}_{ue}_eta{ieta}_cent_{c}", meta["eta_bins"], mode["cent_all"], mode)
         t, t_var = rebin_pt(truth, PT_BINS)
         m, _ = rebin_pt(matched, PT_BINS)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            eff = m / t
-            n_eff = t ** 2 / t_var
-            err = np.sqrt(np.clip(eff * (1 - eff), 0, None) / n_eff)
+        eff, err = binomial_eff(m, t, t_var)
         ok = np.isfinite(eff)
         ax.errorbar(x[ok], eff[ok], yerr=err[ok], xerr=xerr[ok], fmt="o", color=REGION_COLORS[meta["key"]], markersize=5, capsize=2, label=labels[meta["key"]])
     shade_low_pt(ax, pt_trust_min)
@@ -860,6 +867,247 @@ def group_hists(stitched, r_tag, ue):
     return {k: stitched[k] for k in names}
 
 
+# --------------------------------------------------------------------------------------------------
+# Vertex checks: samples whose trees hold the true vertex (p+p Jet30 / Jet40 with the G4Hits)
+# dz = z_MBD - z_truth. The histograms cover |dz| < 150 cm (1 cm bins); the overflow is not read.
+# --------------------------------------------------------------------------------------------------
+
+DZ_LABEL = r"$z_{\mathrm{MBD}} - z_{\mathrm{truth}}$"
+# truth pT bins of the vertex plots: only events with a leading truth R=0.4 jet above the lowest window of these samples
+VTX_PT_BINS = np.array([32, 36, 40, 46, 52, 60])
+VTX_EFF_PT_RANGES = [(32, 40), (40, 46), (46, 60)]
+VTX_PT_COLORS = ["#1b9e77", "#d95f02", "#7570b3"]
+# |dz| classes of the efficiency vs truth pT: (lo, hi) [cm], label, color, marker
+VTX_CLASSES = {
+    "all": ((0, np.inf), "All", "black", "o"),
+    "good": ((0, 2), r"$|\Delta z| < 2$ cm", "#377eb8", "s"),
+    "mid": ((2, 10), r"$2 \leq |\Delta z| < 10$ cm", "#4daf4a", "D"),
+    "bad": ((10, np.inf), r"$|\Delta z| \geq 10$ cm", "#e41a1c", "v"),
+}
+# the vertex plots sum all four Jet-JES eta bins: the full fiducial range |eta| < 1.1 - R
+VTX_ETA_BINS = tuple(range(N_ETA_BINS))
+VTX_DZ_EDGES = np.array([0, 1, 2, 5, 10, 20, 40, 150])  # |dz| bins of the efficiency vs |dz|
+VTX_LEAD_PT_BINS = np.array([31, 35, 41, 45, 50, 60, 80])  # leading truth R=0.4 jet pT, on the 1 GeV grid
+VTX_LEAD_PT_SLICES = [(31, 41), (41, 50), (50, 80)]
+VTX_BAD_CUTS = {5: "#ff7f00", 10: "#e41a1c"}  # event fraction with |dz| >= cut
+
+
+def vertex_samples(samples):
+    """The samples whose Jet-JES output has the vertex histograms (trees with zvtx_truth)."""
+    return {s: h for s, h in samples.items() if "h2DzLeadPt" in h}
+
+
+def project_dz(h2, lo, hi):
+    """TH1 over the x axis of a TH2 (x, dz), for |dz| in [lo, hi) (bin centers)."""
+    edges = h2["edges"][1]
+    centers = np.abs(0.5 * (edges[1:] + edges[:-1]))
+    m = (centers >= lo) & (centers < hi)
+    return {"values": h2["values"][:, m].sum(axis=1), "variances": h2["variances"][:, m].sum(axis=1), "edges": [h2["edges"][0]]}
+
+
+def region_dz(vstitched, prefix, eta_bins):
+    """Sum over the eta bins of the TH2 (truth pT, dz) named prefix + eta{i}."""
+    return add_hists(vstitched[f"{prefix}eta{i}"] for i in eta_bins)
+
+
+def vertex_eff(vstitched, r_tag, ue, eta_bins, dz_range, pt_bins):
+    """Matching efficiency per truth pT bin for |dz| in dz_range, with the truth counts and variances."""
+    truth = project_dz(region_dz(vstitched, f"h2TruthDz_{r_tag}_", eta_bins), *dz_range)
+    matched = project_dz(region_dz(vstitched, f"h2TruthMatchedDz_{r_tag}_{ue}_", eta_bins), *dz_range)
+    t, t_var = rebin_pt(truth, pt_bins)
+    m, _ = rebin_pt(matched, pt_bins)
+    eff, err = binomial_eff(m, t, t_var)
+    return eff, err, t, t_var
+
+
+def plot_match_eff_vertex(vstitched, r_tag, ue, run, mode, out_path, save_pdf):
+    """Matching efficiency vs truth pT for each |dz| class (all fiducial eta), and the share of truth jets with |dz| >= 10 cm."""
+    hep.style.use("ATLAS")
+    r_jet = RADII[r_tag]
+    labels, _ = eta_regions(r_jet)
+    x, xerr = 0.5 * (VTX_PT_BINS[1:] + VTX_PT_BINS[:-1]), 0.5 * np.diff(VTX_PT_BINS)
+    fig, (ax, ax_frac) = plt.subplots(2, 1, figsize=(8, 8.5), gridspec_kw={"height_ratios": [3, 1], "hspace": 0.08}, sharex=True)
+    for (dz_range, label, color, marker) in VTX_CLASSES.values():
+        eff, err, _, _ = vertex_eff(vstitched, r_tag, ue, VTX_ETA_BINS, dz_range, VTX_PT_BINS)
+        ok = np.isfinite(eff)
+        ax.errorbar(x[ok], eff[ok], yerr=err[ok], xerr=xerr[ok], fmt=marker, color=color, markersize=5, capsize=2, label=label)
+    _, _, t_all, t_all_var = vertex_eff(vstitched, r_tag, ue, VTX_ETA_BINS, VTX_CLASSES["all"][0], VTX_PT_BINS)
+    _, _, t_bad, _ = vertex_eff(vstitched, r_tag, ue, VTX_ETA_BINS, VTX_CLASSES["bad"][0], VTX_PT_BINS)
+    frac, frac_err = binomial_eff(t_bad, t_all, t_all_var)
+    ok = np.isfinite(frac)
+    ax_frac.errorbar(x[ok], frac[ok], yerr=frac_err[ok], xerr=xerr[ok], fmt="v", color=VTX_CLASSES["bad"][2], markersize=5, capsize=2)
+
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.set_ylim(0, 1.25)
+    ax.set_ylabel("Matching efficiency")
+    ax.text(0.04, 0.96, f"{labels['all']}\n{METHODS[ue]['label']}", transform=ax.transAxes, ha="left", va="top", fontsize=13)
+    ax.text(0.96, 0.62, "\n".join([mode["sample_text"], mode["selection_text"], rf"$\Delta R < 0.75 R$, $\Delta z$ = {DZ_LABEL}"]),
+            transform=ax.transAxes, ha="right", va="top", fontsize=11)
+    ax.legend(loc="lower right", frameon=False, fontsize=12, ncol=2)
+    add_header(ax, run, r_jet, None)
+    ax_frac.set_ylim(0, max(0.15, 1.3 * np.nanmax(frac[ok])) if ok.any() else 0.15)
+    ax_frac.set_xlim(VTX_PT_BINS[0], VTX_PT_BINS[-1])
+    ax_frac.set_xlabel(TRUTH_PT_LABEL)
+    ax_frac.set_ylabel(r"Share $|\Delta z| \geq 10$", fontsize=13)
+    plt.subplots_adjust(left=0.14, right=0.96, bottom=0.10, top=0.94)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_match_eff_vs_dz(vstitched, r_tag, ue, run, mode, out_path, save_pdf):
+    """Matching efficiency vs |dz| in truth pT ranges (all fiducial eta), |dz| bins on a categorical axis."""
+    hep.style.use("ATLAS")
+    r_jet = RADII[r_tag]
+    labels, _ = eta_regions(r_jet)
+    n_dz = len(VTX_DZ_EDGES) - 1
+    pos = np.arange(n_dz)
+    fig, ax = plt.subplots(figsize=(9, 6.5))
+    for ipt, ((lo, hi), color) in enumerate(zip(VTX_EFF_PT_RANGES, VTX_PT_COLORS)):
+        effs, errs = [], []
+        for dz_lo, dz_hi in zip(VTX_DZ_EDGES[:-1], VTX_DZ_EDGES[1:]):
+            eff, err, _, _ = vertex_eff(vstitched, r_tag, ue, VTX_ETA_BINS, (dz_lo, dz_hi), np.array([lo, hi]))
+            effs.append(eff[0])
+            errs.append(err[0])
+        effs, errs = np.array(effs), np.array(errs)
+        ok = np.isfinite(effs)
+        ax.errorbar(pos[ok] + (ipt - 1) * 0.12, effs[ok], yerr=errs[ok], fmt="o", color=color, markersize=5, capsize=2,
+                    label=rf"${lo} \leq p_{{T}}^{{\mathrm{{truth}}}} < {hi}$ GeV")
+    ax.axhline(1.0, color="gray", linestyle="--", linewidth=1)
+    ax.set_xticks(pos)
+    ax.set_xticklabels([f"{a:g}–{b:g}" for a, b in zip(VTX_DZ_EDGES[:-1], VTX_DZ_EDGES[1:])], fontsize=12)
+    ax.set_xlim(-0.5, n_dz - 0.5)
+    ax.set_ylim(0, 1.25)
+    ax.set_xlabel(rf"$|${DZ_LABEL}$|$ [cm]")
+    ax.set_ylabel("Matching efficiency")
+    ax.text(0.96, 0.96, f"{labels['all']}\n{METHODS[ue]['label']}\n{mode['sample_text']}", transform=ax.transAxes, ha="right", va="top", fontsize=12)
+    ax.legend(loc="lower left", frameon=False, fontsize=12)
+    add_header(ax, run, r_jet, None)
+    plt.subplots_adjust(left=0.12, right=0.97, bottom=0.13, top=0.93)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_vertex_quality(vstitched, run, mode, out_path, save_pdf, rebin=5):
+    """Event level: share of events with |dz| >= cut vs the leading truth R=0.4 jet pT, and the dz distribution in leading pT slices."""
+    hep.style.use("ATLAS")
+    h2 = vstitched["h2DzLeadPt"]
+    fig, (ax, ax_dz) = plt.subplots(1, 2, figsize=(15, 6.5))
+    lead_label = r"Leading truth $R = 0.4$ jet $p_{T}$ [GeV]"
+
+    x, xerr = 0.5 * (VTX_LEAD_PT_BINS[1:] + VTX_LEAD_PT_BINS[:-1]), 0.5 * np.diff(VTX_LEAD_PT_BINS)
+    t, t_var = rebin_pt(project_dz(h2, 0, np.inf), VTX_LEAD_PT_BINS)
+    for cut, color in VTX_BAD_CUTS.items():
+        b, _ = rebin_pt(project_dz(h2, cut, np.inf), VTX_LEAD_PT_BINS)
+        frac, err = binomial_eff(b, t, t_var)
+        ok = np.isfinite(frac)
+        ax.errorbar(x[ok], frac[ok], yerr=err[ok], xerr=xerr[ok], fmt="o", color=color, markersize=5, capsize=2, label=rf"$|\Delta z| \geq {cut}$ cm")
+    ax.set_ylim(0, 0.3)
+    ax.set_xlim(VTX_LEAD_PT_BINS[0], VTX_LEAD_PT_BINS[-1])
+    ax.set_xlabel(lead_label)
+    ax.set_ylabel("Share of events")
+    ax.legend(loc="lower right", frameon=False, fontsize=13)
+    ax.text(0.04, 0.96, "\n".join([mode["sample_text"], mode["selection_text"], rf"$\Delta z$ = {DZ_LABEL}"]), transform=ax.transAxes, ha="left", va="top", fontsize=12)
+    add_header(ax, run, None, None)
+
+    edges = h2["edges"][1][::rebin]
+    for (lo, hi), color in zip(VTX_LEAD_PT_SLICES, VTX_PT_COLORS):
+        sl = pt_slice(h2["edges"][0], lo, hi)
+        vals = h2["values"][sl].sum(axis=0).reshape(-1, rebin).sum(axis=1)
+        var = h2["variances"][sl].sum(axis=0).reshape(-1, rebin).sum(axis=1)
+        norm = vals.sum()
+        if norm <= 0:
+            continue
+        hep.histplot((vals / norm, edges), yerr=np.sqrt(var) / norm, ax=ax_dz, histtype="step", color=color, linewidth=1.8,
+                     label=rf"${lo} \leq p_{{T}}^{{\mathrm{{lead}}}} < {hi}$ GeV")
+    ax_dz.set_yscale("log")
+    ax_dz.set_ylim(top=ax_dz.get_ylim()[1] * 20)
+    ax_dz.set_xlim(edges[0], edges[-1])
+    ax_dz.set_xlabel(f"{DZ_LABEL} [cm]")
+    ax_dz.set_ylabel(f"Normalized ({rebin} cm bins)")
+    ax_dz.legend(loc="upper right", frameon=False, fontsize=12)
+    add_header(ax_dz, run, None, None)
+    plt.subplots_adjust(left=0.07, right=0.98, bottom=0.12, top=0.93, wspace=0.22)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def plot_zvtx_truth(vstitched, run, mode, out_path, save_pdf):
+    """z_truth vs z_MBD of the selected events (weighted)."""
+    hep.style.use("ATLAS")
+    h2 = vstitched["h2ZvtxTruth"]
+    fig, ax = plt.subplots(figsize=(8.5, 7))
+    vals = np.where(h2["values"] > 0, h2["values"], np.nan)
+    mesh = ax.pcolormesh(h2["edges"][0], h2["edges"][1], vals.T, norm=matplotlib.colors.LogNorm(), cmap="viridis", shading="flat")
+    fig.colorbar(mesh, ax=ax, label="Weighted events [pb]")
+    ax.set_xlabel(r"$z_{\mathrm{MBD}}$ [cm]")
+    ax.set_ylabel(r"$z_{\mathrm{truth}}$ [cm]")
+    ax.text(0.04, 0.96, "\n".join([mode["sample_text"], mode["selection_text"]]), transform=ax.transAxes, ha="left", va="top", fontsize=12,
+            bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.85})
+    add_header(ax, run, None, None)
+    plt.subplots_adjust(left=0.14, right=0.95, bottom=0.12, top=0.93)
+    save_fig(fig, out_path, save_pdf)
+    plt.close(fig)
+
+
+def vertex_table(vstitched, methods):
+    """Rows per (R, method, truth pT bin), all fiducial eta: share of truth jets with |dz| >= 10 cm and the efficiency per |dz| class."""
+    rows = []
+    for r_tag, r_jet in RADII.items():
+        for ue in methods:
+            res = {k: vertex_eff(vstitched, r_tag, ue, VTX_ETA_BINS, v[0], VTX_PT_BINS) for k, v in VTX_CLASSES.items()}
+            frac, frac_err = binomial_eff(res["bad"][2], res["all"][2], res["all"][3])
+            for i, (lo, hi) in enumerate(zip(VTX_PT_BINS[:-1], VTX_PT_BINS[1:])):
+                row = {"R": r_jet, "ue": ue, "eta_max": round(1.1 - r_jet, 1), "pt_lo": lo, "pt_hi": hi, "share_bad": frac[i], "share_bad_err": frac_err[i]}
+                for k, (eff, err, _, _) in res.items():
+                    row[f"eff_{k}"], row[f"eff_{k}_err"] = eff[i], err[i]
+                rows.append(row)
+    return rows
+
+
+def run_vertex_checks(samples, weights, sample_windows, run, mode, methods, output_dir, save_pdf):
+    """Stitches the vertex histograms over the samples that have them and makes the vertex/ plots and table. Returns the number of figures."""
+    vsamples = vertex_samples(samples)
+    if not vsamples:
+        print("No vertex histograms (trees without zvtx_truth): skipping the vertex checks")
+        return 0
+    first = vsamples[next(iter(vsamples))]
+    names = [n for n in first if "Dz" in n or n == "h2ZvtxTruth"]
+    vstitched = {n: stitch(vsamples, weights, n) for n in names}
+    lead_min = min(sample_windows[s][0] for s in vsamples)
+    vmode = {**mode, "sample_text": f"PYTHIA8 p+p ({' + '.join(vsamples)} only)",
+             "selection_text": mode["selection_text"] + "\n" + rf"Leading truth $R = 0.4$ $p_{{T}} \geq {lead_min:g}$ GeV"}
+    skipped = sorted(set(samples) - set(vsamples))
+    print(f"Vertex checks: {', '.join(vsamples)} (no truth vertex in {', '.join(skipped) or 'none'}), truth pT >= {VTX_PT_BINS[0]} GeV")
+
+    vdir = output_dir / "vertex"
+    n = 0
+    plot_vertex_quality(vstitched, run, vmode, vdir / "vertex_quality_lead_pt.png", save_pdf)
+    plot_zvtx_truth(vstitched, run, vmode, vdir / "zvtx_truth_vs_mbd.png", save_pdf)
+    n += 2
+    for r_tag in RADII:
+        for ue in methods:
+            tag = f"{r_tag}_{ue}"
+            plot_match_eff_vertex(vstitched, r_tag, ue, run, vmode, vdir / f"match_eff_vertex_{tag}.png", save_pdf)
+            plot_match_eff_vs_dz(vstitched, r_tag, ue, run, vmode, vdir / f"match_eff_vs_dz_{tag}.png", save_pdf)
+            n += 2
+
+    rows = vertex_table(vstitched, methods)
+    print(f"\nMatching efficiency by vertex error |dz| = |z_MBD - z_truth| ({', '.join(vsamples)}; share = truth jets with |dz| >= 10 cm)")
+    print(f"{'R':<5}{'UE':<8}{'|eta| <':<8}{'pT':>8}{'share':>9}" + "".join(f"{'eff ' + k:>11}" for k in VTX_CLASSES))
+    for r in rows:
+        pt_range = f"{r['pt_lo']}-{r['pt_hi']}"
+        effs = "".join(f"{r['eff_' + k]:>11.3f}" for k in VTX_CLASSES)
+        print(f"{r['R']:<5g}{r['ue']:<8}{r['eta_max']:<8g}{pt_range:>8}{r['share_bad']:>9.3f}{effs}")
+    vdir.mkdir(parents=True, exist_ok=True)
+    table_path = vdir / "vertex_match_table.csv"
+    with table_path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Saved: {table_path}\n")
+    return n
+
+
 def main():
     def per_mode(key):
         return ", ".join(f"{m}: {' '.join(v) if isinstance(v := MODES[m][key], list) else v}" for m in MODES)
@@ -955,7 +1203,11 @@ def main():
                           args.save_pdf, f"Truth jets, $|\\eta| < {eta_max:g}$\n{mode['selection_text']}", r_jet=r_jet, xlim=(0, 80), vlines=windows,
                           headroom=mode["truth_headroom"])
 
-    stitched ={name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name != "hEvent"}
+    # only the histograms every sample has (the vertex ones are in some samples only, stitched in run_vertex_checks)
+    common = set.intersection(*(set(h) for h in samples.values()))
+    stitched = {name: stitch(samples, weights, name) for name in samples[next(iter(samples))] if name in common and name != "hEvent"}
+
+    n_vertex = run_vertex_checks(samples, weights, sample_windows, args.run, mode, args.methods, args.output_dir, args.save_pdf)
 
     # the mode goes with each task, so the workers get it under any multiprocessing start method
     tasks = [(r_tag, ue, group_hists(stitched, r_tag, ue), args.run, mode, args.pt_trust_min, args.n_sigma, args.eta_pt_mins, args.output_dir, args.save_pdf)
@@ -990,7 +1242,7 @@ def main():
             writer.writerows(table)
         print(f"Saved: {table_path}")
     n_supp = 2 + len(RADII) if supp else 0
-    print(f"Generated {3 + len(RADII) + n_supp + sum(n for n, *_ in outputs)} plots in {args.output_dir}")
+    print(f"Generated {3 + len(RADII) + n_supp + n_vertex + sum(n for n, *_ in outputs)} plots in {args.output_dir}")
 
 
 if __name__ == "__main__":
