@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -48,6 +49,11 @@
 //               is given (not "none").
 // Trees made with do_flow = 0 store the no-flow iterative jets under "iter": the PP and NOFLOW modes read those
 // branches and name their histograms "iternf", as the OVERLAY mode does for the no-flow jets.
+// Matching checks:
+//  - trees with the true vertex (zvtx_truth, Fun4All_PP_JES with G4Hits): truth and matched jets vs
+//    dz = z_MBD - z_truth, so the matching efficiency can be plotted vs the vertex error.
+//  - dump_pt_min > 0: every fiducial truth jet with pT >= dump_pt_min that fails the matching is written, with the
+//    event's truth and reco jets and the vertices, to <output_dir>/Jet-JES_<input>_failed_matches.txt.
 class JetJES
 {
  public:
@@ -94,6 +100,7 @@ class JetJES
     }
     setup_chain();
     init_hists();
+    open_dump();
     process_events();
     save_results();
   }
@@ -109,6 +116,10 @@ class JetJES
 
   void set_sigma_cut(double sigma) { m_sigma_cut = sigma; }
   double get_sigma_cut() const { return m_sigma_cut; }
+
+  // failed-match dump threshold on the truth jet pT [GeV], <= 0: no dump
+  void set_dump_pt_min(double pt) { m_dump_pt_min = pt; }
+  double get_dump_pt_min() const { return m_dump_pt_min; }
 
  private:
   static constexpr double m_cent_high = 59.5;
@@ -176,6 +187,8 @@ class JetJES
     EtaCentArray<TH1> hTruthMatched{};
     TH2 *h2DeltaEta{nullptr};
     TH2 *h2DeltaR{nullptr};
+    // [eta], matched truth jets: pT_truth vs z_MBD - z_truth (only with the truth vertex)
+    std::array<TH2 *, m_num_eta_bins> h2TruthMatchedDz{};
     // all reco jets, as h2JetEta in Jet-Anav3
     TH2 *h2RecoEta_raw{nullptr};
     TH2 *h2RecoEta_calib{nullptr};
@@ -194,6 +207,11 @@ class JetJES
     std::array<EtaCentArray<TH1>, m_radii.size()> hTruth{};
     // [radius], all truth jets
     std::array<TH2 *, m_radii.size()> h2TruthEta{};
+    // [radius][eta], fiducial truth jets: pT_truth vs z_MBD - z_truth (only with the truth vertex)
+    std::array<std::array<TH2 *, m_num_eta_bins>, m_radii.size()> h2TruthDz{};
+    // events: z_truth vs z_MBD, and z_MBD - z_truth vs the leading truth R=0.4 jet pT (only with the truth vertex)
+    TH2 *h2ZvtxTruth{nullptr};
+    TH2 *h2DzLeadPt{nullptr};
     // [ue][radius]
     std::array<std::array<ResponseHistSet, m_radii.size()>, m_max_ue> resp{};
   };
@@ -216,6 +234,7 @@ class JetJES
    private:
     int event{0};
     double zvtx{0.0};
+    double zvtx_truth{0.0};  // only with the truth vertex
     double centrality{0.0};
     double emcal_energy{0};
     double ihcal_energy{0};
@@ -281,11 +300,21 @@ class JetJES
 
   double m_sigma_cut{3.5};
   bool m_has_calo_mbd_cut{false};
+
+  // matching checks
+  bool m_has_truth_vertex{false};
+  double m_dump_pt_min{-1}; /*GeV*/
+  std::ofstream m_dump;
+  long long m_entry{0};
   std::unique_ptr<TProfile> m_profile_calo_mbd{nullptr};
 
   // per event buffers
   std::vector<TruthJet> m_truth_jets;
   std::vector<bool> m_reco_used;
+  // [truth jet index]: matched reco jet (-1: none), closest free reco jet when it was tried and its Delta R
+  std::vector<int> m_truth_match;
+  std::vector<int> m_truth_closest;
+  std::vector<double> m_truth_closest_dr;
 
   // --- Private Helper Methods ---
   void setup_chain();
@@ -299,11 +328,14 @@ class JetJES
   std::pair<int, int> cent_range(size_t icent) const;
   std::optional<size_t> find_cent_bin(double cent) const;
   static std::optional<size_t> find_eta_bin(double eta, const RadiusConfig &rc);
+  static double delta_phi(double phi1, double phi2);
   static double delta_r(double eta1, double phi1, double eta2, double phi2);
 
   void process_jets(size_t icent);
   void process_events();
   void print_event_info(long long event_idx) const;
+  void open_dump();
+  void dump_failed_matches(size_t ir, size_t iue);
 
   void save_results() const;
 };
@@ -338,6 +370,13 @@ void JetJES::setup_chain()
   set_branch("event", &ed.event);
   set_branch("zvtx", &ed.zvtx);
   set_branch("max_pt_truth_r04", &ed.max_pt_truth_r04);
+  // true vertex: only in trees made with the G4Hits (Fun4All_PP_JES)
+  m_has_truth_vertex = m_chain->GetBranch("zvtx_truth") != nullptr;
+  if (m_has_truth_vertex)
+  {
+    set_branch("zvtx_truth", &ed.zvtx_truth);
+  }
+  std::cout << std::format("Truth vertex (zvtx_truth): {}\n", m_has_truth_vertex ? "found, filling the dz histograms" : "not in the trees");
   // p+p: no centrality, Calo-MBD or flow selection (the p+p trees have no calo energy / MBD charge branches)
   if (!m_is_pp)
   {
@@ -451,6 +490,19 @@ void JetJES::init_hists()
   double eta_low = -1.5;
   double eta_high = 1.5;
 
+  // z_MBD - z_truth: the true vertex is broad (~66 cm RMS), so a wrong MBD vertex can be far off
+  int bins_dz = 300;
+  double dz_low = -150;
+  double dz_high = 150;
+
+  int bins_zmbd = 40;
+  double zmbd_low = -10;
+  double zmbd_high = 10;
+
+  int bins_ztruth = 300;
+  double ztruth_low = -150;
+  double ztruth_high = 150;
+
   const std::map<EventType, std::string> event_labels = {
       {EventType::ALL, "All"},
       {EventType::CENT, "Centrality 0-60%"},
@@ -501,6 +553,14 @@ void JetJES::init_hists()
   m_hists.hMaxPtTruthR04 = m_hists1D["hMaxPtTruthR04"].get();
   m_hists.hMaxPtTruthR04_window = m_hists1D["hMaxPtTruthR04_window"].get();
 
+  if (m_has_truth_vertex)
+  {
+    m_hists2D["h2ZvtxTruth"] = std::make_unique<TH2F>("h2ZvtxTruth", "Event Selection + Window; z_{MBD} [cm]; z_{truth} [cm]", bins_zmbd, zmbd_low, zmbd_high, bins_ztruth, ztruth_low, ztruth_high);
+    m_hists2D["h2DzLeadPt"] = std::make_unique<TH2F>("h2DzLeadPt", "Event Selection + Window; Leading Truth R=0.4 Jet p_{T} [GeV]; z_{MBD} - z_{truth} [cm]", bins_lead_pt, lead_pt_low, lead_pt_high, bins_dz, dz_low, dz_high);
+    m_hists.h2ZvtxTruth = m_hists2D["h2ZvtxTruth"].get();
+    m_hists.h2DzLeadPt = m_hists2D["h2DzLeadPt"].get();
+  }
+
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
     const RadiusConfig &rc = m_radii[ir];
@@ -509,6 +569,26 @@ void JetJES::init_hists()
     std::string truth_eta_name = std::format("h2TruthEta_{}", r);
     m_hists2D[truth_eta_name] = std::make_unique<TH2F>(truth_eta_name.c_str(), std::format("R = {:.1f}, All Truth Jets; p_{{T}}^{{truth}} [GeV]; #eta^{{truth}}", rc.radius).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
     m_hists.h2TruthEta[ir] = m_hists2D[truth_eta_name].get();
+
+    // vs the vertex error, all centralities (one TH2 per eta bin)
+    if (m_has_truth_vertex)
+    {
+      for (size_t ieta = 0; ieta < m_num_eta_bins; ++ieta)
+      {
+        std::string label = std::format("R = {:.1f}, {:.2f} #leq #eta^{{truth}} < {:.2f}", rc.radius, rc.eta_edges[ieta], rc.eta_edges[ieta + 1]);
+        std::string truth_dz_name = std::format("h2TruthDz_{}_eta{}", r, ieta);
+        m_hists2D[truth_dz_name] = std::make_unique<TH2F>(truth_dz_name.c_str(), std::format("{}; p_{{T}}^{{truth}} [GeV]; z_{{MBD}} - z_{{truth}} [cm]", label).c_str(), bins_pt, pt_low, pt_high, bins_dz, dz_low, dz_high);
+        m_hists.h2TruthDz[ir][ieta] = m_hists2D[truth_dz_name].get();
+
+        for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+        {
+          std::string_view ue = m_ue_list[iue].name;
+          std::string matched_dz_name = std::format("h2TruthMatchedDz_{}_{}_eta{}", r, ue, ieta);
+          m_hists2D[matched_dz_name] = std::make_unique<TH2F>(matched_dz_name.c_str(), std::format("{}, {}, Matched; p_{{T}}^{{truth}} [GeV]; z_{{MBD}} - z_{{truth}} [cm]", ue, label).c_str(), bins_pt, pt_low, pt_high, bins_dz, dz_low, dz_high);
+          m_hists.resp[iue][ir].h2TruthMatchedDz[ieta] = m_hists2D[matched_dz_name].get();
+        }
+      }
+    }
 
     for (size_t ieta = 0; ieta < m_num_eta_bins; ++ieta)
     {
@@ -664,14 +744,20 @@ std::optional<size_t> JetJES::find_eta_bin(double eta, const RadiusConfig &rc)
   return static_cast<size_t>(std::distance(rc.eta_edges.begin() + 1, it));
 }
 
+// phi1 - phi2 in [-pi, pi)
+double JetJES::delta_phi(double phi1, double phi2)
+{
+  double dphi = std::fmod(phi1 - phi2 + std::numbers::pi, 2 * std::numbers::pi);
+  if (dphi < 0)
+  {
+    dphi += 2 * std::numbers::pi;
+  }
+  return dphi - std::numbers::pi;
+}
+
 double JetJES::delta_r(double eta1, double phi1, double eta2, double phi2)
 {
-  double dphi = std::abs(phi1 - phi2);
-  if (dphi > std::numbers::pi)
-  {
-    dphi = 2 * std::numbers::pi - dphi;
-  }
-  return std::hypot(eta1 - eta2, dphi);
+  return std::hypot(eta1 - eta2, delta_phi(phi1, phi2));
 }
 
 void JetJES::process_jets(size_t icent)
@@ -699,6 +785,10 @@ void JetJES::process_jets(size_t icent)
       {
         m_truth_jets.push_back({idx, *ieta});
         m_hists.hTruth[ir][*ieta][icent]->Fill(truth.pt->at(idx));
+        if (m_has_truth_vertex)
+        {
+          m_hists.h2TruthDz[ir][*ieta]->Fill(truth.pt->at(idx), ed.zvtx - ed.zvtx_truth);
+        }
       }
     }
     std::ranges::sort(m_truth_jets, [&](const TruthJet &a, const TruthJet &b)
@@ -719,6 +809,9 @@ void JetJES::process_jets(size_t icent)
       // one to one matching: closest reco jet not yet matched to a higher pT truth jet.
       // Jets with E <= 0 are not analysis jets (Jet-Anav3 v2/v3), so they are marked used and never matched
       m_reco_used.assign(reco.pt->size(), false);
+      m_truth_match.assign(truth.pt->size(), -1);
+      m_truth_closest.assign(truth.pt->size(), -1);
+      m_truth_closest_dr.assign(truth.pt->size(), -1);
       for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
       {
         if (reco.e->at(jdx) <= 0)
@@ -758,6 +851,8 @@ void JetJES::process_jets(size_t icent)
         }
 
         h.h2DeltaR->Fill(pt_truth, dr_best);
+        m_truth_closest[idx] = static_cast<int>(*best);
+        m_truth_closest_dr[idx] = dr_best;
 
         if (dr_best >= dr_max)
         {
@@ -765,12 +860,150 @@ void JetJES::process_jets(size_t icent)
         }
 
         m_reco_used[*best] = true;
+        m_truth_match[idx] = static_cast<int>(*best);
+        if (m_has_truth_vertex)
+        {
+          h.h2TruthMatchedDz[ieta]->Fill(pt_truth, ed.zvtx - ed.zvtx_truth);
+        }
 
         h.hTruthMatched[ieta][icent]->Fill(pt_truth);
         h.h2Resp_raw[ieta][icent]->Fill(pt_truth, reco.pt->at(*best) / pt_truth);
         h.h2Resp_calib[ieta][icent]->Fill(pt_truth, reco.pt_calib->at(*best) / pt_truth);
         h.h2DeltaEta->Fill(pt_truth, reco.eta->at(*best) - eta_truth);
       }
+
+      if (m_dump.is_open())
+      {
+        dump_failed_matches(ir, iue);
+      }
+    }
+  }
+}
+
+void JetJES::open_dump()
+{
+  if (m_dump_pt_min <= 0)
+  {
+    return;
+  }
+
+  std::filesystem::create_directories(m_output_dir);
+  std::string stem = std::filesystem::path(m_input_file).stem().string();
+  std::string name = std::format("{}/Jet-JES_{}_failed_matches.txt", m_output_dir, stem);
+  m_dump.open(name);
+  if (!m_dump)
+  {
+    throw std::runtime_error(std::format("Could not open the failed-match dump {}", name));
+  }
+
+  m_dump << std::format("# Fiducial truth jets with pT >= {} GeV that fail the matching (Delta R < {} R to the closest free reco jet)\n", m_dump_pt_min, m_match_radius_frac);
+  m_dump << std::format("# Input: {}\n", m_input_file);
+  m_dump << "# phi in [0, 2pi); dEta, dPhi, dR: reco - truth, to the failed truth jet. Reco jets with E <= 0 are not analysis jets (never matched).\n";
+  m_dump << "# The reco jet eta and the reco eta acceptance use z_MBD; the truth jets use the true vertex.\n";
+  std::cout << std::format("Failed-match dump (truth pT >= {} GeV): {}\n", m_dump_pt_min, name);
+}
+
+void JetJES::dump_failed_matches(size_t ir, size_t iue)
+{
+  const auto &ed = m_event_data;
+  const RadiusConfig &rc = m_radii[ir];
+  const JetData &truth = ed.truth[ir];
+  const JetData &reco = ed.reco[iue][ir];
+
+  std::vector<size_t> failed;
+  for (const auto &[idx, ieta] : m_truth_jets)
+  {
+    if (m_truth_match[idx] < 0 && truth.pt->at(idx) >= m_dump_pt_min)
+    {
+      failed.push_back(idx);
+    }
+  }
+  if (failed.empty())
+  {
+    return;
+  }
+  m_ctr[std::format("dumped_failed_matches_{}_{}", rc.tag, m_ue_list[iue].name)] += static_cast<int>(failed.size());
+
+  std::string file = m_chain->GetCurrentFile() ? std::filesystem::path(m_chain->GetCurrentFile()->GetName()).filename().string() : "?";
+  auto &out = m_dump;
+  out << std::format("\n{:=^110}\n", std::format(" FAILED MATCH | R = {:.1f} {} | {} entry {} event {} ", rc.radius, m_ue_list[iue].name, file, m_chain->GetTree() ? m_chain->GetTree()->GetReadEntry() : -1, ed.event));
+  out << std::format("  global entry {} | lead truth R=0.4 pT {:.2f} GeV | z_MBD {:.2f} cm", m_entry, ed.max_pt_truth_r04, ed.zvtx);
+  if (m_has_truth_vertex)
+  {
+    out << std::format(" | z_truth {:.2f} cm | z_MBD - z_truth {:.2f} cm", ed.zvtx_truth, ed.zvtx - ed.zvtx_truth);
+  }
+  else
+  {
+    out << " | z_truth n/a";
+  }
+  if (!m_is_pp)
+  {
+    out << std::format(" | centrality {:.1f}%", ed.centrality);
+  }
+  out << "\n";
+
+  // all truth jets of the event (stored down to the Fun4All truth pT threshold, |eta| < 1.5)
+  out << std::format("  Truth jets (fiducial |eta| < {}: *)\n", rc.eta_max);
+  out << std::format("    {:>3} {:>8} {:>7} {:>7}  {}\n", "i", "pT", "eta", "phi", "match");
+  for (size_t i = 0; i < truth.pt->size(); ++i)
+  {
+    bool fiducial = std::abs(truth.eta->at(i)) < rc.eta_max;
+    std::string match;
+    if (!fiducial)
+    {
+      match = "-";
+    }
+    else if (m_truth_match[i] >= 0)
+    {
+      match = std::format("reco {} (dR {:.3f})", m_truth_match[i], m_truth_closest_dr[i]);
+    }
+    else if (m_truth_closest[i] >= 0)
+    {
+      match = std::format("UNMATCHED (closest free reco {}, dR {:.3f})", m_truth_closest[i], m_truth_closest_dr[i]);
+    }
+    else
+    {
+      match = "UNMATCHED (no free reco jet)";
+    }
+    out << std::format("   {}{:>3} {:>8.2f} {:>7.3f} {:>7.3f}  {}\n", fiducial ? '*' : ' ', i, truth.pt->at(i), truth.eta->at(i), truth.phi->at(i), match);
+  }
+
+  // matched truth jet of each reco jet
+  std::vector<int> owner(reco.pt->size(), -1);
+  for (size_t i = 0; i < m_truth_match.size(); ++i)
+  {
+    if (m_truth_match[i] >= 0)
+    {
+      owner[static_cast<size_t>(m_truth_match[i])] = static_cast<int>(i);
+    }
+  }
+
+  // all reco jets, with the distance to each failed truth jet
+  for (size_t idx : failed)
+  {
+    double eta_t = truth.eta->at(idx);
+    double phi_t = truth.phi->at(idx);
+    out << std::format("  Reco jets vs failed truth jet {} (pT {:.2f}, eta {:.3f}, phi {:.3f}), by dR\n", idx, truth.pt->at(idx), eta_t, phi_t);
+    out << std::format("    {:>3} {:>8} {:>9} {:>7} {:>7} {:>8} {:>7} {:>7} {:>7}  {}\n", "j", "pT raw", "pT calib", "eta", "phi", "E", "dEta", "dPhi", "dR", "matched to");
+
+    std::vector<size_t> order(reco.pt->size());
+    for (size_t j = 0; j < order.size(); ++j)
+    {
+      order[j] = j;
+    }
+    std::ranges::sort(order, [&](size_t a, size_t b)
+                      { return delta_r(eta_t, phi_t, reco.eta->at(a), reco.phi->at(a)) < delta_r(eta_t, phi_t, reco.eta->at(b), reco.phi->at(b)); });
+
+    for (size_t j : order)
+    {
+      double deta = reco.eta->at(j) - eta_t;
+      double dphi = delta_phi(reco.phi->at(j), phi_t);
+      std::string matched = reco.e->at(j) <= 0 ? "E <= 0 (not an analysis jet)" : (owner[j] >= 0 ? std::format("truth {}", owner[j]) : "-");
+      out << std::format("    {:>3} {:>8.2f} {:>9.2f} {:>7.3f} {:>7.3f} {:>8.2f} {:>7.3f} {:>7.3f} {:>7.3f}  {}\n", j, reco.pt->at(j), reco.pt_calib->at(j), reco.eta->at(j), reco.phi->at(j), reco.e->at(j), deta, dphi, std::hypot(deta, dphi), matched);
+    }
+    if (reco.pt->empty())
+    {
+      out << "    (no reco jets above the Fun4All calibrated pT threshold in the reco eta acceptance)\n";
     }
   }
 }
@@ -791,6 +1024,7 @@ void JetJES::process_events()
   {
     // Load Event Data from TChain
     m_chain->GetEntry(event);
+    m_entry = event;
 
     if (event % 100000 == 0)
     {
@@ -853,6 +1087,11 @@ void JetJES::process_events()
     if (m_hists.hCentrality)
     {
       m_hists.hCentrality->Fill(ed.centrality);
+    }
+    if (m_has_truth_vertex)
+    {
+      m_hists.h2ZvtxTruth->Fill(ed.zvtx, ed.zvtx_truth);
+      m_hists.h2DzLeadPt->Fill(ed.max_pt_truth_r04, ed.zvtx - ed.zvtx_truth);
     }
 
     // Jets
@@ -947,12 +1186,13 @@ int main(int argc, const char *const argv[])
   gROOT->SetBatch(true);
   TH1::AddDirectory(false);
 
-  if (argc < 3 || argc > 10)
+  if (argc < 3 || argc > 11)
   {
-    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity] [mode]" << std::endl;
+    std::cout << "Usage: " << argv[0] << " input_file calo_mbd_file [events] [output_directory] [lead_truth_pt_min] [lead_truth_pt_max] [sigma_cut] [verbosity] [mode] [dump_pt_min]" << std::endl;
     std::cout << "  mode: 0 data+MC overlay made with flow (iter / iternf, Calo-MBD file required; default)" << std::endl;
     std::cout << "        1 p+p MC (Fun4All_PP_JES; unsub / iternf, calo_mbd_file not used: pass none)" << std::endl;
     std::cout << "        2 Au+Au without flow (HIJING embedded MC or no-flow overlay; iternf; calo_mbd_file optional: none = no Calo-MBD cut)" << std::endl;
+    std::cout << "  dump_pt_min: write the fiducial truth jets with pT >= dump_pt_min [GeV] that fail the matching to a text file (<= 0: off, default)" << std::endl;
     return 1;
   }
 
@@ -966,6 +1206,7 @@ int main(int argc, const char *const argv[])
   double sigma_cut = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : 3.5;
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
   int mode_value = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
+  double dump_pt_min = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : -1;
   if (mode_value < 0 || mode_value > 2)
   {
     std::cout << std::format("Invalid mode {}: expected 0 (overlay), 1 (p+p) or 2 (Au+Au without flow)", mode_value) << std::endl;
@@ -987,6 +1228,7 @@ int main(int argc, const char *const argv[])
     std::cout << std::format("Sigma Cut: {:.2f}\n", sigma_cut);
   }
   std::cout << std::format("Verbosity: {}\n", verbosity);
+  std::cout << std::format("Failed-Match Dump: {}\n", dump_pt_min > 0 ? std::format("truth pT >= {} GeV", dump_pt_min) : "off");
   std::cout << std::format("{:#<20}\n", "");
 
   try
@@ -996,6 +1238,7 @@ int main(int argc, const char *const argv[])
     analysis.set_lead_truth_pt_max(lead_truth_pt_max);
     analysis.set_sigma_cut(sigma_cut);
     analysis.set_verbosity(verbosity);
+    analysis.set_dump_pt_min(dump_pt_min);
     analysis.run();
   }
   catch (const std::exception &e)

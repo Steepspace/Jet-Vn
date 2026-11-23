@@ -28,6 +28,8 @@ sample=${8:-}
 # Jet-JES mode: 0 data+MC overlay with flow, 1 p+p MC (Fun4All_PP_JES), 2 Au+Au without flow (HIJING embedded MC
 # or no-flow overlay). input_calo_mbd "none": no Calo-MBD cut (p+p, HIJING)
 mode=${9:-0}
+# failed-match dump: fiducial truth jets with pT >= dump_pt_min [GeV] that fail the matching (<= 0: off)
+dump_pt_min=${10:--1}
 
 # no Calo-MBD file: MC without a data run (the sample is the output directory, no run number needed)
 no_calo_mbd=0
@@ -100,7 +102,7 @@ out_dir="${sample:-$run}"
 mkdir -p "$out_dir"
 
 echo "Starting Jet-JES binary at $(date) on $(hostname)"
-$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0 "$mode"
+$jetJES_bin "$input_file" "$input_calo_mbd_file" 0 "$out_dir" "$lead_truth_pt_min" "$lead_truth_pt_max" "$sigma_cut" 0 "$mode" "$dump_pt_min"
 
 bin_exit=$?
 if [ $bin_exit -ne 0 ]; then

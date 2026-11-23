@@ -135,6 +135,7 @@ def run_jet_jobs(args, version):
             f"{sample}: [{lo}, {'inf' if hi < 0 else hi})" for sample, (lo, hi) in windows.items()) + " GeV"
         if not mc_only:
             init_log['Sigma Cut'] = args.sigma_cut
+        init_log['Failed-Match Dump'] = f"truth pT >= {args.dump_pt_min} GeV" if args.dump_pt_min > 0 else "off"
 
     manager.log_initialization(init_log)
 
@@ -253,7 +254,7 @@ def run_jet_jobs(args, version):
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output {args.jet_pt_raw_min} {args.sigma_cut} {args.pt_sub_min_r02} {args.pt_sub_min_r03} {timing_corr}"
         queue_arg = "input_tree_list,input_calo_mbd from jobs.list"
     elif version == "jetJES":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {jes_mode(args)}"
+        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {jes_mode(args)} {args.dump_pt_min}"
         queue_arg = "input_tree_list,input_calo_mbd,lead_truth_pt_min,lead_truth_pt_max,sample from jobs.list"
     else:
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output"
@@ -347,4 +348,5 @@ def setup_jetAna_subparsers(subparsers):
     hijing_windows_help = ", ".join(f"{s}={lo:g},{hi:g}" for s, (lo, hi) in HIJING_WINDOWS.items())
     jetJES.add_argument('--window', type=parse_window, action='append', metavar='SAMPLE=MIN,MAX', help=f'Leading truth R=0.4 jet pT window [MIN, MAX) GeV of a pT-hat sample (MAX < 0: no upper edge), overrides or adds to the defaults: {windows_help} (--hijing: {hijing_windows_help}, provisional). Repeatable.')
     jetJES.add_argument('--sigma-cut', type=float, default=3.5, help='Calo-MBD consistency cut in sigma. Default: 3.5')
+    jetJES.add_argument('--dump-pt-min', type=float, default=-1, help='Write every fiducial truth jet with pT >= this [GeV] that fails the matching, with the event\'s jets and vertices (z_MBD, z_truth if in the trees), to <sample>/Jet-JES_<input>_failed_matches.txt. Default: -1 (off).')
     jetJES.set_defaults(func=jetJES_jobs)
