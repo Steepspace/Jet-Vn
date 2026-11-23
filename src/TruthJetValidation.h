@@ -13,7 +13,7 @@ class PHCompositeNode;
 class JetContainer;
 class TH1;
 
-// Stores truth jets (data+MC overlay) in the TreeFiller tree.
+// Stores truth jets (data+MC overlay) in the TreeFiller tree, and optionally the true collision vertex z.
 // Truth <-> reco matching is left to the analysis.
 // Also stores the generator bookkeeping (PHGenIntegral) in the histogram h_gen_integral (hadd-able)
 // and, when the MC inputs live under their own top node, checks that every MC event is the one
@@ -54,12 +54,16 @@ class TruthJetValidation : public SubsysReco
   void set_do_max_pt_r04(bool b = true) { m_do_max_pt_r04 = b; }
   void set_jet_pt_min(double pt_min) { m_jet_pt_min_cut = pt_min; }
   void set_jet_eta_max(double eta_max) { m_jet_eta_max_cut = eta_max; }
+  // true collision vertex z [cm] (PHHepMCGenEventMap, e.g. from the G4Hits DST) in the branch zvtx_truth.
+  // The run aborts if the node is missing.
+  void set_do_truth_vertex(bool b = true) { m_do_truth_vertex = b; }
 
   void set_jet_radii(const std::vector<float>& radii);
 
   bool get_do_r02() const { return m_do_r02; }
   bool get_do_r03() const { return m_do_r03; }
   bool get_do_max_pt_r04() const { return m_do_max_pt_r04; }
+  bool get_do_truth_vertex() const { return m_do_truth_vertex; }
   double get_jet_pt_min() const { return m_jet_pt_min_cut; }
   double get_jet_eta_max() const { return m_jet_eta_max_cut; }
 
@@ -87,6 +91,7 @@ class TruthJetValidation : public SubsysReco
   JetData m_truth_r02;
   JetData m_truth_r03;
   double m_max_pt_truth_r04{0};
+  double m_zvtx_truth{0};  // cm
 
   TH1 *m_h_gen_integral{nullptr};
   double m_lumi_file{0};        // pb^-1
@@ -107,4 +112,5 @@ class TruthJetValidation : public SubsysReco
   bool m_do_r02{true};
   bool m_do_r03{true};
   bool m_do_max_pt_r04{true};
+  bool m_do_truth_vertex{false};
 };

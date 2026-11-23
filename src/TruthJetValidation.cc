@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <numbers>
 
 // -- event
@@ -24,6 +25,8 @@
 
 // -- generator
 #include <phhepmc/PHGenIntegral.h>
+#include <phhepmc/PHHepMCGenEvent.h>
+#include <phhepmc/PHHepMCGenEventMap.h>
 
 #include <treefiller/TreeFiller.h>
 
@@ -86,6 +89,10 @@ int TruthJetValidation::Init([[maybe_unused]] PHCompositeNode *topNode)
   if (m_do_max_pt_r04)
   {
     tree->Branch("max_pt_truth_r04", &m_max_pt_truth_r04);
+  }
+  if (m_do_truth_vertex)
+  {
+    tree->Branch("zvtx_truth", &m_zvtx_truth);
   }
 
   // generator bookkeeping, saved with the other histograms (hist file)
@@ -249,12 +256,34 @@ int TruthJetValidation::process_event(PHCompositeNode *topNode)
     }
   }
 
+  // collision vertex of the signal event (embedding ID 0, else the first event of the map)
+  if (m_do_truth_vertex)
+  {
+    PHHepMCGenEventMap *genevents = findNode::getClass<PHHepMCGenEventMap>(topNode, "PHHepMCGenEventMap");
+    if (!genevents || genevents->empty())
+    {
+      std::cout << "Aborting Run: PHHepMCGenEventMap null or empty (truth vertex requested)" << std::endl;
+      return Fun4AllReturnCodes::ABORTRUN;
+    }
+    const PHHepMCGenEvent *genevent = genevents->get(0);
+    if (!genevent)
+    {
+      genevent = genevents->begin()->second;
+    }
+    m_zvtx_truth = genevent->get_collision_vertex().z();
+  }
+
   if (Verbosity() > 0)
   {
     std::cout << "TruthJetValidation::process_event - [Event " << event_id << "]"
               << " | R=0.2 jets: " << m_truth_r02.pt.size() << " (max pT = " << m_truth_r02.max_pt << ")"
               << " | R=0.3 jets: " << m_truth_r03.pt.size() << " (max pT = " << m_truth_r03.max_pt << ")"
-              << " | max pT R=0.4: " << m_max_pt_truth_r04 << std::endl;
+              << " | max pT R=0.4: " << m_max_pt_truth_r04;
+    if (m_do_truth_vertex)
+    {
+      std::cout << " | z truth: " << m_zvtx_truth << " cm";
+    }
+    std::cout << std::endl;
   }
 
   // TTree filling is managed by TreeFiller
@@ -268,6 +297,7 @@ int TruthJetValidation::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   m_truth_r02.clear();
   m_truth_r03.clear();
   m_max_pt_truth_r04 = 0;
+  m_zvtx_truth = std::numeric_limits<double>::quiet_NaN();
 
   return Fun4AllReturnCodes::EVENT_OK;
 }
