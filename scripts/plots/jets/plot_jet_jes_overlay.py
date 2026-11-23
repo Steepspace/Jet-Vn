@@ -2,15 +2,14 @@
 """
 Jet energy scale (JES) and resolution (JER) from the Jet-JES outputs, differential in the 4 eta bins of the legacy
 eta-dependent JES, to compare mid-rapidity with forward jets. --mode picks the sample:
-  overlay:        data+MC overlay made with flow (iter / iternf)
-  overlay-noflow: data+MC overlay made with --do-flow 0 (iternf)
-  pp:             pure PYTHIA8 p+p MC (unsub / iternf); --pp is a shortcut
-  hijing:         PYTHIA8 embedded in HIJING (iternf)
+  overlay: data+MC overlay (embed_reboot, run 68145, Jet10 / Jet20) made with --do-flow 0 (iternf); the default
+  pp:      pure PYTHIA8 p+p MC (unsub / iternf); --pp is a shortcut
+  hijing:  PYTHIA8 embedded in HIJING (iternf)
 
 Each pT-hat sample (JetNN) is filled unweighted within its leading truth R=0.4 jet pT window by Jet-JES.
 Here they are weighted and summed, with --weights (from h_gen_integral of the Fun4All hist files in --gen-list):
   wiki: sigma_wiki / NEvents_job, the recommended sample cross sections (default for all modes, as used by others)
-  lumi: 1 / IntegratedLumi_job (agrees with wiki to < 1% for these samples)
+  lumi: 1 / IntegratedLumi_job (agrees with wiki to < 1% for these samples; overlay Jet10 has no wiki entry of its own, see XSEC_WIKI_OVERLAY)
 NEvents_job counts every analyzed event, before the event selection, so both include the selection efficiency of each sample.
 A per-sample normalization factor (mode "norm", --norm SAMPLE=F) multiplies the weight: HIJING Jet10 is scaled by 0.780,
 the measured Jet20 / Jet10 ratio of the wiki-weighted leading truth R=0.4 jet spectra where both samples are complete (21-31 GeV)
@@ -22,7 +21,7 @@ JES = Gaussian mean, JER = sigma / mean. Both the raw pT and the stored pt_calib
 Below --pt-trust-min the response is truncated by the tree cut (reco pt_calib >= 10 GeV).
 
 The eta plots compare the shape of dN/deta of all truth jets with all reco jets with E > 0 (raw and calibrated pT) above a pT cut,
-in the selected events (overlay: |calo v2| < 0.48, the Jet-Anav3 v3 selection, as in h2JetEtav3),
+in the selected events,
 to see whether the step at the legacy JES eta-bin edge seen in data shows up in the calibrated MC jets but not in truth.
 """
 
@@ -42,7 +41,7 @@ import matplotlib.pyplot as plt
 import mplhep as hep
 from scipy.optimize import curve_fit, OptimizeWarning
 
-from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_panel, COMMON_TEXT_INFO
+from plot_jet_bkgsub_compare import save_fig, calc_ratio_errors, setup_ratio_panel
 from plot_jet_noflow_compare import STYLES_WITH_UNSUB as METHODS, add_header
 from plot_jet_jes_z0_compare import legacy_eta_edges, eta_regions, ETA_BIN_COLORS, REGION_COLORS
 
@@ -67,48 +66,35 @@ MIN_N_EFF = 50  # minimum effective entries for a fit
 XSEC_WIKI_RUN28 = {"Jet12": 1.4903e+06, "Jet20": 6.2623e+04, "Jet30": 2.5298e+03, "Jet40": 1.3553e+02}
 # run 31: the same factors for the pure PYTHIA8 (-nop) and the HIJING embedded (-embed -nobkg) samples
 XSEC_WIKI_RUN31 = {"Jet10": 3.997e+06, "Jet20": 6.218e+04, "Jet30": 2.502e+03}
+# overlay (embed_reboot, run 68145): Jet20 is the run-28 sample; the run-28 table has no 10 GeV sample, so Jet10 takes the run-31 Jet10 value
+# (min-bias config, where the overlay one is HardQCD 10GeV_JS), which is 0.8% below the overlay's own PHGenIntegral cross section (4.031e6 pb)
+XSEC_WIKI_OVERLAY = {"Jet10": XSEC_WIKI_RUN31["Jet10"], "Jet20": XSEC_WIKI_RUN28["Jet20"]}
 
 # Selection of the trees made with do_flow = 0 (no flow failure / calo v2 cut)
 NOFLOW_OVERLAY_TEXT = r"$|z| < 10$ cm & MB" "\n" "Good Calo-Cent\n" r"Centrality: 0–60%"
 HIJING_TEXT = r"$|z| < 10$ cm & MB (sim)" "\n" r"Centrality: 0–60%"
 
 # Per-mode settings, passed to the plot functions (and the worker processes) as `mode`.
-# cent_classes: Jet-JES centrality classes, summed into cent_all; selection: Jet-JES event selection (overlay: the Jet-Anav3 v3 one)
+# cent_classes: Jet-JES centrality classes, summed into cent_all; selection: Jet-JES event selection
 # norm: per-sample normalization factors multiplying the weights (overridden by --norm)
 MODES = {
     "overlay": {
         "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
         "cent_all": "0_60",
         "cent_label": "0–60%",
-        "methods": ["iter", "iternf"],
-        "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
-        "selection_text": COMMON_TEXT_INFO + "\n" r"$|v_{2}^{\mathrm{calo}}| < 0.48$",
+        "methods": ["iternf"],
+        "sample_text": "Data + PYTHIA8 Overlay (Jet10–20)",
+        "selection_text": NOFLOW_OVERLAY_TEXT,
         "all_events_text": "All events in the trees (before Jet-JES selection)",
         "truth_headroom": 1e6,  # y range above the truth-jet spectra, for the legend and text
         "weights": "wiki",
-        "xsec_wiki": XSEC_WIKI_RUN28,
+        "xsec_wiki": XSEC_WIKI_OVERLAY,
         "norm": {},
-        "run": 68144,
-        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/10-23-26-v2/test.list",
-        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/10-21-26-overlay-combined/test.list",
-        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay",
-    },
-    "overlay-noflow": {
-        "cent_classes": [(0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60)],
-        "cent_all": "0_60",
-        "cent_label": "0–60%",
-        "methods": ["iternf"],
-        "sample_text": "Data + PYTHIA8 Overlay (Jet12–40)",
-        "selection_text": NOFLOW_OVERLAY_TEXT,
-        "all_events_text": "All events in the trees (before Jet-JES selection)",
-        "truth_headroom": 1e6,
-        "weights": "wiki",
-        "xsec_wiki": XSEC_WIKI_RUN28,
-        "norm": {},
-        "run": 68144,
-        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-20-26-overlay-noflow/test.list",
-        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/11-19-26-overlay/test.list",
-        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay_noflow",
+        "run": 68145,
+        # Jet-JES windows Jet10 [10, 25), Jet20 [25, inf); trees from data segments 0-28 (EMCal sector lost from segment 28)
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-22-26-overlay-noflow/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/11-22-26-overlay-68145-seg0-28/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay_68145",
     },
     "pp": {
         "cent_classes": [(0, 100)],
@@ -880,7 +866,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="JES / JER from the Jet-JES outputs (data+MC overlay, p+p MC or HIJING embedded MC), mid-rapidity vs forward eta.")
     parser.add_argument("--mode", choices=list(MODES), default="overlay",
-                        help="Sample: overlay (with flow, iter / iternf), overlay-noflow (--do-flow 0, iternf), pp (unsub / iternf), hijing (iternf). Default: overlay")
+                        help="Sample: overlay (run 68145 Jet10 / Jet20, --do-flow 0, iternf), pp (unsub / iternf), hijing (iternf). Default: overlay")
     parser.add_argument("--pp", action="store_true", help="Shortcut for --mode pp")
     parser.add_argument("-i", "--input-list", type=Path, help="List of merged Jet-JES ROOT files, one per sample (JetNN or jetNN in the path)"
                         f" (default {per_mode('input_list')})")

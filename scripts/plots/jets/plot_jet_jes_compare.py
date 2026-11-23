@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Compares the jet energy scale (JES) and resolution (JER) of three samples, one set of plots per jet radius:
-  overlay: data + PYTHIA8 overlay made with --do-flow 0 (run 68144, 0-60%)
+  overlay: data + PYTHIA8 overlay made with --do-flow 0 (run 68145, Jet10 / Jet20, 0-60%)
   hijing:  PYTHIA8 embedded in HIJING (run 31, 0-60%)
   pp:      pure PYTHIA8 p+p MC (run 28)
 All with the iterative no-flow subtraction (iternf; --ue).
 
-It reads the jes_table.csv written by plot_jet_jes_overlay.py for each sample (--mode overlay-noflow / hijing / pp), so it
+It reads the jes_table.csv written by plot_jet_jes_overlay.py for each sample (--mode overlay / hijing / pp), so it
 uses the same fits: JES = Gaussian mean of pT_reco / pT_truth, JER = sigma / mean, in truth-pT bins, raw pT and the stored
 pt_calib (eta-binned legacy JES), mid-rapidity and forward (legacy JES eta bins in truth eta). The ratio panels are each
 sample over the reference sample (--ref, default the p+p MC).
@@ -16,6 +16,8 @@ Per R (in <output>/r02 and <output>/r03):
   jes_<calib>_fwd_over_mid.png: forward / mid JES of each sample, with the ratio to the reference
   jes_<calib>_<region>_cent.png: overlay vs HIJING in each centrality class, with p+p (all events) in every panel
 and a summary of the mean JES over --avg-range (inverse-variance weighted), printed and saved to jes_compare_summary.csv.
+The ratios to the reference in the summary (mid_over_ref, fwd_over_ref) and fwd/mid are means of the per-bin ratios: comparing
+two means instead is biased when the samples' errors spread differently over pT (the response rises with pT).
 """
 
 import argparse
@@ -36,7 +38,7 @@ from plot_jet_jes_overlay import (MODES, RADII, CALIBS, REGIONS, PT_BINS, JES_YL
 
 # Samples: the plot_jet_jes_overlay.py mode whose output they are, and their style
 SAMPLES = {
-    "overlay": {"mode": "overlay-noflow", "label": "Data + PYTHIA8 overlay", "color": "black", "marker": "o"},
+    "overlay": {"mode": "overlay", "label": "Data + PYTHIA8 overlay", "color": "black", "marker": "o"},
     "hijing": {"mode": "hijing", "label": "PYTHIA8 + HIJING", "color": "#d95f02", "marker": "^"},
     "pp": {"mode": "pp", "label": "PYTHIA8 p+p", "color": "#1f77b4", "marker": "s"},
 }
@@ -237,16 +239,21 @@ def main():
                 row = {"R": r_jet, "ue": args.ue, "calib": calib, "sample": s, "cent": cents[s]}
                 for name, pts in (("mid", region_pts["mid"][s]), ("fwd", region_pts["fwd"][s]), ("fwd_over_mid", fwd_mid[s])):
                     row[name], row[f"{name}_err"] = weighted_mean(pts, lo, hi)
+                # ratio to the reference: mean of the per-bin ratios (the ratio panels), not the ratio of the two means, which
+                # depends on how each sample's errors spread over pT (the response rises with pT)
+                for region in REGIONS:
+                    if s == args.ref:
+                        row[f"{region}_over_ref"], row[f"{region}_over_ref_err"] = 1.0, 0.0
+                    else:
+                        row[f"{region}_over_ref"], row[f"{region}_over_ref_err"] = weighted_mean(
+                            over(region_pts[region][s], region_pts[region][args.ref]), lo, hi)
                 summary.append(row)
 
-    by = {(r["R"], r["calib"], r["sample"]): r for r in summary}
-    print(f"\nMean JES ({args.ue}, truth pT {lo:g}-{hi:g} GeV, inverse-variance weighted); ratios to {ref_label}")
-    print(f"{'R':<5}{'calib':<7}{'sample':<9}{'mid':>18}{'fwd':>18}{'fwd/mid':>18}{'mid/ref':>10}{'fwd/ref':>10}")
+    print(f"\nMean JES ({args.ue}, truth pT {lo:g}-{hi:g} GeV, inverse-variance weighted); ratios to {ref_label} (mean of the per-bin ratios)")
+    print(f"{'R':<5}{'calib':<7}{'sample':<9}" + "".join(f"{k:>18}" for k in ("mid", "fwd", "fwd/mid", "mid/ref", "fwd/ref")))
     for r in summary:
-        ref = by[(r["R"], r["calib"], args.ref)]
-        cells = [f"{r[k]:.4f} +- {r[f'{k}_err']:.4f}" for k in ("mid", "fwd", "fwd_over_mid")]
-        print(f"{r['R']:<5g}{r['calib']:<7}{r['sample']:<9}" + "".join(f"{c:>18}" for c in cells)
-              + f"{r['mid'] / ref['mid']:>10.3f}{r['fwd'] / ref['fwd']:>10.3f}")
+        cells = [f"{r[k]:.4f} +- {r[f'{k}_err']:.4f}" for k in ("mid", "fwd", "fwd_over_mid", "mid_over_ref", "fwd_over_ref")]
+        print(f"{r['R']:<5g}{r['calib']:<7}{r['sample']:<9}" + "".join(f"{c:>18}" for c in cells))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     table_path = args.output_dir / "jes_compare_summary.csv"
     with table_path.open("w", newline="") as f:
