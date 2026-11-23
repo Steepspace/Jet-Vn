@@ -42,6 +42,9 @@ R__LOAD_LIBRARY(libTreeFiller.so)
 // The calibrated towers are rebuilt from the raw towers with Process_Calo_Calib (the DST TOWERINFO_CALIB_* are not read).
 // The DSTs already hold the MBD and the MBD vertex, so no MBD/vertex reco is run.
 // The only event selection is a valid MBD vertex with |z| < 10 cm (no trigger, minimum bias or centrality).
+// The truth vertex is used only by the offline matching checks (Jet-JES), not by the reconstruction.
+// flist_g4hits (optional, "" or "none": not used): the aligned G4Hits DSTs, read only for the true collision vertex
+// (PHHepMCGenEventMap, every other branch is switched off), stored as zvtx_truth.
 void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Jet20-0000000028-000000.root",
                     const std::string &flist_global = "DST_GLOBAL_pythia8_Jet20-0000000028-000000.root",
                     const std::string &flist_truth_jet = "DST_TRUTH_JET_pythia8_Jet20-0000000028-000000.root",
@@ -51,8 +54,11 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
                     int nSkip = 0,
                     const std::string &dbtag = "MDC2",
                     float jet_pt_min = 10.0F,
-                    float truth_jet_pt_min = 5.0F)
+                    float truth_jet_pt_min = 5.0F,
+                    const std::string &flist_g4hits = "")
 {
+  const bool do_truth_vertex = !flist_g4hits.empty() && flist_g4hits != "none";
+
   // Extract runnumber from first file within list
   bool isFileList = !flist_calo.ends_with(".root");
   std::string first_file = flist_calo;
@@ -73,6 +79,7 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   std::cout << "input calo: " << flist_calo << std::endl;
   std::cout << "input global: " << flist_global << std::endl;
   std::cout << "input truth jet: " << flist_truth_jet << std::endl;
+  std::cout << "input g4hits (truth vertex): " << (do_truth_vertex ? flist_g4hits : "not used") << std::endl;
   std::cout << "Run: " << runnumber << std::endl;
   std::cout << "output: " << output << std::endl;
   std::cout << "output tree: " << output_tree << std::endl;
@@ -110,6 +117,7 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   TruthJetValidation* truth_jet_validation = new TruthJetValidation();
   truth_jet_validation->set_jet_radii({0.2F, 0.3F});
   truth_jet_validation->set_jet_pt_min(truth_jet_pt_min);
+  truth_jet_validation->set_do_truth_vertex(do_truth_vertex);
   truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(truth_jet_validation);
 
@@ -160,10 +168,20 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   }
   in_calo->BranchSelect("DST#CEMC#CLUSTERINFO_CEMC", 0);
 
-  const std::vector<std::pair<Fun4AllInputManager*, std::string>> input_files = {
+  std::vector<std::pair<Fun4AllInputManager*, std::string>> input_files = {
       {in_calo, flist_calo},
       {new Fun4AllDstInputManager("global"), flist_global},
       {new Fun4AllDstInputManager("truthjet"), flist_truth_jet}};
+
+  // G4Hits: only the HepMC record (true collision vertex). The selections are applied in name order, so "*" (off)
+  // comes first; the sync branches are switched back on by the input manager.
+  if (do_truth_vertex)
+  {
+    Fun4AllDstInputManager* in_g4hits = new Fun4AllDstInputManager("g4hits");
+    in_g4hits->BranchSelect("*", 0);
+    in_g4hits->BranchSelect("DST#PHHepMCGenEventMap", 1);
+    input_files.emplace_back(in_g4hits, flist_g4hits);
+  }
 
   for (const auto& [in, filepath] : input_files)
   {

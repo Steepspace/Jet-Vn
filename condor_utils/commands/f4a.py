@@ -563,13 +563,17 @@ def create_f4a_mc_jobs(args):
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
 MC_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', 'dst_truth_jet.list')
+# optional: G4Hits, read by Fun4All_PP_JES only for the true collision vertex (zvtx_truth)
+MC_JES_G4HITS_LIST = 'g4hits.list'
 
-def create_mc_jes_jobs(args, job_name):
+def create_mc_jes_jobs(args, job_name, use_g4hits=False):
     """
     MC JES trees (Fun4All_PP_JES, Fun4All_HIJING_JES): -i lists the pT-hat samples, one per line, either as a sample
     list file (e.g. files/MC/run-28/jet12.list, holding the paths of its dst_calo_cluster/dst_global/dst_truth_jet
     lists; the sample is named after the file) or as a sample directory holding those three lists.
     The three lists of a sample are aligned by segment. Each job gets dst_per_job segments of all three.
+    use_g4hits (p+p): a sample's g4hits.list, if it has one, is chunked the same way and passed to the macro for the
+    true vertex; samples without one get "none" (no zvtx_truth branch).
     The Calo_Calib and HIJetReco macros are copied next to the Fun4All macro, so its #include picks up the local
     versions and not the release copies in rootmacros (which is on ROOT_INCLUDE_PATH).
     """
@@ -623,37 +627,47 @@ def create_mc_jes_jobs(args, job_name):
             if missing:
                 manager.logger.warning(f"Skipping {sample}: missing {', '.join(missing)}")
                 continue
-            lists = [read_lines(list_paths[name]) for name in MC_JES_LISTS]
+
+            names = list(MC_JES_LISTS)
+            has_g4hits = use_g4hits and MC_JES_G4HITS_LIST in list_paths and list_paths[MC_JES_G4HITS_LIST].is_file()
+            if has_g4hits:
+                names.append(MC_JES_G4HITS_LIST)
+            elif use_g4hits:
+                manager.logger.warning(f"Sample {sample}: no {MC_JES_G4HITS_LIST}, the trees will have no truth vertex")
+            lists = [read_lines(list_paths[name]) for name in names]
 
             # line i of each list must be the same segment (-<run>-<segment>.root)
             suffixes = [[Path(f).name.split('-', 1)[-1] for f in files] for files in lists]
-            if not (suffixes[0] == suffixes[1] == suffixes[2]):
-                manager.logger.warning(f"Skipping {sample}: the {', '.join(MC_JES_LISTS)} are not segment aligned")
+            if any(s != suffixes[0] for s in suffixes[1:]):
+                manager.logger.warning(f"Skipping {sample}: the {', '.join(names)} are not segment aligned")
                 continue
 
             chunks = list(zip(*(chunk_list(files, dst_per_job) for files in lists)))
             for ichunk, chunk in enumerate(chunks):
                 chunk_paths = []
-                for name, files in zip(MC_JES_LISTS, chunk):
+                for name, files in zip(names, chunk):
                     chunk_path = files_dir / f"{sample}-{ichunk:05d}-{name}"
                     chunk_path.write_text('\n'.join(files) + '\n', encoding='utf-8')
                     chunk_paths.append(str(chunk_path))
+                if not has_g4hits:
+                    chunk_paths.append("none")
                 file_out.write(f"{','.join(chunk_paths)},{sample}\n")
 
-            manager.logger.info(f"Sample {sample}: {len(lists[0])} segments, {len(chunks)} jobs")
+            manager.logger.info(f"Sample {sample}: {len(lists[0])} segments, {len(chunks)} jobs"
+                                f"{', with G4Hits (truth vertex)' if has_g4hits else ''}")
             total_jobs += len(chunks)
 
     manager.logger.info(f"Total jobs prepared: {total_jobs}")
 
-    arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(list_calo) $(list_global) $(list_truth) $(sample) "
+    arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(list_calo) $(list_global) $(list_truth) $(list_g4hits) $(sample) "
                  f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} "
                  f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output")
     manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="list_calo,list_global,list_truth,sample from jobs.list")
+    manager.finalize_submission(queue_arg="list_calo,list_global,list_truth,list_g4hits,sample from jobs.list")
 
 def create_f4a_pp_jes_jobs(args):
-    """p+p MC JES (Fun4All_PP_JES), e.g. files/MC/run-28/jetX.list."""
-    create_mc_jes_jobs(args, job_name="F4A PP JES")
+    """p+p MC JES (Fun4All_PP_JES), e.g. files/MC/run-28/jetX.list (with g4hits.list: truth vertex)."""
+    create_mc_jes_jobs(args, job_name="F4A PP JES", use_g4hits=True)
 
 def create_f4a_hijing_jes_jobs(args):
     """PYTHIA8 embedded in HIJING MC JES (Fun4All_HIJING_JES), e.g. files/MC/run-31/jetX.list."""
