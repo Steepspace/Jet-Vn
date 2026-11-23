@@ -301,8 +301,21 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(evtSkip);
 
+  // Calibrate Towers
+  CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
+  CaloCalib::neg_energy_threshold = neg_energy_threshold;
+  CaloCalib::cemc_ZScrosscalibT0_url = zs_urls["CEMC"];
+  CaloCalib::hcalin_ZScrosscalibT0_url = zs_urls["HCALIN"];
+  CaloCalib::hcalout_ZScrosscalibT0_url = zs_urls["HCALOUT"];
+  Process_Calo_Calib();
+
   // Truth Jets (overlay only), on the MC top node: checks that each MC event matches the data
-  // event and counts the analyzed events for the luminosity, so it runs before any event selection
+  // event and counts the analyzed events for the luminosity. It runs after Process_Calo_Calib, so
+  // the count excludes the events CaloStatusSkimmer drops (data events with missing calorimeter
+  // packets, e.g. an EMCal sector lost from segment 28 of run 68145): those aborts depend only on
+  // the data, so the luminosity is that of the events the rest of the chain can analyze. It runs
+  // before the event selection (EventQA). Alignment stays safe: a mismatch on a skimmed event is
+  // caught on the next event, at the cost of that next data event.
   if (is_overlay)
   {
     TruthJetValidation* truth_jet_validation = new TruthJetValidation();
@@ -314,14 +327,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
     se->registerSubsystem(truth_jet_validation, "TOPMC");
   }
-
-  // Calibrate Towers
-  CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
-  CaloCalib::neg_energy_threshold = neg_energy_threshold;
-  CaloCalib::cemc_ZScrosscalibT0_url = zs_urls["CEMC"];
-  CaloCalib::hcalin_ZScrosscalibT0_url = zs_urls["HCALIN"];
-  CaloCalib::hcalout_ZScrosscalibT0_url = zs_urls["HCALOUT"];
-  Process_Calo_Calib();
 
   // MBD Reconstruction
   MbdReco* mbdreco = new MbdReco();
