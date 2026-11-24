@@ -48,7 +48,10 @@
 //  NOFLOW  (2): Au+Au trees made without flow (do_flow = 0): HIJING embedded MC (Fun4All_HIJING_JES) or data+MC
 //               overlay; iterative (no flow) jets only; centrality selection, Calo-MBD selection only if a file
 //               is given (not "none").
-// Trees made with do_flow = 0 store the no-flow iterative jets under "iter": the PP and NOFLOW modes read those
+//  MB      (3): minimum-bias HIJING trees without truth jets (Fun4All_HIJING_JES with flist_truth_jet "none"): the
+//               NOFLOW selection, but no truth branches, no window and no matching. Only the event hists, hCentrality,
+//               h2RecoEta and the OHCal fraction templates (match state "incl") are filled.
+// Trees made with do_flow = 0 store the no-flow iterative jets under "iter": the PP, NOFLOW and MB modes read those
 // branches and name their histograms "iternf", as the OVERLAY mode does for the no-flow jets.
 // Matching checks:
 //  - trees with the true vertex (zvtx_truth, Fun4All_PP_JES with G4Hits): truth and matched jets vs
@@ -59,7 +62,8 @@
 //  h2OHCalFracPt_<r>_<ue>_<all|lead>_<matched|unmatched>_cent_<lo>_<hi>: x vs reco raw pT of the reco jets with E > 0,
 //  |eta| < eta_max and x finite (all) and of the highest raw pT one (lead), split by whether the jet is matched to a truth
 //  jet. That matching is separate from the JES one: one to one as well (truth jets by decreasing pT, closest free reco jet
-//  within Delta R < 0.75 R), but over all stored truth jets, not only the fiducial ones.
+//  within Delta R < 0.75 R), but over all stored truth jets, not only the fiducial ones. MB mode: match state "incl"
+//  (no truth).
 class JetJES
 {
  public:
@@ -67,7 +71,8 @@ class JetJES
   {
     OVERLAY = 0,
     PP = 1,
-    NOFLOW = 2
+    NOFLOW = 2,
+    MB = 3
   };
 
   JetJES(std::string input_file, std::string calo_mbd_file, long long events, std::string output_dir, Mode mode = Mode::OVERLAY)
@@ -77,7 +82,9 @@ class JetJES
     , m_output_dir(std::move(output_dir))
     , m_mode(mode)
     , m_is_pp(mode == Mode::PP)
+    , m_has_truth(mode != Mode::MB)
     , m_ue_list(ue_list(mode))
+    , m_frac_match(m_has_truth ? std::vector<std::string_view>{"matched", "unmatched"} : std::vector<std::string_view>{"incl"})
   {
   }
 
@@ -91,16 +98,23 @@ class JetJES
       return "p+p MC";
     case Mode::NOFLOW:
       return "Au+Au without flow (HIJING embedded MC or no-flow data+MC overlay)";
+    case Mode::MB:
+      return "minimum-bias HIJING without truth (OHCal fraction templates only)";
     case Mode::OVERLAY:
     default:
       return "data+MC overlay";
     }
   }
 
+  // Calo-MBD cut: OVERLAY always; NOFLOW and MB only with a file; PP never
+  static bool uses_calo_mbd(Mode mode, const std::string &calo_mbd_file)
+  {
+    return mode == Mode::OVERLAY || ((mode == Mode::NOFLOW || mode == Mode::MB) && has_calo_mbd_file(calo_mbd_file));
+  }
+
   void run()
   {
-    // OVERLAY: Calo-MBD cut required; NOFLOW: only with a file; PP: never
-    if (m_mode == Mode::OVERLAY || (m_mode == Mode::NOFLOW && has_calo_mbd_file(m_calo_mbd_file)))
+    if (uses_calo_mbd(m_mode, m_calo_mbd_file))
     {
       setup_calo_mbd_cut();
     }
@@ -170,6 +184,7 @@ class JetJES
     case Mode::PP:
       return {{"unsub", "unsub"}, {"iternf", "iter"}};
     case Mode::NOFLOW:
+    case Mode::MB:
       return {{"iternf", "iter"}};
     case Mode::OVERLAY:
     default:
@@ -186,9 +201,10 @@ class JetJES
   template <typename T>
   using EtaCentArray = std::array<std::array<T *, m_num_cent_bins>, m_num_eta_bins>;
 
-  // OHCal fraction templates: jet sets (every jet, leading jet) x truth match states, as in the data C4 (Jet-Dijet.C)
+  // OHCal fraction templates: jet sets (every jet, leading jet) x truth match states (m_frac_match: matched /
+  // unmatched, or incl without truth), as in the data C4 (Jet-Dijet.C)
   static constexpr std::array<std::string_view, 2> m_frac_sets = {"all", "lead"};
-  static constexpr std::array<std::string_view, 2> m_frac_match = {"matched", "unmatched"};
+  static constexpr size_t m_max_frac_match = 2;
   static constexpr int m_bins_frac = 60;
   static constexpr double m_frac_low = -0.25;
   static constexpr double m_frac_high = 1.25;
@@ -198,7 +214,7 @@ class JetJES
   static constexpr double m_frac_pt_high = 300;
 
   // [set][match][cent]
-  using FracArray = std::array<std::array<std::array<TH2 *, m_num_cent_bins>, m_frac_match.size()>, m_frac_sets.size()>;
+  using FracArray = std::array<std::array<std::array<TH2 *, m_num_cent_bins>, m_max_frac_match>, m_frac_sets.size()>;
 
   struct ResponseHistSet
   {
@@ -296,7 +312,11 @@ class JetJES
   std::string m_output_dir;
   Mode m_mode{Mode::OVERLAY};
   bool m_is_pp{false};
+  // truth jets in the trees (every mode but MB)
+  bool m_has_truth{true};
   std::vector<UEConfig> m_ue_list;
+  // OHCal fraction template match states of this mode
+  std::vector<std::string_view> m_frac_match;
   int m_verbosity{0};
 
   double m_lead_truth_pt_min{0}; /*GeV*/
@@ -402,9 +422,12 @@ void JetJES::setup_chain()
   auto &ed = m_event_data;
   set_branch("event", &ed.event);
   set_branch("zvtx", &ed.zvtx);
-  set_branch("max_pt_truth_r04", &ed.max_pt_truth_r04);
+  if (m_has_truth)
+  {
+    set_branch("max_pt_truth_r04", &ed.max_pt_truth_r04);
+  }
   // true vertex: only in trees made with the G4Hits (Fun4All_PP_JES)
-  m_has_truth_vertex = m_chain->GetBranch("zvtx_truth") != nullptr;
+  m_has_truth_vertex = m_has_truth && m_chain->GetBranch("zvtx_truth") != nullptr;
   if (m_has_truth_vertex)
   {
     set_branch("zvtx_truth", &ed.zvtx_truth);
@@ -440,15 +463,23 @@ void JetJES::setup_chain()
     }
   }
   std::cout << std::format("OHCal fraction (ohcal_frac): {}\n", m_has_ohcal_frac ? "found, filling the x templates" : "not in the trees, no x templates");
+  // without truth the x templates are the only output
+  if (!m_has_truth && !m_has_ohcal_frac)
+  {
+    throw std::runtime_error(std::format("MB mode needs the ohcal_frac branches, not in '{}'", m_input_file));
+  }
 
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
     std::string_view r = m_radii[ir].tag;
 
-    JetData &truth = ed.truth[ir];
-    set_branch(std::format("pt_truth_{}", r), &truth.pt);
-    set_branch(std::format("phi_truth_{}", r), &truth.phi);
-    set_branch(std::format("eta_truth_{}", r), &truth.eta);
+    if (m_has_truth)
+    {
+      JetData &truth = ed.truth[ir];
+      set_branch(std::format("pt_truth_{}", r), &truth.pt);
+      set_branch(std::format("phi_truth_{}", r), &truth.phi);
+      set_branch(std::format("eta_truth_{}", r), &truth.eta);
+    }
 
     for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
     {
@@ -566,12 +597,17 @@ void JetJES::init_hists()
     m_event_steps = {EventType::ALL, EventType::TRUTH_WINDOW};
     break;
   case Mode::NOFLOW:
+  case Mode::MB:
     m_event_steps = {EventType::ALL, EventType::CENT};
     if (m_has_calo_mbd_cut)
     {
       m_event_steps.push_back(EventType::CALO_MBD);
     }
-    m_event_steps.push_back(EventType::TRUTH_WINDOW);
+    // MB: no truth, no window
+    if (m_has_truth)
+    {
+      m_event_steps.push_back(EventType::TRUTH_WINDOW);
+    }
     break;
   case Mode::OVERLAY:
   default:
@@ -591,15 +627,18 @@ void JetJES::init_hists()
     m_hists1D["hCentrality"] = std::make_unique<TH1F>("hCentrality", "Selected Events; Centrality [%]; Events", 60, -0.5, 59.5);
   }
 
-  m_hists1D["hMaxPtTruthR04_all"] = std::make_unique<TH1F>("hMaxPtTruthR04_all", "All Events; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
-  m_hists1D["hMaxPtTruthR04"] = std::make_unique<TH1F>("hMaxPtTruthR04", "Event Selection (before window); Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
-  m_hists1D["hMaxPtTruthR04_window"] = std::make_unique<TH1F>("hMaxPtTruthR04_window", "Event Selection + Window; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
-
   m_hists.hEvent = m_hists1D["hEvent"].get();
   m_hists.hCentrality = m_is_pp ? nullptr : m_hists1D["hCentrality"].get();
-  m_hists.hMaxPtTruthR04_all = m_hists1D["hMaxPtTruthR04_all"].get();
-  m_hists.hMaxPtTruthR04 = m_hists1D["hMaxPtTruthR04"].get();
-  m_hists.hMaxPtTruthR04_window = m_hists1D["hMaxPtTruthR04_window"].get();
+
+  if (m_has_truth)
+  {
+    m_hists1D["hMaxPtTruthR04_all"] = std::make_unique<TH1F>("hMaxPtTruthR04_all", "All Events; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
+    m_hists1D["hMaxPtTruthR04"] = std::make_unique<TH1F>("hMaxPtTruthR04", "Event Selection (before window); Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
+    m_hists1D["hMaxPtTruthR04_window"] = std::make_unique<TH1F>("hMaxPtTruthR04_window", "Event Selection + Window; Leading Truth R=0.4 Jet p_{T} [GeV]; Events", bins_lead_pt, lead_pt_low, lead_pt_high);
+    m_hists.hMaxPtTruthR04_all = m_hists1D["hMaxPtTruthR04_all"].get();
+    m_hists.hMaxPtTruthR04 = m_hists1D["hMaxPtTruthR04"].get();
+    m_hists.hMaxPtTruthR04_window = m_hists1D["hMaxPtTruthR04_window"].get();
+  }
 
   if (m_has_truth_vertex)
   {
@@ -614,9 +653,12 @@ void JetJES::init_hists()
     const RadiusConfig &rc = m_radii[ir];
     std::string_view r = rc.tag;
 
-    std::string truth_eta_name = std::format("h2TruthEta_{}", r);
-    m_hists2D[truth_eta_name] = std::make_unique<TH2F>(truth_eta_name.c_str(), std::format("R = {:.1f}, All Truth Jets; p_{{T}}^{{truth}} [GeV]; #eta^{{truth}}", rc.radius).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
-    m_hists.h2TruthEta[ir] = m_hists2D[truth_eta_name].get();
+    if (m_has_truth)
+    {
+      std::string truth_eta_name = std::format("h2TruthEta_{}", r);
+      m_hists2D[truth_eta_name] = std::make_unique<TH2F>(truth_eta_name.c_str(), std::format("R = {:.1f}, All Truth Jets; p_{{T}}^{{truth}} [GeV]; #eta^{{truth}}", rc.radius).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
+      m_hists.h2TruthEta[ir] = m_hists2D[truth_eta_name].get();
+    }
 
     // vs the vertex error, all centralities (one TH2 per eta bin)
     if (m_has_truth_vertex)
@@ -638,7 +680,8 @@ void JetJES::init_hists()
       }
     }
 
-    for (size_t ieta = 0; ieta < m_num_eta_bins; ++ieta)
+    // truth and response hists (not in MB mode)
+    for (size_t ieta = 0; m_has_truth && ieta < m_num_eta_bins; ++ieta)
     {
       for (size_t icent = 0; icent < num_cent_bins(); ++icent)
       {
@@ -677,13 +720,16 @@ void JetJES::init_hists()
       std::string_view ue = m_ue_list[iue].name;
       ResponseHistSet &h = m_hists.resp[iue][ir];
 
-      std::string deta_name = std::format("h2DeltaEta_{}_{}", r, ue);
-      m_hists2D[deta_name] = std::make_unique<TH2F>(deta_name.c_str(), std::format("R = {:.1f}, {}, Matched; p_{{T}}^{{truth}} [GeV]; #eta^{{reco}} - #eta^{{truth}}", rc.radius, ue).c_str(), bins_pt, pt_low, pt_high, bins_deta, deta_low, deta_high);
-      h.h2DeltaEta = m_hists2D[deta_name].get();
+      if (m_has_truth)
+      {
+        std::string deta_name = std::format("h2DeltaEta_{}_{}", r, ue);
+        m_hists2D[deta_name] = std::make_unique<TH2F>(deta_name.c_str(), std::format("R = {:.1f}, {}, Matched; p_{{T}}^{{truth}} [GeV]; #eta^{{reco}} - #eta^{{truth}}", rc.radius, ue).c_str(), bins_pt, pt_low, pt_high, bins_deta, deta_low, deta_high);
+        h.h2DeltaEta = m_hists2D[deta_name].get();
 
-      std::string dr_name = std::format("h2DeltaR_{}_{}", r, ue);
-      m_hists2D[dr_name] = std::make_unique<TH2F>(dr_name.c_str(), std::format("R = {:.1f}, {}, Closest Reco Jet (before #DeltaR cut); p_{{T}}^{{truth}} [GeV]; #DeltaR", rc.radius, ue).c_str(), bins_pt, pt_low, pt_high, bins_dr, dr_low, dr_high);
-      h.h2DeltaR = m_hists2D[dr_name].get();
+        std::string dr_name = std::format("h2DeltaR_{}_{}", r, ue);
+        m_hists2D[dr_name] = std::make_unique<TH2F>(dr_name.c_str(), std::format("R = {:.1f}, {}, Closest Reco Jet (before #DeltaR cut); p_{{T}}^{{truth}} [GeV]; #DeltaR", rc.radius, ue).c_str(), bins_pt, pt_low, pt_high, bins_dr, dr_low, dr_high);
+        h.h2DeltaR = m_hists2D[dr_name].get();
+      }
 
       for (const char *calib : {"raw", "calib"})
       {
@@ -836,6 +882,30 @@ void JetJES::process_jets(size_t icent)
   {
     const RadiusConfig &rc = m_radii[ir];
     const JetData &truth = ed.truth[ir];
+
+    // MB: no truth, only the reco jets (as h2JetEta in Jet-Anav3) and the x templates
+    if (!m_has_truth)
+    {
+      for (size_t iue = 0; iue < m_ue_list.size(); ++iue)
+      {
+        const JetData &reco = ed.reco[iue][ir];
+        const ResponseHistSet &h = m_hists.resp[iue][ir];
+        if (!reco.pt || !reco.pt_calib || !reco.eta || !reco.e)
+        {
+          continue;
+        }
+        for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
+        {
+          if (reco.e->at(jdx) > 0)
+          {
+            h.h2RecoEta_raw->Fill(reco.pt->at(jdx), reco.eta->at(jdx));
+            h.h2RecoEta_calib->Fill(reco.pt_calib->at(jdx), reco.eta->at(jdx));
+          }
+        }
+        fill_ohcal_frac(ir, iue, icent);
+      }
+      continue;
+    }
 
     if (!truth.pt || !truth.phi || !truth.eta)
     {
@@ -990,21 +1060,28 @@ void JetJES::fill_ohcal_frac(size_t ir, size_t iue, size_t icent)
     m_frac_reco_used[jdx] = reco.e->at(jdx) <= 0;
   }
 
-  m_frac_truth_order.resize(truth.pt->size());
-  std::iota(m_frac_truth_order.begin(), m_frac_truth_order.end(), size_t{0});
-  std::ranges::sort(m_frac_truth_order, [&](size_t a, size_t b)
-                    { return truth.pt->at(a) > truth.pt->at(b); });
-
-  const double dr_max = m_match_radius_frac * rc.radius;
-  for (size_t idx : m_frac_truth_order)
+  // MB: no truth, every jet goes to the single match state "incl"
+  if (m_has_truth)
   {
-    auto closest = closest_free_reco(truth.eta->at(idx), truth.phi->at(idx), reco, m_frac_reco_used);
-    if (closest && closest->second < dr_max)
+    m_frac_truth_order.resize(truth.pt->size());
+    std::iota(m_frac_truth_order.begin(), m_frac_truth_order.end(), size_t{0});
+    std::ranges::sort(m_frac_truth_order, [&](size_t a, size_t b)
+                      { return truth.pt->at(a) > truth.pt->at(b); });
+
+    const double dr_max = m_match_radius_frac * rc.radius;
+    for (size_t idx : m_frac_truth_order)
     {
-      m_frac_reco_used[closest->first] = true;
-      m_frac_reco_matched[closest->first] = true;
+      auto closest = closest_free_reco(truth.eta->at(idx), truth.phi->at(idx), reco, m_frac_reco_used);
+      if (closest && closest->second < dr_max)
+      {
+        m_frac_reco_used[closest->first] = true;
+        m_frac_reco_matched[closest->first] = true;
+      }
     }
   }
+  // index into m_frac_match: matched 0 / unmatched 1, or incl 0
+  auto match_index = [&](size_t jdx) -> size_t
+  { return (!m_has_truth || m_frac_reco_matched[jdx]) ? 0 : 1; };
 
   // as Jet-Dijet: the leading jet is picked among the jets passing the cuts, then skipped if its x is not finite
   std::optional<size_t> lead;
@@ -1021,15 +1098,13 @@ void JetJES::fill_ohcal_frac(size_t ir, size_t iue, size_t icent)
     const double x = reco.ohcal_frac->at(jdx);
     if (std::isfinite(x))
     {
-      const size_t im = m_frac_reco_matched[jdx] ? 0 : 1;
-      h[0][im][icent]->Fill(x, reco.pt->at(jdx));
+      h[0][match_index(jdx)][icent]->Fill(x, reco.pt->at(jdx));
     }
   }
 
   if (lead && std::isfinite(reco.ohcal_frac->at(*lead)))
   {
-    const size_t im = m_frac_reco_matched[*lead] ? 0 : 1;
-    h[1][im][icent]->Fill(reco.ohcal_frac->at(*lead), reco.pt->at(*lead));
+    h[1][match_index(*lead)][icent]->Fill(reco.ohcal_frac->at(*lead), reco.pt->at(*lead));
   }
 }
 
@@ -1185,7 +1260,10 @@ void JetJES::process_events()
     }
 
     fill_event(EventType::ALL);
-    m_hists.hMaxPtTruthR04_all->Fill(ed.max_pt_truth_r04);
+    if (m_has_truth)
+    {
+      m_hists.hMaxPtTruthR04_all->Fill(ed.max_pt_truth_r04);
+    }
 
     // Event Selections, as in Jet-Anav3 (p+p: none, the single centrality class)
     auto icent = find_cent_bin(ed.centrality);
@@ -1227,16 +1305,18 @@ void JetJES::process_events()
         fill_event(EventType::CALO_V2);
       }
     }
-    m_hists.hMaxPtTruthR04->Fill(ed.max_pt_truth_r04);
-
-    // pT-hat sample window
-    if (!check_truth_window())
+    // pT-hat sample window (MB: no truth, no window)
+    if (m_has_truth)
     {
-      ++m_ctr["events_outside_truth_window"];
-      continue;
+      m_hists.hMaxPtTruthR04->Fill(ed.max_pt_truth_r04);
+      if (!check_truth_window())
+      {
+        ++m_ctr["events_outside_truth_window"];
+        continue;
+      }
+      fill_event(EventType::TRUTH_WINDOW);
+      m_hists.hMaxPtTruthR04_window->Fill(ed.max_pt_truth_r04);
     }
-    fill_event(EventType::TRUTH_WINDOW);
-    m_hists.hMaxPtTruthR04_window->Fill(ed.max_pt_truth_r04);
     if (m_hists.hCentrality)
     {
       m_hists.hCentrality->Fill(ed.centrality);
@@ -1345,6 +1425,7 @@ int main(int argc, const char *const argv[])
     std::cout << "  mode: 0 data+MC overlay made with flow (iter / iternf, Calo-MBD file required; default)" << std::endl;
     std::cout << "        1 p+p MC (Fun4All_PP_JES; unsub / iternf, calo_mbd_file not used: pass none)" << std::endl;
     std::cout << "        2 Au+Au without flow (HIJING embedded MC or no-flow overlay; iternf; calo_mbd_file optional: none = no Calo-MBD cut)" << std::endl;
+    std::cout << "        3 minimum-bias HIJING without truth (iternf; no window, no matching, OHCal fraction templates only; calo_mbd_file optional)" << std::endl;
     std::cout << "  dump_pt_min: write the fiducial truth jets with pT >= dump_pt_min [GeV] that fail the matching to a text file (<= 0: off, default)" << std::endl;
     return 1;
   }
@@ -1360,13 +1441,13 @@ int main(int argc, const char *const argv[])
   int verbosity = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
   int mode_value = (argc >= ctr + 1) ? std::atoi(argv[ctr++]) : 0;
   double dump_pt_min = (argc >= ctr + 1) ? std::stod(argv[ctr++]) : -1;
-  if (mode_value < 0 || mode_value > 2)
+  if (mode_value < 0 || mode_value > 3)
   {
-    std::cout << std::format("Invalid mode {}: expected 0 (overlay), 1 (p+p) or 2 (Au+Au without flow)", mode_value) << std::endl;
+    std::cout << std::format("Invalid mode {}: expected 0 (overlay), 1 (p+p), 2 (Au+Au without flow) or 3 (MB HIJING without truth)", mode_value) << std::endl;
     return 1;
   }
   const auto mode = static_cast<JetJES::Mode>(mode_value);
-  const bool use_calo_mbd = (mode == JetJES::Mode::OVERLAY) || (mode == JetJES::Mode::NOFLOW && JetJES::has_calo_mbd_file(calo_mbd_file));
+  const bool use_calo_mbd = JetJES::uses_calo_mbd(mode, calo_mbd_file);
 
   std::cout << std::format("{:#<20}\n", "");
   std::cout << std::format("Run Params\n");

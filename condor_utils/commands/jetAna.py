@@ -18,13 +18,20 @@ OVERLAY_WINDOWS = {"Jet12": (12.0, 25.0), "Jet20": (25.0, 31.0), "Jet30": (31.0,
 HIJING_WINDOWS = {"Jet10": (10.0, 20.0), "Jet20": (20.0, 30.0), "Jet30": (30.0, -1.0)}
 
 # Jet-JES mode (9th argument): 0 data+MC overlay with flow (iter / iternf), 1 p+p MC (unsub / iternf),
-# 2 Au+Au without flow (HIJING embedded MC or no-flow overlay, iternf)
-JES_MODE_OVERLAY, JES_MODE_PP, JES_MODE_NOFLOW = 0, 1, 2
+# 2 Au+Au without flow (HIJING embedded MC or no-flow overlay, iternf), 3 minimum-bias HIJING without truth (iternf,
+# OHCal fraction templates only)
+JES_MODE_OVERLAY, JES_MODE_PP, JES_MODE_NOFLOW, JES_MODE_MB = 0, 1, 2, 3
+
+# minimum-bias HIJING trees (<outdir>/MB/tree/...): one sample, no truth and so no window (the range is not used)
+MB_SAMPLE = "MB"
+MB_WINDOW = (0.0, -1.0)
 
 def jes_mode(args):
     """Jet-JES mode of the jetJES options."""
     if args.pp:
         return JES_MODE_PP
+    if args.mb:
+        return JES_MODE_MB
     if args.hijing or args.noflow:
         return JES_MODE_NOFLOW
     return JES_MODE_OVERLAY
@@ -32,6 +39,8 @@ def jes_mode(args):
 def jes_mode_label(args):
     if args.pp:
         return "p+p MC (unsub / iternf)"
+    if args.mb:
+        return "minimum-bias HIJING without truth (iternf, OHCal fraction templates only, no Calo-MBD cut)"
     if args.hijing:
         return "PYTHIA8 embedded in HIJING MC (iternf, no Calo-MBD cut)"
     if args.noflow:
@@ -67,11 +76,11 @@ def run_jet_jobs(args, version):
         if args.timing_corr_file:
             manager.add_file_to_check(args.timing_corr_file)
     elif version == "jetJES":
-        # MC without a data run (p+p, HIJING embedded) has no Calo-MBD selection
-        mc_only = args.pp or args.hijing
+        # MC without a data run (p+p, HIJING embedded, MB HIJING) has no Calo-MBD selection
+        mc_only = args.pp or args.hijing or args.mb
         if not mc_only:
             if not args.calo_mbd_list:
-                manager.logger.critical("jetJES needs --calo-mbd-list (or --pp / --hijing for MC trees without a data run)")
+                manager.logger.critical("jetJES needs --calo-mbd-list (or --pp / --hijing / --mb for MC trees without a data run)")
                 sys.exit(1)
             manager.add_file_to_check(args.calo_mbd_list)
     manager.add_file_to_check(args.jetAna_macro)
@@ -130,9 +139,13 @@ def run_jet_jobs(args, version):
         init_log['Mode'] = f"{jes_mode(args)}: {jes_mode_label(args)}"
         if not mc_only:
             init_log['Calo-MBD List'] = Path(args.calo_mbd_list).resolve()
-        windows = {**(HIJING_WINDOWS if args.hijing else OVERLAY_WINDOWS), **dict(args.window or [])}
-        init_log['Lead Truth R=0.4 Jet pT Windows'] = ", ".join(
-            f"{sample}: [{lo}, {'inf' if hi < 0 else hi})" for sample, (lo, hi) in windows.items()) + " GeV"
+        if args.mb:
+            windows = {MB_SAMPLE: MB_WINDOW}
+            init_log['Lead Truth R=0.4 Jet pT Windows'] = "none (no truth)"
+        else:
+            windows = {**(HIJING_WINDOWS if args.hijing else OVERLAY_WINDOWS), **dict(args.window or [])}
+            init_log['Lead Truth R=0.4 Jet pT Windows'] = ", ".join(
+                f"{sample}: [{lo}, {'inf' if hi < 0 else hi})" for sample, (lo, hi) in windows.items()) + " GeV"
         if not mc_only:
             init_log['Sigma Cut'] = args.sigma_cut
         init_log['Failed-Match Dump'] = f"truth pT >= {args.dump_pt_min} GeV" if args.dump_pt_min > 0 else "off"
@@ -165,10 +178,14 @@ def run_jet_jobs(args, version):
         # the overlay pT-hat samples share the data run number: split each run by sample,
         # every job gets the window of its sample and writes to its own sample directory.
         # p+p and HIJING MC trees have no data run (<sample>/tree/...): grouped by sample only, the sample is the tag
-        mc_tag = "pp" if args.pp else "hijing"
+        mc_tag = "pp" if args.pp else ("mb" if args.mb else "hijing")
         sample_trees = {}
         for run_id, trees in run_trees.items():
             for tree in trees:
+                # MB HIJING: a single sample, whatever the path
+                if args.mb:
+                    sample_trees.setdefault((mc_tag, MB_SAMPLE), []).append(tree)
+                    continue
                 # overlay paths have /JetNN/, the p+p / HIJING MC paths /jetNN/
                 m = re.search(r'/[Jj]et(\d+)/', tree)
                 if not m:
@@ -186,7 +203,10 @@ def run_jet_jobs(args, version):
         for (run_id, sample), trees in sorted(sample_trees.items()):
             lo, hi = windows[sample]
             if mc_only:
-                manager.logger.info(f"{'p+p' if args.pp else 'HIJING'} MC Sample {sample}: {len(trees)} trees, window [{lo}, {'inf' if hi < 0 else hi}) GeV")
+                if args.mb:
+                    manager.logger.info(f"MB HIJING Sample {sample}: {len(trees)} trees, no truth (no window)")
+                else:
+                    manager.logger.info(f"{'p+p' if args.pp else 'HIJING'} MC Sample {sample}: {len(trees)} trees, window [{lo}, {'inf' if hi < 0 else hi}) GeV")
                 groups.append((run_id, sample, trees, f",{lo},{hi},{sample}"))
             else:
                 manager.logger.info(f"Overlay Sample {sample} (run {run_id}): {len(trees)} trees, window [{lo}, {'inf' if hi < 0 else hi}) GeV")
@@ -344,6 +364,7 @@ def setup_jetAna_subparsers(subparsers):
     jes_modes.add_argument('--pp', action='store_true', default=False, help='p+p MC trees (Fun4All_PP_JES): unsub / iternf jets (the trees\' no-flow iter), single centrality class, no Calo-MBD list.')
     jes_modes.add_argument('--hijing', action='store_true', default=False, help='PYTHIA8 embedded in HIJING trees (Fun4All_HIJING_JES): iternf jets (the trees\' no-flow iter), centrality classes, no Calo-MBD list, HIJING windows.')
     jes_modes.add_argument('--noflow', action='store_true', default=False, help='Data+MC overlay trees made with --do-flow 0: iternf jets (the trees\' no-flow iter), centrality and Calo-MBD selection, no flow / calo v2 cuts.')
+    jes_modes.add_argument('--mb', action='store_true', default=False, help='Minimum-bias HIJING trees without truth jets (Fun4All_HIJING_JES with no dst_truth_jet.list): iternf jets, centrality classes, no window, no matching; only the OHCal fraction templates (tasks/jet-ohcal-frac-templates.md). No Calo-MBD list.')
     windows_help = ", ".join(f"{s}={lo:g},{hi:g}" for s, (lo, hi) in OVERLAY_WINDOWS.items())
     hijing_windows_help = ", ".join(f"{s}={lo:g},{hi:g}" for s, (lo, hi) in HIJING_WINDOWS.items())
     jetJES.add_argument('--window', type=parse_window, action='append', metavar='SAMPLE=MIN,MAX', help=f'Leading truth R=0.4 jet pT window [MIN, MAX) GeV of a pT-hat sample (MAX < 0: no upper edge), overrides or adds to the defaults: {windows_help} (--hijing: {hijing_windows_help}, provisional). Repeatable.')

@@ -59,6 +59,9 @@ R__LOAD_LIBRARY(libTreeFiller.so)
 // Event selection as in data, minus the trigger: |z| < 10 cm, minimum bias (simulation mode of MinimumBiasClassifier)
 // and centrality < cent_max. MDC2 has no centrality scale / vertex scale payloads, so all three centrality
 // calibrations are read from the given files (the HIJING ones by default).
+// flist_truth_jet "none": minimum-bias HIJING without DST_TRUTH_JET (OHCal fraction templates,
+// tasks/jet-ohcal-frac-templates.md). No truth jet input and no TruthJetValidation, so the trees have no truth
+// branches (Jet-JES mode 3); EventQA hEvent still counts the analyzed events.
 void Fun4All_HIJING_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Jet20_sHijing_0_20fm-0000000031-000000.root",
                         const std::string &flist_global = "DST_GLOBAL_pythia8_Jet20_sHijing_0_20fm-0000000031-000000.root",
                         const std::string &flist_truth_jet = "DST_TRUTH_JET_pythia8_Jet20_sHijing_0_20fm-0000000031-000000.root",
@@ -74,6 +77,8 @@ void Fun4All_HIJING_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia
                         const std::string &cent_vtx_scale = "/sphenix/user/dlis/Projects/centrality/cdb/calibrations/vertexscales/cdb_centrality_vertex_scale_1.root",
                         const std::string &cent_divs = "/sphenix/user/dlis/Projects/centrality/cdb/calibrations/divs/cdb_centrality_1.root")
 {
+  const bool do_truth = !flist_truth_jet.empty() && flist_truth_jet != "none";
+
   // Extract runnumber from first file within list
   bool isFileList = !flist_calo.ends_with(".root");
   std::string first_file = flist_calo;
@@ -102,7 +107,7 @@ void Fun4All_HIJING_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia
   std::cout << "Run Parameters" << std::endl;
   std::cout << "input calo: " << flist_calo << std::endl;
   std::cout << "input global: " << flist_global << std::endl;
-  std::cout << "input truth jet: " << flist_truth_jet << std::endl;
+  std::cout << "input truth jet: " << (do_truth ? flist_truth_jet : "not used (no truth jets)") << std::endl;
   std::cout << "Run: " << runnumber << std::endl;
   std::cout << "output: " << output << std::endl;
   std::cout << "output tree: " << output_tree << std::endl;
@@ -141,11 +146,14 @@ void Fun4All_HIJING_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia
   Process_Calo_Calib();
 
   // Truth Jets: counts the analyzed events for the luminosity, so it runs before any event selection
-  TruthJetValidation* truth_jet_validation = new TruthJetValidation();
-  truth_jet_validation->set_jet_radii({0.2F, 0.3F});
-  truth_jet_validation->set_jet_pt_min(truth_jet_pt_min);
-  truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
-  se->registerSubsystem(truth_jet_validation);
+  if (do_truth)
+  {
+    TruthJetValidation* truth_jet_validation = new TruthJetValidation();
+    truth_jet_validation->set_jet_radii({0.2F, 0.3F});
+    truth_jet_validation->set_jet_pt_min(truth_jet_pt_min);
+    truth_jet_validation->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
+    se->registerSubsystem(truth_jet_validation);
+  }
 
   // MBD Reco: MbdOut (and MbdVertexMap) from the DST MbdPmtContainer, for CentralityReco
   MbdReco* mbdreco = new MbdReco();
@@ -238,10 +246,13 @@ void Fun4All_HIJING_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia
   in_global->BranchSelect("DST#EPD#TOWERINFO_SIM_EPD", 0);
   in_global->BranchSelect("DST#EPD#TOWERINFO_CALIB_EPD", 0);
 
-  const std::vector<std::pair<Fun4AllInputManager*, std::string>> input_files = {
+  std::vector<std::pair<Fun4AllInputManager*, std::string>> input_files = {
       {in_calo, flist_calo},
-      {in_global, flist_global},
-      {new Fun4AllDstInputManager("truthjet"), flist_truth_jet}};
+      {in_global, flist_global}};
+  if (do_truth)
+  {
+    input_files.emplace_back(new Fun4AllDstInputManager("truthjet"), flist_truth_jet);
+  }
 
   for (const auto& [in, filepath] : input_files)
   {

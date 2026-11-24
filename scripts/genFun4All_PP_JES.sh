@@ -21,7 +21,7 @@ fi
 f4a_macro=${1}
 list_calo=${2}   # lists of LFNs, line i of each list is the same segment
 list_global=${3}
-list_truth=${4}
+list_truth=${4}  # "none": no truth jets (minimum-bias HIJING, Fun4All_HIJING_JES only)
 list_g4hits=${5} # "none": no G4Hits (no truth vertex); otherwise passed as the 11th macro argument (p+p only)
 sample=${6}      # pT-hat sample (e.g. jet12)
 output=${7}
@@ -32,7 +32,12 @@ jet_pt_min=${11}
 truth_jet_pt_min=${12}
 submitDir=${13}
 
-input_lists=("$list_calo" "$list_global" "$list_truth")
+input_lists=("$list_calo" "$list_global")
+truth_arg="none"
+if [[ "$list_truth" != "none" ]]; then
+    input_lists+=("$list_truth")
+    truth_arg="$(basename "$list_truth")"
+fi
 g4hits_arg=""
 if [[ "$list_g4hits" != "none" ]]; then
     input_lists+=("$list_g4hits")
@@ -70,7 +75,7 @@ printenv
 mkdir -p "$outdir/hist" "$outdir/tree"
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"$(basename "$list_calo")\", \"$(basename "$list_global")\", \"$(basename "$list_truth")\", \"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $nEvents, 0, \"$dbtag\", $jet_pt_min, $truth_jet_pt_min$g4hits_arg)"
+root -b -l -q "$f4a_macro(\"$(basename "$list_calo")\", \"$(basename "$list_global")\", \"$truth_arg\",\"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $nEvents, 0, \"$dbtag\", $jet_pt_min, $truth_jet_pt_min$g4hits_arg)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then

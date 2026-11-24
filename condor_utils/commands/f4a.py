@@ -562,11 +562,12 @@ def create_f4a_mc_jobs(args):
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
-MC_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', 'dst_truth_jet.list')
+MC_JES_TRUTH_LIST = 'dst_truth_jet.list'
+MC_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', MC_JES_TRUTH_LIST)
 # optional: G4Hits, read by Fun4All_PP_JES only for the true collision vertex (zvtx_truth)
 MC_JES_G4HITS_LIST = 'g4hits.list'
 
-def create_mc_jes_jobs(args, job_name, use_g4hits=False):
+def create_mc_jes_jobs(args, job_name, use_g4hits=False, allow_no_truth=False):
     """
     MC JES trees (Fun4All_PP_JES, Fun4All_HIJING_JES): -i lists the pT-hat samples, one per line, either as a sample
     list file (e.g. files/MC/run-28/jet12.list, holding the paths of its dst_calo_cluster/dst_global/dst_truth_jet
@@ -574,6 +575,8 @@ def create_mc_jes_jobs(args, job_name, use_g4hits=False):
     The three lists of a sample are aligned by segment. Each job gets dst_per_job segments of all three.
     use_g4hits (p+p): a sample's g4hits.list, if it has one, is chunked the same way and passed to the macro for the
     true vertex; samples without one get "none" (no zvtx_truth branch).
+    allow_no_truth (HIJING): a sample without dst_truth_jet.list (minimum-bias HIJING, e.g. files/MC/run-31/MB.list)
+    gets "none" for the truth list, so the trees have no truth branches (Jet-JES mode 3).
     The Calo_Calib and HIJetReco macros are copied next to the Fun4All macro, so its #include picks up the local
     versions and not the release copies in rootmacros (which is on ROOT_INCLUDE_PATH).
     """
@@ -623,12 +626,16 @@ def create_mc_jes_jobs(args, job_name, use_g4hits=False):
                 sample = sample_path.stem
                 list_paths = {Path(p).name: Path(p) for p in read_lines(sample_path)}
 
-            missing = [name for name in MC_JES_LISTS if name not in list_paths or not list_paths[name].is_file()]
+            has_list = {name: name in list_paths and list_paths[name].is_file() for name in MC_JES_LISTS}
+            has_truth = has_list[MC_JES_TRUTH_LIST]
+            missing = [name for name in MC_JES_LISTS if not has_list[name] and not (name == MC_JES_TRUTH_LIST and allow_no_truth)]
             if missing:
                 manager.logger.warning(f"Skipping {sample}: missing {', '.join(missing)}")
                 continue
+            if not has_truth:
+                manager.logger.warning(f"Sample {sample}: no {MC_JES_TRUTH_LIST}, minimum-bias trees without truth jets")
 
-            names = list(MC_JES_LISTS)
+            names = [name for name in MC_JES_LISTS if has_list[name]]
             has_g4hits = use_g4hits and MC_JES_G4HITS_LIST in list_paths and list_paths[MC_JES_G4HITS_LIST].is_file()
             if has_g4hits:
                 names.append(MC_JES_G4HITS_LIST)
@@ -649,12 +656,15 @@ def create_mc_jes_jobs(args, job_name, use_g4hits=False):
                     chunk_path = files_dir / f"{sample}-{ichunk:05d}-{name}"
                     chunk_path.write_text('\n'.join(files) + '\n', encoding='utf-8')
                     chunk_paths.append(str(chunk_path))
+                # jobs.list columns: calo, global, truth, g4hits, sample
+                if not has_truth:
+                    chunk_paths.insert(2, "none")
                 if not has_g4hits:
                     chunk_paths.append("none")
                 file_out.write(f"{','.join(chunk_paths)},{sample}\n")
 
             manager.logger.info(f"Sample {sample}: {len(lists[0])} segments, {len(chunks)} jobs"
-                                f"{', with G4Hits (truth vertex)' if has_g4hits else ''}")
+                                f"{', with G4Hits (truth vertex)' if has_g4hits else ''}{'' if has_truth else ', no truth jets'}")
             total_jobs += len(chunks)
 
     manager.logger.info(f"Total jobs prepared: {total_jobs}")
@@ -670,8 +680,9 @@ def create_f4a_pp_jes_jobs(args):
     create_mc_jes_jobs(args, job_name="F4A PP JES", use_g4hits=True)
 
 def create_f4a_hijing_jes_jobs(args):
-    """PYTHIA8 embedded in HIJING MC JES (Fun4All_HIJING_JES), e.g. files/MC/run-31/jetX.list."""
-    create_mc_jes_jobs(args, job_name="F4A HIJING JES")
+    """PYTHIA8 embedded in HIJING MC JES (Fun4All_HIJING_JES), e.g. files/MC/run-31/jetX.list; also minimum-bias
+    HIJING without truth jets (files/MC/run-31/MB.list)."""
+    create_mc_jes_jobs(args, job_name="F4A HIJING JES", allow_no_truth=True)
 
 def create_f4a_data_mc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A Data MC")
