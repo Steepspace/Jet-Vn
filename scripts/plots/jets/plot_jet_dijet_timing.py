@@ -1656,7 +1656,7 @@ def plot_cut_x_templates(inputs, templates, pp_samples, r_tag, fit, runs, lumi, 
             rf"$\bf{{{CUT_SAMPLES[sample][1]}}}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
             rf"Window: dijet leading-jet fit $\mu \pm {nsig}\sigma$",
             "Fake: MB HIJING reco jets, 0-60%",
-            f"Real: PYTHIA8 p+p reco jets matched to truth ({pp_samples[0]}-{pp_samples[-1][3:]}, wiki weights)",
+            rf"Real: PYTHIA8 p+p reco jets matched to truth ({pp_samples[0]}-{pp_samples[-1][3:]}, weighted by $\sigma$ / $N_{{\mathrm{{events}}}}$)",
             "Each curve: unit area"], top=0.98, bottom=0.42)
         tax.legend(handles=[plt.Line2D([], [], color=C_IN, linewidth=1.8, label="data inside"),
                             plt.Line2D([], [], color=C_OUT, linewidth=1.8, linestyle="--", label="data outside"),
