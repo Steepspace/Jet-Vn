@@ -941,7 +941,8 @@ def plot_match_eff_vertex(vstitched, r_tag, ue, run, mode, out_path, save_pdf):
     ax.set_ylim(0, 1.25)
     ax.set_ylabel("Matching efficiency")
     ax.text(0.04, 0.96, f"{labels['all']}\n{METHODS[ue]['label']}", transform=ax.transAxes, ha="left", va="top", fontsize=13)
-    ax.text(0.96, 0.62, "\n".join([mode["sample_text"], mode["selection_text"], rf"$\Delta R < 0.75 R$, $\Delta z$ = {DZ_LABEL}"]),
+    ax.text(0.96, 0.66, "\n".join([mode["sample_text"], mode["selection_text"], RECO_JET_TEXT, r"Reco $p_{T}^{\mathrm{calib}} \geq 10$ GeV",
+                                   rf"$\Delta R < 0.75 R$, $\Delta z$ = {DZ_LABEL}"]),
             transform=ax.transAxes, ha="right", va="top", fontsize=11)
     ax.legend(loc="lower right", frameon=False, fontsize=12, ncol=2)
     add_header(ax, run, r_jet, None)
@@ -979,7 +980,8 @@ def plot_match_eff_vs_dz(vstitched, r_tag, ue, run, mode, out_path, save_pdf):
     ax.set_ylim(0, 1.25)
     ax.set_xlabel(rf"$|${DZ_LABEL}$|$ [cm]")
     ax.set_ylabel("Matching efficiency")
-    ax.text(0.96, 0.96, f"{labels['all']}\n{METHODS[ue]['label']}\n{mode['sample_text']}", transform=ax.transAxes, ha="right", va="top", fontsize=12)
+    ax.text(0.55, 0.45, "\n".join([labels["all"], METHODS[ue]["label"], mode["sample_text"], RECO_JET_TEXT, r"Reco $p_{T}^{\mathrm{calib}} \geq 10$ GeV",
+                                   r"$\Delta R < 0.75 R$"]), transform=ax.transAxes, ha="center", va="top", fontsize=12)  # lower middle: right of the legend, below the ~1 points, left of 20-40 cm
     ax.legend(loc="lower left", frameon=False, fontsize=12)
     add_header(ax, run, r_jet, None)
     plt.subplots_adjust(left=0.12, right=0.97, bottom=0.13, top=0.93)
