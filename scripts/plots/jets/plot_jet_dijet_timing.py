@@ -1598,7 +1598,7 @@ def plot_cut_x_templates(inputs, templates, pp_samples, r_tag, fit, runs, lumi, 
         sys.exit(f"C5: the template x axis differs from the data one ({r_tag} {sample})")
     hep.style.use("ATLAS")
     fig, axs = plt.subplots(2, 4, figsize=(22, 10.5), sharex=True)
-    csv_rows = []
+    csv_rows, y_ranges = [], []
     for k, ax in enumerate(axs.flat):
         if k >= len(rows):
             ax.axis("off")
@@ -1626,14 +1626,12 @@ def plot_cut_x_templates(inputs, templates, pp_samples, r_tag, fit, runs, lumi, 
         ax.set_xlim(xe[0], xe[-1])
         if logy:
             ax.set_yscale("log")
-            ax.set_ylim(*log_ylim(np.concatenate(vis), 0.55))
-        else:
-            ax.set_ylim(0, 1.75 * max(v.max() for v in vis))
         txt = [rf"${lo} \leq p_{{T}} < {hi}$ GeV",
                f"data in / out: {fmt_n(n_in.sum())} / {fmt_n(n_out.sum())}",
                f"MB HIJING: {fmt_n(neff['fake'])}" if neff["fake"] > 0 else "MB HIJING: no jets",
                f"p+p: $N_{{\\mathrm{{eff}}}}$ = {fmt_n(neff['real'])}" if neff["real"] > 0 else "p+p: no jets"]
-        ax.text(0.04, 0.96, "\n".join(txt), transform=ax.transAxes, ha="left", va="top", fontsize=11.5, linespacing=1.3)
+        t = ax.text(0.04, 0.96, "\n".join(txt), transform=ax.transAxes, ha="left", va="top", fontsize=11.5, linespacing=1.3)
+        y_ranges.append((ax, np.concatenate(vis), t))                     # set once the layout is final
         if k % 4 == 0:
             ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
         if k >= len(rows) - 4:
@@ -1650,6 +1648,9 @@ def plot_cut_x_templates(inputs, templates, pp_samples, r_tag, fit, runs, lumi, 
         csv_rows.append(row)
     header(axs[0, -1], runs, r_tag, lumi)
     fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
+    for ax, vals, t in y_ranges:                                         # highest point just below the panel text
+        frac = axes_bottom(fig, ax, t) - 0.03
+        ax.set_ylim(*log_ylim(vals, frac)) if logy else ax.set_ylim(0, vals.max() / frac)
     if len(rows) < axs.size:
         tax = axs.flat[len(rows)]
         fit_text_box(fig, tax, [
