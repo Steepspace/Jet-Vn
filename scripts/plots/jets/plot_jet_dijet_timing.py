@@ -59,6 +59,10 @@ This script makes:
    (every jet / the leading jet of every selected event) inside and outside the same window, one C2 pT class per panel,
    as unit-area shapes (h2TimeCorrOHCalFrac_<r>_<all|lead>, x vs corrected t per raw pT class, productions after
    11-19-26), and C4_<jetx|leadx>_3sigma_<r>.csv with N, <x> and the fractions at x < 0.05 and x >= 0.95.
+   timing/cut/C5_jetx_3sigma_<r>_panels[_logy], C5_leadx_3sigma_<r>_panels[_logy]: the C4 panels with the OHCal fraction
+   templates (tasks/jet-ohcal-frac-templates.md): fake jets = minimum-bias HIJING reco jets (Jet-JES mode 3, --mb-file,
+   0-60%), real jets = PYTHIA8 p+p reco jets matched to truth (Jet-JES p+p, --pp-list, Jet12-40 with the wiki weights from
+   --pp-gen-list); C5_<jetx|leadx>_3sigma_<r>.csv with N, the effective template entries and <x> of the four shapes.
    timing/run_groups/: the two run groups of X2_runs2 (before and from --run-split on), late - early in the lower panels:
    R1_time_vs_x_<r>_<dijet|incl>_runs2: the T1 profile (uncorrected, with the dijet T1 quartic) and the corrected
    profile per group;
@@ -1521,6 +1525,153 @@ def plot_cut_x_panels(inputs, r_tag, fit, runs, lumi, out_dir, nsig=3, sample="a
         for lo, hi, n_in, n_out in rows))
 
 
+# C5: the C4 data with the OHCal fraction templates (tasks/jet-ohcal-frac-templates.md): fake jets from minimum-bias
+# HIJING (Jet-JES mode 3), real jets from PYTHIA8 p+p reco jets matched to truth (Jet-JES p+p, wiki-weighted Jet12-40)
+# ---------------------------------------------------------------------------------------------------------------------
+
+C5_STEMS = {"all": "C5_jetx", "lead": "C5_leadx"}
+C_FAKE, C_REAL = "#ff7f00", "#4daf4a"
+MB_CENTS = ((0, 10), (10, 20), (20, 30), (30, 40), (40, 50), (50, 60))   # Jet-JES 10% classes, summed to 0-60% as the data
+MB_FILE = Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-24-26-Run-31-HIJING-MB/merged/output/MB.root")
+PP_LIST = Path("/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-23-26-Run-28-MC-xfrac/test.list")
+PP_GEN_LIST = Path("/sphenix/user/anarde/sEPD-Study/f4a_bkgsub_mc/11-23-26-pythia/test.list")
+
+
+def load_templates(mb_file, pp_list, pp_gen_list, radii):
+    """The OHCal fraction templates per (radius, sample all / lead): "fake" = MB HIJING h2OHCalFracPt_<r>_iternf_<s>_incl,
+    0-60%; "real" = PYTHIA8 p+p h2OHCalFracPt_<r>_iternf_<s>_matched_cent_0_100, summed over the pT-hat samples with the
+    wiki weights sigma_wiki / NEvents_job (as the p+p JES plots). Each as (values, variances, x edges, pT edges), values
+    and variances (x + 2, pT + 2) with flow. Also returns the p+p samples."""
+    from plot_jet_jes_overlay import parse_sample_list, load_weights, XSEC_WIKI_RUN28
+
+    def read(rf, name):
+        h = rf[name]
+        return (h.values(flow=True).astype(np.float64), h.variances(flow=True).astype(np.float64),
+                np.asarray(h.axis(0).edges()), np.asarray(h.axis(1).edges()))
+
+    out = {}
+    with uproot.open(mb_file) as rf:
+        for r in radii:
+            for s in C5_STEMS:
+                parts = [read(rf, f"h2OHCalFracPt_{r}_iternf_{s}_incl_cent_{lo}_{hi}") for lo, hi in MB_CENTS]
+                out[(r, s)] = {"fake": (sum(p[0] for p in parts), sum(p[1] for p in parts), parts[0][2], parts[0][3])}
+    samples = parse_sample_list(pp_list)
+    weights = load_weights(parse_sample_list(pp_gen_list), samples, "wiki", XSEC_WIKI_RUN28, {})
+    for smp, path in samples.items():
+        w = weights[smp]
+        with uproot.open(path) as rf:
+            for r in radii:
+                for s in C5_STEMS:
+                    v, var, xe, pe = read(rf, f"h2OHCalFracPt_{r}_iternf_{s}_matched_cent_0_100")
+                    prev = out[(r, s)].get("real")
+                    out[(r, s)]["real"] = (v * w, var * w * w, xe, pe) if prev is None else (prev[0] + v * w, prev[1] + var * w * w, xe, pe)
+    return out, list(samples)
+
+
+def template_class(t, lo, hi):
+    """x counts and variances (x + 2, with flow) of template t in the raw pT class [lo, hi) (its 1 GeV pT bins)."""
+    v, var, _, pe = t
+    sel = np.r_[False, (pe[:-1] >= lo - 1e-9) & (pe[1:] <= hi + 1e-9), False]
+    return v[:, sel].sum(axis=1), var[:, sel].sum(axis=1)
+
+
+def shape(n, nv, kb):
+    """Unit-area shape over the x axis (flow left out) of counts n with variances nv, kb bins merged: per-bin fractions
+    and their variances (the normalization taken as exact). None if empty."""
+    nb, vb = rebin(n[1:-1], kb), rebin(nv[1:-1], kb)
+    tot = nb.sum()
+    return None if tot <= 0 else (nb / tot, vb / tot ** 2)
+
+
+def plot_cut_x_templates(inputs, templates, pp_samples, r_tag, fit, runs, lumi, out_dir, nsig=3, sample="all", logy=False,
+                         save_pdf=False):
+    """C5: the C4 panels (data x inside / outside the window per raw pT class, 0-60%) with the fake-jet template (MB HIJING
+    reco jets, 0-60%) and the real-jet template (PYTHIA8 p+p reco jets matched to truth), all unit-area shapes over the x
+    axis (jets with x outside it left out). A template is drawn whenever it has jets in the class, however few. Binning
+    as C4, 0.1 when any of the four has fewer than C4_SPARSE_N (effective) jets. Returns the CSV rows (logy False)."""
+    got = cut_x_classes(inputs, r_tag, fit, nsig, sample)
+    tpl = templates.get((r_tag, sample)) if templates else None
+    if got is None or tpl is None:
+        return []
+    rows, (lo_t, hi_t), xe = got
+    if not np.allclose(tpl["fake"][2], xe) or not np.allclose(tpl["real"][2], xe):
+        sys.exit(f"C5: the template x axis differs from the data one ({r_tag} {sample})")
+    hep.style.use("ATLAS")
+    fig, axs = plt.subplots(2, 4, figsize=(22, 10.5), sharex=True)
+    csv_rows = []
+    for k, ax in enumerate(axs.flat):
+        if k >= len(rows):
+            ax.axis("off")
+            continue
+        lo, hi, n_in, n_out = rows[k]
+        Fn, Fv = template_class(tpl["fake"], lo, hi)
+        Rn, Rv = template_class(tpl["real"], lo, hi)
+        neff = {name: (n[1:-1].sum() ** 2 / v[1:-1].sum() if v[1:-1].sum() > 0 else 0.0) for name, n, v in (("fake", Fn, Fv), ("real", Rn, Rv))}
+        n_min = min([n_in[1:-1].sum(), n_out[1:-1].sum()] + [x for x in neff.values() if x > 0])
+        kb = C4_REBIN if n_min >= C4_SPARSE_N else C4_REBIN_SPARSE
+        xr = xe[::kb]
+        xc = 0.5 * (xr[1:] + xr[:-1])
+        w = np.diff(xr)
+        parts = {"in": shape(n_in, n_in, kb), "out": shape(n_out, n_out, kb), "fake": shape(Fn, Fv, kb), "real": shape(Rn, Rv, kb)}
+        vis = []
+        for key, col, ls, lw in (("fake", C_FAKE, "-", 2.6), ("real", C_REAL, "-", 2.6), ("in", C_IN, "-", 1.8), ("out", C_OUT, "--", 1.8)):
+            p = parts[key]
+            if p is None:
+                continue
+            d, e = p[0] / w, np.sqrt(p[1]) / w
+            gap_steps(ax, d, xr, color=col, linewidth=lw, linestyle=ls, alpha=0.85 if key in ("fake", "real") else 1.0)
+            ok = p[0] > 0
+            ax.errorbar(xc[ok], d[ok], yerr=e[ok], fmt="none", ecolor=col, elinewidth=1.0, capsize=0)
+            vis.append(d[ok] + e[ok] if not logy else d[ok])
+        ax.set_xlim(xe[0], xe[-1])
+        if logy:
+            ax.set_yscale("log")
+            ax.set_ylim(*log_ylim(np.concatenate(vis), 0.55))
+        else:
+            ax.set_ylim(0, 1.75 * max(v.max() for v in vis))
+        txt = [rf"${lo} \leq p_{{T}} < {hi}$ GeV",
+               f"data in / out: {fmt_n(n_in.sum())} / {fmt_n(n_out.sum())}",
+               f"MB HIJING: {fmt_n(neff['fake'])}" if neff["fake"] > 0 else "MB HIJING: no jets",
+               f"p+p: $N_{{\\mathrm{{eff}}}}$ = {fmt_n(neff['real'])}" if neff["real"] > 0 else "p+p: no jets"]
+        ax.text(0.04, 0.96, "\n".join(txt), transform=ax.transAxes, ha="left", va="top", fontsize=11.5, linespacing=1.3)
+        if k % 4 == 0:
+            ax.set_ylabel(r"$\frac{1}{N}\frac{dN}{dx}$")
+        if k >= len(rows) - 4:
+            ax.set_xlabel(r"Jet OHCal energy fraction $x$", fontsize=16)
+            ax.xaxis.set_tick_params(labelbottom=True)
+        if logy:
+            continue
+        row = {"radius": r_tag, "sample": sample, "pt_lo": lo, "pt_hi": hi, "x_bin": f"{xr[1] - xr[0]:g}",
+               "n_in": f"{n_in[1:-1].sum():.0f}", "n_out": f"{n_out[1:-1].sum():.0f}",
+               "neff_fake": f"{neff['fake']:.0f}", "neff_real": f"{neff['real']:.0f}"}
+        for key in ("in", "out", "fake", "real"):
+            p = parts[key]
+            row[f"mean_x_{key}"] = f"{(p[0] * xc).sum():.4f}" if p is not None else ""
+        csv_rows.append(row)
+    header(axs[0, -1], runs, r_tag, lumi)
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.09, top=0.95, wspace=0.22, hspace=0.12)
+    if len(rows) < axs.size:
+        tax = axs.flat[len(rows)]
+        fit_text_box(fig, tax, [
+            rf"$\bf{{{CUT_SAMPLES[sample][1]}}}$", r"$\bf{0-60\%}$"] + sel_lines(r_tag, 0, "all")[1:3] + [
+            rf"Window: dijet leading-jet fit $\mu \pm {nsig}\sigma$",
+            "Fake: MB HIJING reco jets, 0-60%",
+            f"Real: PYTHIA8 p+p reco jets matched to truth ({pp_samples[0]}-{pp_samples[-1][3:]}, wiki weights)",
+            "Each curve: unit area"], top=0.98, bottom=0.42)
+        tax.legend(handles=[plt.Line2D([], [], color=C_IN, linewidth=1.8, label="data inside"),
+                            plt.Line2D([], [], color=C_OUT, linewidth=1.8, linestyle="--", label="data outside"),
+                            plt.Line2D([], [], color=C_FAKE, linewidth=2.6, label="fake (MB HIJING)"),
+                            plt.Line2D([], [], color=C_REAL, linewidth=2.6, label="real (PYTHIA8 p+p)")],
+                   loc="lower left", fontsize=13, frameon=False)
+    save_fig(fig, out_dir / f"{C5_STEMS[sample]}_{nsig}sigma_{r_tag}_panels{'_logy' if logy else ''}.png", save_pdf)
+    plt.close(fig)
+    if not logy:
+        print(f"  C5 {r_tag} {sample}: <x> in / out / fake / real: " + ", ".join(
+            f"{r['pt_lo']}-{r['pt_hi']} GeV {r['mean_x_in']} / {r['mean_x_out']} / {r['mean_x_fake'] or '-'} / {r['mean_x_real'] or '-'}"
+            for r in csv_rows))
+    return csv_rows
+
+
 # R1 / R2: timing profiles of the two run groups of X2_runs2 (before and from --run-split on)
 # ---------------------------------------------------------------------------------------------------------------------
 
@@ -2126,6 +2277,13 @@ def main():
     parser.add_argument("--cache-dir", type=Path, default=None, help="Input cache directory (default: <output-dir>/cache)")
     parser.add_argument("--no-cache", action="store_true", help="Neither read nor write the input cache")
     parser.add_argument("--refresh-cache", action="store_true", help="Reread the ROOT files and overwrite the cache")
+    parser.add_argument("--mb-file", type=Path, default=MB_FILE,
+                        help="C5 fake-jet template: merged Jet-JES mode 3 output of minimum-bias HIJING (default: %(default)s)")
+    parser.add_argument("--pp-list", type=Path, default=PP_LIST,
+                        help="C5 real-jet template: merged Jet-JES p+p outputs JetNN.root with the x templates (default: %(default)s)")
+    parser.add_argument("--pp-gen-list", type=Path, default=PP_GEN_LIST,
+                        help="Merged Fun4All p+p hist files with h_gen_integral, for the sample weights (default: %(default)s)")
+    parser.add_argument("--no-templates", action="store_true", help="Skip C5 (the template comparison)")
     parser.add_argument("--write-calib", type=Path, default=None,
                         help="Write the T1 quartic of every radius as the Jet-Dijet timing correction file, e.g. "
                              "files/calib/timing_dijet_fit_iternf.csv (needs both radii; default: not written)")
@@ -2167,6 +2325,14 @@ def main():
     print(f"{len(runs)} runs; run groups: " + ", ".join(f"{l} ({(gi == g).sum()} runs)" for g, l in enumerate(glabels) if l))
 
     out = args.output_dir
+    templates, pp_samples = None, []
+    if not args.no_templates:
+        missing = [p for p in (args.mb_file, args.pp_list, args.pp_gen_list) if not p.exists()]
+        if missing:
+            print(f"C5 skipped, missing: {', '.join(map(str, missing))}")
+        else:
+            templates, pp_samples = load_templates(args.mb_file, args.pp_list, args.pp_gen_list, args.radii)
+            tick("templates")
     fits = {}
     for r_tag in args.radii:
         cut = inputs["layout"]["lead_edges"][r_tag][0]
@@ -2211,6 +2377,13 @@ def main():
                     plot_cut_tdist_panels(inputs, r_tag, lead_fit, runs, lumi, cd, zoom=zoom, sample=sample, save_pdf=args.save_pdf)
                 for logy in (False, True):                               # x inside / outside the window per C2 class
                     plot_cut_x_panels(inputs, r_tag, lead_fit, runs, lumi, cd, sample=sample, logy=logy, save_pdf=args.save_pdf)
+                if templates:                                            # C5: with the fake / real templates and the fit
+                    rows5 = plot_cut_x_templates(inputs, templates, pp_samples, r_tag, lead_fit, runs, lumi, cd, sample=sample,
+                                                 save_pdf=args.save_pdf)
+                    plot_cut_x_templates(inputs, templates, pp_samples, r_tag, lead_fit, runs, lumi, cd, sample=sample, logy=True,
+                                         save_pdf=args.save_pdf)
+                    if rows5:
+                        write_csv(rows5, cd / f"{C5_STEMS[sample]}_3sigma_{r_tag}.csv")
             for pt_lo, pt_hi in CUT_X_PT_RANGES:
                 plot_cut_x_highpt(inputs, r_tag, lead_fit, runs, lumi, cd, pt_lo, pt_hi, save_pdf=args.save_pdf)
         for sample, sub in (("all", "all_jets"), ("lead", "lead_jets")):   # every jet / the leading jet; with the dijet leading-jet window
