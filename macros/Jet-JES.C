@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <numbers>
+#include <numeric>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -54,6 +55,11 @@
 //    dz = z_MBD - z_truth, so the matching efficiency can be plotted vs the vertex error.
 //  - dump_pt_min > 0: every fiducial truth jet with pT >= dump_pt_min that fails the matching is written, with the
 //    event's truth and reco jets and the vertices, to <output_dir>/Jet-JES_<input>_failed_matches.txt.
+// OHCal fraction templates (tasks/jet-ohcal-frac-templates.md), only for trees with ohcal_frac_<ue>_<r>:
+//  h2OHCalFracPt_<r>_<ue>_<all|lead>_<matched|unmatched>_cent_<lo>_<hi>: x vs reco raw pT of the reco jets with E > 0,
+//  |eta| < eta_max and x finite (all) and of the highest raw pT one (lead), split by whether the jet is matched to a truth
+//  jet. That matching is separate from the JES one: one to one as well (truth jets by decreasing pT, closest free reco jet
+//  within Delta R < 0.75 R), but over all stored truth jets, not only the fiducial ones.
 class JetJES
 {
  public:
@@ -180,6 +186,20 @@ class JetJES
   template <typename T>
   using EtaCentArray = std::array<std::array<T *, m_num_cent_bins>, m_num_eta_bins>;
 
+  // OHCal fraction templates: jet sets (every jet, leading jet) x truth match states, as in the data C4 (Jet-Dijet.C)
+  static constexpr std::array<std::string_view, 2> m_frac_sets = {"all", "lead"};
+  static constexpr std::array<std::string_view, 2> m_frac_match = {"matched", "unmatched"};
+  static constexpr int m_bins_frac = 60;
+  static constexpr double m_frac_low = -0.25;
+  static constexpr double m_frac_high = 1.25;
+  // reco raw pT in 1 GeV bins, re-binned offline to the C4 classes (7, 10, 15, 20, 30, 40, 60, 150, 300)
+  static constexpr int m_bins_frac_pt = 300;
+  static constexpr double m_frac_pt_low = 0;
+  static constexpr double m_frac_pt_high = 300;
+
+  // [set][match][cent]
+  using FracArray = std::array<std::array<std::array<TH2 *, m_num_cent_bins>, m_frac_match.size()>, m_frac_sets.size()>;
+
   struct ResponseHistSet
   {
     EtaCentArray<TH2> h2Resp_raw{};
@@ -192,6 +212,8 @@ class JetJES
     // all reco jets, as h2JetEta in Jet-Anav3
     TH2 *h2RecoEta_raw{nullptr};
     TH2 *h2RecoEta_calib{nullptr};
+    // OHCal fraction x vs reco raw pT (only for trees with ohcal_frac)
+    FracArray h2OHCalFracPt{};
   };
 
   struct AnalysisHists
@@ -225,6 +247,7 @@ class JetJES
     std::vector<double> *phi{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> *eta{nullptr};       // NOLINT(misc-non-private-member-variables-in-classes)
     std::vector<double> *e{nullptr};         // NOLINT(misc-non-private-member-variables-in-classes)
+    std::vector<double> *ohcal_frac{nullptr};  // NOLINT(misc-non-private-member-variables-in-classes), reco only, optional
   };
 
   struct EventData
@@ -301,6 +324,9 @@ class JetJES
   double m_sigma_cut{3.5};
   bool m_has_calo_mbd_cut{false};
 
+  // OHCal fraction templates: every reco branch ohcal_frac_<ue>_<r> is in the trees
+  bool m_has_ohcal_frac{false};
+
   // matching checks
   bool m_has_truth_vertex{false};
   double m_dump_pt_min{-1}; /*GeV*/
@@ -315,6 +341,10 @@ class JetJES
   std::vector<int> m_truth_match;
   std::vector<int> m_truth_closest;
   std::vector<double> m_truth_closest_dr;
+  // OHCal fraction templates: all truth jets by decreasing pT, reco jets taken, and per reco jet whether it is matched
+  std::vector<size_t> m_frac_truth_order;
+  std::vector<bool> m_frac_reco_used;
+  std::vector<bool> m_frac_reco_matched;
 
   // --- Private Helper Methods ---
   void setup_chain();
@@ -330,8 +360,11 @@ class JetJES
   static std::optional<size_t> find_eta_bin(double eta, const RadiusConfig &rc);
   static double delta_phi(double phi1, double phi2);
   static double delta_r(double eta1, double phi1, double eta2, double phi2);
+  // closest reco jet not yet used to (eta, phi) and its Delta R; nullopt if every reco jet is used
+  static std::optional<std::pair<size_t, double>> closest_free_reco(double eta, double phi, const JetData &reco, const std::vector<bool> &used);
 
   void process_jets(size_t icent);
+  void fill_ohcal_frac(size_t ir, size_t iue, size_t icent);
   void process_events();
   void print_event_info(long long event_idx) const;
   void open_dump();
@@ -397,6 +430,17 @@ void JetJES::setup_chain()
     set_branch("calo_v2_iter", &ed.calo_v2_iter);
   }
 
+  // OHCal fraction templates: only if every reco jet collection has its ohcal_frac branch (trees made with do_timing)
+  m_has_ohcal_frac = true;
+  for (const auto &rc : m_radii)
+  {
+    for (const auto &ue : m_ue_list)
+    {
+      m_has_ohcal_frac = m_has_ohcal_frac && m_chain->GetBranch(std::format("ohcal_frac_{}_{}", ue.branch, rc.tag).c_str()) != nullptr;
+    }
+  }
+  std::cout << std::format("OHCal fraction (ohcal_frac): {}\n", m_has_ohcal_frac ? "found, filling the x templates" : "not in the trees, no x templates");
+
   for (size_t ir = 0; ir < m_radii.size(); ++ir)
   {
     std::string_view r = m_radii[ir].tag;
@@ -415,6 +459,10 @@ void JetJES::setup_chain()
       set_branch(std::format("phi_{}_{}", ue, r), &reco.phi);
       set_branch(std::format("eta_{}_{}", ue, r), &reco.eta);
       set_branch(std::format("e_{}_{}", ue, r), &reco.e);
+      if (m_has_ohcal_frac)
+      {
+        set_branch(std::format("ohcal_frac_{}_{}", ue, r), &reco.ohcal_frac);
+      }
     }
   }
 
@@ -643,6 +691,26 @@ void JetJES::init_hists()
         m_hists2D[reco_eta_name] = std::make_unique<TH2F>(reco_eta_name.c_str(), std::format("R = {:.1f}, {}, All Reco Jets; p_{{T}}^{{reco, {}}} [GeV]; #eta^{{reco}}", rc.radius, ue, calib).c_str(), bins_pt_eta2D, pt_eta2D_low, pt_eta2D_high, bins_eta, eta_low, eta_high);
         (std::string_view(calib) == "raw" ? h.h2RecoEta_raw : h.h2RecoEta_calib) = m_hists2D[reco_eta_name].get();
       }
+
+      if (m_has_ohcal_frac)
+      {
+        for (size_t is = 0; is < m_frac_sets.size(); ++is)
+        {
+          for (size_t im = 0; im < m_frac_match.size(); ++im)
+          {
+            for (size_t icent = 0; icent < num_cent_bins(); ++icent)
+            {
+              auto [cent_low, cent_high] = cent_range(icent);
+              std::string cent_label = m_is_pp ? std::string("p+p") : std::format("{} - {}%", cent_low, cent_high);
+              std::string name = std::format("h2OHCalFracPt_{}_{}_{}_{}_cent_{}_{}", r, ue, m_frac_sets[is], m_frac_match[im], cent_low, cent_high);
+              std::string title = std::format("R = {:.1f}, {}, |#eta| < {}, {} jets, {}, {}; OHCal Fraction; p_{{T}}^{{reco, raw}} [GeV]",
+                                              rc.radius, ue, rc.eta_max, m_frac_sets[is], m_frac_match[im], cent_label);
+              m_hists2D[name] = std::make_unique<TH2F>(name.c_str(), title.c_str(), m_bins_frac, m_frac_low, m_frac_high, m_bins_frac_pt, m_frac_pt_low, m_frac_pt_high);
+              h.h2OHCalFracPt[is][im][icent] = m_hists2D[name].get();
+            }
+          }
+        }
+      }
     }
   }
 
@@ -829,26 +897,13 @@ void JetJES::process_jets(size_t icent)
         double eta_truth = truth.eta->at(idx);
         double phi_truth = truth.phi->at(idx);
 
-        double dr_best = std::numeric_limits<double>::max();
-        std::optional<size_t> best;
-        for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
-        {
-          if (m_reco_used[jdx])
-          {
-            continue;
-          }
-          double dr = delta_r(eta_truth, phi_truth, reco.eta->at(jdx), reco.phi->at(jdx));
-          if (dr < dr_best)
-          {
-            dr_best = dr;
-            best = jdx;
-          }
-        }
-
-        if (!best)
+        auto closest = closest_free_reco(eta_truth, phi_truth, reco, m_reco_used);
+        if (!closest)
         {
           continue;
         }
+        const auto [best_idx, dr_best] = *closest;
+        const std::optional<size_t> best = best_idx;
 
         h.h2DeltaR->Fill(pt_truth, dr_best);
         m_truth_closest[idx] = static_cast<int>(*best);
@@ -876,7 +931,105 @@ void JetJES::process_jets(size_t icent)
       {
         dump_failed_matches(ir, iue);
       }
+
+      if (m_has_ohcal_frac)
+      {
+        fill_ohcal_frac(ir, iue, icent);
+      }
     }
+  }
+}
+
+std::optional<std::pair<size_t, double>> JetJES::closest_free_reco(double eta, double phi, const JetData &reco, const std::vector<bool> &used)
+{
+  double dr_best = std::numeric_limits<double>::max();
+  std::optional<size_t> best;
+  for (size_t jdx = 0; jdx < reco.pt->size(); ++jdx)
+  {
+    if (used[jdx])
+    {
+      continue;
+    }
+    double dr = delta_r(eta, phi, reco.eta->at(jdx), reco.phi->at(jdx));
+    if (dr < dr_best)
+    {
+      dr_best = dr;
+      best = jdx;
+    }
+  }
+  if (!best)
+  {
+    return std::nullopt;
+  }
+  return std::make_pair(*best, dr_best);
+}
+
+// OHCal fraction templates: x vs reco raw pT of the reco jets passing the data jet cuts (E > 0, |eta| < eta_max, x
+// finite), for every jet and for the leading one, split by the truth match. The match is one to one over all stored truth
+// jets (not only the fiducial ones of the JES), so a reco jet near the fiducial edge with its truth jet just outside it
+// is still matched.
+void JetJES::fill_ohcal_frac(size_t ir, size_t iue, size_t icent)
+{
+  const RadiusConfig &rc = m_radii[ir];
+  const JetData &truth = m_event_data.truth[ir];
+  const JetData &reco = m_event_data.reco[iue][ir];
+  const FracArray &h = m_hists.resp[iue][ir].h2OHCalFracPt;
+
+  if (!reco.ohcal_frac)
+  {
+    return;
+  }
+
+  const size_t n_reco = reco.pt->size();
+
+  // E <= 0 jets are not analysis jets: never matched
+  m_frac_reco_used.assign(n_reco, false);
+  m_frac_reco_matched.assign(n_reco, false);
+  for (size_t jdx = 0; jdx < n_reco; ++jdx)
+  {
+    m_frac_reco_used[jdx] = reco.e->at(jdx) <= 0;
+  }
+
+  m_frac_truth_order.resize(truth.pt->size());
+  std::iota(m_frac_truth_order.begin(), m_frac_truth_order.end(), size_t{0});
+  std::ranges::sort(m_frac_truth_order, [&](size_t a, size_t b)
+                    { return truth.pt->at(a) > truth.pt->at(b); });
+
+  const double dr_max = m_match_radius_frac * rc.radius;
+  for (size_t idx : m_frac_truth_order)
+  {
+    auto closest = closest_free_reco(truth.eta->at(idx), truth.phi->at(idx), reco, m_frac_reco_used);
+    if (closest && closest->second < dr_max)
+    {
+      m_frac_reco_used[closest->first] = true;
+      m_frac_reco_matched[closest->first] = true;
+    }
+  }
+
+  // as Jet-Dijet: the leading jet is picked among the jets passing the cuts, then skipped if its x is not finite
+  std::optional<size_t> lead;
+  for (size_t jdx = 0; jdx < n_reco; ++jdx)
+  {
+    if (reco.e->at(jdx) <= 0 || std::abs(reco.eta->at(jdx)) >= rc.eta_max)
+    {
+      continue;
+    }
+    if (!lead || reco.pt->at(jdx) > reco.pt->at(*lead))
+    {
+      lead = jdx;
+    }
+    const double x = reco.ohcal_frac->at(jdx);
+    if (std::isfinite(x))
+    {
+      const size_t im = m_frac_reco_matched[jdx] ? 0 : 1;
+      h[0][im][icent]->Fill(x, reco.pt->at(jdx));
+    }
+  }
+
+  if (lead && std::isfinite(reco.ohcal_frac->at(*lead)))
+  {
+    const size_t im = m_frac_reco_matched[*lead] ? 0 : 1;
+    h[1][im][icent]->Fill(reco.ohcal_frac->at(*lead), reco.pt->at(*lead));
   }
 }
 
