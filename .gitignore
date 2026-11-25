@@ -11,7 +11,7 @@ htmlcov
 run3auau-pro001_pcdb001_v001/
 old/
 
-/plots/
+/plots
 output/
 temp/
 log/
@@ -30,5 +30,39 @@ packages/**/install-sh
 packages/**/ltmain.sh
 packages/**/Makefile.in
 packages/**/missing
-# clangd compilation database (written by bear in builds.sh)
+# clangd compilation database (written by bear in builds.sh) and index cache
 packages/**/compile_commands.json
+packages/**/.cache/
+
+# local links into the scratch, storage and install areas (no trailing slash: git sees symlinks as files)
+/MC
+/UE-AuAu-PPG04
+/ZDC
+/bin
+/builds
+/event_qa
+/f4a
+/f4a_bkgsub
+/install
+/install-f4a_bkgsub
+/qa.list
+/run3auau
+/runs.list
+/sEPD-EP-Calib
+/scratch
+/tg
+/calib/
+/dst_calofitting_zdc_sepd-*.list
+
+# local working files
+/f4a-*.list
+/log.txt
+/tasks/
+/slides/
+/.clang-format
+/.claude/settings.local.json
+
+# core/: builds.sh builds from these links; only the two into packages/ are portable
+/core/*
+!/core/sepdvalidation
+!/core/TreeFiller
