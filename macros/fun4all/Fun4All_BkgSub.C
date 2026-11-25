@@ -49,6 +49,7 @@
 
 #include "Calo_Calib.C"
 #include "HIJetReco.C"
+#include "Provenance.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
 R__LOAD_LIBRARY(libsEPDValidation.so)
@@ -548,6 +549,9 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   {
     se->dumpHistos(output);
   }
+
+  // job provenance (CDB tag and payloads, input files), before delete se
+  Provenance::Write(do_detailed ? std::vector<std::string>{output_tree} : std::vector<std::string>{output_tree, output});
 
   CDBInterface::instance()->Print();  // print used DB files
   se->PrintTimer();

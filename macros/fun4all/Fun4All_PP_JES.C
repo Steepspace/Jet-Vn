@@ -29,6 +29,7 @@
 
 #include "Calo_Calib.C"
 #include "HIJetReco.C"
+#include "Provenance.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
 R__LOAD_LIBRARY(libphfield_io.so)
@@ -200,6 +201,9 @@ void Fun4All_PP_JES(const std::string &flist_calo = "DST_CALO_CLUSTER_pythia8_Je
   se->End();
 
   se->dumpHistos(output);
+
+  // job provenance (CDB tag and payloads, input files), before delete se
+  Provenance::Write({output_tree, output});
 
   CDBInterface::instance()->Print();  // print used DB files
   se->PrintTimer();

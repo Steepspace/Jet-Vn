@@ -38,6 +38,7 @@
 #include <sepdvalidation/CaloQA.h>
 
 #include "Calo_Calib.C"
+#include "Provenance.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
 R__LOAD_LIBRARY(libjetbackground.so)
@@ -211,6 +212,9 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   se->End();
 
   se->dumpHistos(output);
+
+  // job provenance (CDB tag and payloads, input files), before delete se
+  Provenance::Write({output});
 
   CDBInterface::instance()->Print();  // print used DB files
   se->PrintTimer();

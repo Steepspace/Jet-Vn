@@ -43,6 +43,7 @@
 #include <treefiller/TreeFiller.h>
 
 #include "Calo_Calib.C"
+#include "Provenance.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
 R__LOAD_LIBRARY(libjetbackground.so)
@@ -214,6 +215,9 @@ void Fun4All_sEPDQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
 
   // UPDATE: TreeFiller already wrote the tree to this file in End
   se->dumpHistos(output_tree, "UPDATE");
+
+  // job provenance (CDB tag and payloads, input files), before delete se
+  Provenance::Write({output_tree});
 
   CDBInterface::instance()->Print();  // print used DB files
   se->PrintTimer();
