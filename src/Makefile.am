@@ -11,24 +11,15 @@ AM_LDFLAGS = \
   -L$(OFFLINE_MAIN)/lib64
 
 pkginclude_HEADERS = \
-  sEPDValidation.h \
   geometry_constants.h \
-  MedianFinder.h \
   EventSkip.h \
   CaloCheck.h \
   CaloQA.h \
-  CentralityQA.h \
-  CalibrateQVec.h \
-  JetValidation.h \
-  JetValidationv2.h \
   JetValidationv3.h \
   TruthJetValidation.h \
   EventQA.h \
   GlobalQA.h \
   JetUtils.h \
-  sEPD_DataMC_Validation.h \
-  sEPD_MC_Validation.h \
-  NoiseValidation.h \
   RandomConeMaker.h \
   RandomConeValidation.h
 
@@ -36,23 +27,14 @@ lib_LTLIBRARIES = \
   libsEPDValidation.la
 
 libsEPDValidation_la_SOURCES = \
-  sEPDValidation.cc \
-  MedianFinder.cc \
   EventSkip.cc \
   CaloCheck.cc \
   CaloQA.cc \
-  CentralityQA.cc \
-  CalibrateQVec.cc \
-  JetValidation.cc \
-  JetValidationv2.cc \
   JetValidationv3.cc \
   TruthJetValidation.cc \
   EventQA.cc \
   GlobalQA.cc \
   JetUtils.cc \
-  sEPD_DataMC_Validation.cc \
-  sEPD_MC_Validation.cc \
-  NoiseValidation.cc \
   RandomConeMaker.cc \
   RandomConeValidation.cc
 
