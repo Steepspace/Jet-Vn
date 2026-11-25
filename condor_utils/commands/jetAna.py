@@ -269,7 +269,7 @@ def add_common_args(parser, name_suffix):
     parser.add_argument('--retry-request-memory', type=str, default=None, help='Explicit retry_request_memory setting (e.g. "1.5GB"). If None, computed as memory + retry_memory_step up to retry_memory_max.')
     parser.add_argument('-m', '--max-retries', type=int, default=3, help='Max Condor job retries on failure. Default: 3.')
     parser.add_argument('-l', '--condor-log-dir', type=str, default='/tmp/anarde/dump', help='Condor Log Directory.')
-    parser.add_argument('-f3', '--condor-script', type=str, default=f'scripts/genJet{name_suffix}.sh', help='Condor Script.')
+    parser.add_argument('-f3', '--condor-script', type=str, default=f'scripts/workers/genJet{name_suffix}.sh', help='Condor Script.')
     parser.add_argument('-f4', '--common-errors', type=str, default='files/common-errors.txt', help='Common Errors.')
 
 def setup_jetAna_subparsers(subparsers):

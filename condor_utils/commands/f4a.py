@@ -331,7 +331,7 @@ def create_f4a_overlay_jobs(args):
         raise ValueError(f"--overlay is only supported by Fun4All_BkgSub, got {args.f4a_macro}")
     if not getattr(args, 'data_list', None):
         raise ValueError("--overlay needs --data-list (calofit,zdc,sepd lists of the data runs)")
-    args.condor_script = 'scripts/genFun4All_BkgSub_Overlay.sh'
+    args.condor_script = 'scripts/workers/genFun4All_BkgSub_Overlay.sh'
 
     manager = CondorJobManager(args, job_name="F4A Overlay")
     manager.add_file_to_check(args.f4a_macro)
@@ -700,19 +700,19 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut, used with --overlay. Default: 10 GeV.')
     f4a.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut, used with --overlay. Default: 5 GeV.')
     f4a.add_argument('--input-check-macro', type=str, default='macros/utils/check_overlay_inputs.C', help='Input check macro, run by each --overlay job on its DST copies before Fun4All_BkgSub (inputs still being written are logged to failures/failure-log.txt).')
-    f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All_BkgSub.sh', func=create_f4a_jobs)
+    f4a.set_defaults(memory=1.5, condor_script='scripts/workers/genFun4All_BkgSub.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')
     add_build_args(f4a_zdc, myinstall=False)
     f4a_zdc.add_argument('-n3', '--log-interval', type=int, default=10000, help='Logging Event Frequency. Default: 10000.')
     f4a_zdc.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_ZDC.C', help='Fun4All Macro.')
-    f4a_zdc.set_defaults(memory=1.5, condor_script='scripts/genFun4AllZDC.sh', func=create_f4a_zdc_jobs)
+    f4a_zdc.set_defaults(memory=1.5, condor_script='scripts/workers/genFun4AllZDC.sh', func=create_f4a_zdc_jobs)
 
     f4a_sepd_calib = subparsers.add_parser('f4a_sepd_calib', aliases=['f4a_sepdcalib'], parents=[get_common_parser()], help='Create condor submission directory for sEPD Calibration.')
     add_build_args(f4a_sepd_calib, myinstall=False)
     f4a_sepd_calib.add_argument('-n3', '--log-interval', type=int, default=5000, help='Logging Event Frequency. Default: 5000.')
     f4a_sepd_calib.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_sEPD_Calib.C', help='Fun4All Macro.')
-    f4a_sepd_calib.set_defaults(memory=0.5, condor_script='scripts/genFun4All_sEPD_Calib.sh', func=create_f4a_sepd_calib_jobs)
+    f4a_sepd_calib.set_defaults(memory=0.5, condor_script='scripts/workers/genFun4All_sEPD_Calib.sh', func=create_f4a_sepd_calib_jobs)
 
     f4a_pp_jes = subparsers.add_parser('f4a_pp_jes', parents=[get_common_parser()], help='Create condor submission directory for the p+p MC JES (Fun4All_PP_JES).')
     add_build_args(f4a_pp_jes)
@@ -721,7 +721,7 @@ def setup_f4a_subparsers(subparsers):
     f4a_pp_jes.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/fun4all/HIJetReco.C', help='HIJetReco Macro.')
     f4a_pp_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
     f4a_pp_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
-    f4a_pp_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_pp_jes_jobs)
+    f4a_pp_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=.5, condor_script='scripts/workers/genFun4All_PP_JES.sh', func=create_f4a_pp_jes_jobs)
 
     # same job layout and worker script as f4a_pp_jes (the first 10 macro arguments are the same; the centrality
     # calibration files keep the Fun4All_HIJING_JES defaults)
@@ -732,10 +732,10 @@ def setup_f4a_subparsers(subparsers):
     f4a_hijing_jes.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/fun4all/HIJetReco.C', help='HIJetReco Macro.')
     f4a_hijing_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
     f4a_hijing_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
-    f4a_hijing_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=1.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_hijing_jes_jobs)
+    f4a_hijing_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=1.5, condor_script='scripts/workers/genFun4All_PP_JES.sh', func=create_f4a_hijing_jes_jobs)
 
     f4a_sepdqa = subparsers.add_parser('f4a_sepdqa', parents=[get_common_parser()], help='Create condor submission directory for sEPDQA.')
     add_build_args(f4a_sepdqa)
     f4a_sepdqa.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_sEPDQA.C', help='Fun4All Macro.')
     f4a_sepdqa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/fun4all/Calo_Calib.C', help='Calo_Calib Macro.')
-    f4a_sepdqa.set_defaults(memory=1.5, condor_script='scripts/genFun4All_sEPDQA.sh', func=create_f4a_sepdqa_jobs)
+    f4a_sepdqa.set_defaults(memory=1.5, condor_script='scripts/workers/genFun4All_sEPDQA.sh', func=create_f4a_sepdqa_jobs)

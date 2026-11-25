@@ -104,7 +104,7 @@ def setup_qa_subparsers(subparsers):
     event_qa.set_defaults(
         dst_per_job=5,
         memory=1,
-        condor_script='scripts/genFun4All_EventQA.sh',
+        condor_script='scripts/workers/genFun4All_EventQA.sh',
         func=create_event_qa_jobs
     )
 
@@ -119,6 +119,6 @@ def setup_qa_subparsers(subparsers):
     sepd_qa.add_argument('--sigma-cut', type=float, default=3.5, help='Sigma cut threshold for Calo-MBD cut. Default: 3.5')
     sepd_qa.set_defaults(
         memory=1.0,
-        condor_script='scripts/gensEPDQA.sh',
+        condor_script='scripts/workers/gensEPDQA.sh',
         func=create_sepd_qa_jobs
     )
