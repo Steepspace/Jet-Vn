@@ -260,7 +260,7 @@ def add_common_args(parser, name_suffix):
     parser.add_argument('-i', '--input-list', type=str, required=True, help='List of TTrees to analyze.')
     parser.add_argument('-j', '--jet-pt-min', type=float, default=10, help='Minimum Jet pT. Default: 10 [GeV]')
     parser.add_argument('-p', '--files-per-job', type=int, default=100, help='Number of trees per job list. Default: 100')
-    parser.add_argument('-f', '--jetAna-macro', type=str, default=f'macros/Jet-{name_suffix}.C', help=f'Jet-Ana Macro. Default: macros/Jet-{name_suffix}.C')
+    parser.add_argument('-f', '--jetAna-macro', type=str, default=f'macros/analysis/Jet-{name_suffix}.C', help=f'Jet-Ana Macro. Default: macros/analysis/Jet-{name_suffix}.C')
     parser.add_argument('-f2', '--jetAna-bin', type=str, default=f'bin/Jet-{name_suffix}', help=f'Jet-Ana Bin. Default: bin/Jet-{name_suffix}')
     parser.add_argument('-o', '--output-dir', type=str, default='scratch/test', help='Output Directory. Default: scratch/test')
     parser.add_argument('-s', '--memory', type=float, default=1.5, help='Memory (units of GB). Default: 1.5 GB.')

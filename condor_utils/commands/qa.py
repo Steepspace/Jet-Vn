@@ -99,8 +99,8 @@ def setup_qa_subparsers(subparsers):
     # event_qa
     event_qa = subparsers.add_parser('event_qa', parents=[get_common_parser()], help='Create condor submission directory for Event QA.')
     add_build_args(event_qa)
-    event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_EventQA.C', help='Fun4All Macro.')
-    event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
+    event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_EventQA.C', help='Fun4All Macro.')
+    event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/fun4all/Calo_Calib.C', help='Calo_Calib Macro.')
     event_qa.set_defaults(
         dst_per_job=5,
         memory=1,
@@ -111,7 +111,7 @@ def setup_qa_subparsers(subparsers):
     # sepd_qa
     sepd_qa = subparsers.add_parser('sepd_qa', parents=[get_common_parser()], help='Create condor submission directory for sEPD QA.')
     add_build_args(sepd_qa, myinstall=False, short_flag=False)
-    sepd_qa.add_argument('-f', '--sepd-macro', type=str, default='macros/sEPD-QA.C', help='sEPD-QA Macro. Default: macros/sEPD-QA.C')
+    sepd_qa.add_argument('-f', '--sepd-macro', type=str, default='macros/analysis/sEPD-QA.C', help='sEPD-QA Macro. Default: macros/analysis/sEPD-QA.C')
     sepd_qa.add_argument('-b', '--sepd-bin', type=str, default='bin/sEPD-QA', help='sEPD-QA Bin. Default: bin/sEPD-QA')
     sepd_qa.add_argument('-p', '--files-per-job', type=int, default=100, help='Number of trees per job list. Default: 100')
     sepd_qa.add_argument('-v', '--verbosity', type=int, default=0, help='Verbosity. Default: 0')

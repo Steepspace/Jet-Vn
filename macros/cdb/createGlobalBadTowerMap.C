@@ -1,4 +1,4 @@
-#include "myUtils.C"
+#include "../analysis/myUtils.C"
 
 // ====================================================================
 // sPHENIX Includes

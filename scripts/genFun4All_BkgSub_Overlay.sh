@@ -41,7 +41,7 @@ do_emfrac_calib=${21:-0}
 jet_pt_min=${22:-10}
 truth_jet_pt_min=${23:-5}
 submitDir=${24}
-input_check_macro=${25} # macros/check_overlay_inputs.C: checks the input copies before the f4a macro
+input_check_macro=${25} # macros/utils/check_overlay_inputs.C: checks the input copies before the f4a macro
 
 # the data-only DST_CALOFITTING (event aligned with the overlay DSTs) sits next to them
 input_calofit=$(ls "$(dirname "$input_global")"/DST_CALOFITTING-*.root 2>/dev/null)

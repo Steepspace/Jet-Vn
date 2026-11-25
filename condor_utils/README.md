@@ -29,7 +29,7 @@ python3 utils.py data --tag <dst_tag> --output-dir <output_dir>
 These commands generate Condor submissions for Fun4All QA tasks.
 
 **Commands:**
-- `event_qa`: Runs Event QA (`macros/Fun4All_EventQA.C`).
+- `event_qa`: Runs Event QA (`macros/fun4all/Fun4All_EventQA.C`).
 - `centrality_qa`: Runs Centrality QA (`bin/Fun4All_CentralityQA`).
 
 **Example Usage:**
@@ -61,7 +61,7 @@ python3 utils.py f4a -i files/run3auau/runs.list --calib files/calibrations.txt 
 ---
 
 ## 4. Jet Analysis (`jetAnav3`, `jetDijet`, `jetJES`)
-Runs the `Jet-Anav3` / `Jet-Dijet` / `Jet-JES` binaries (`macros/`) over the TTree files produced by the `f4a` step.
+Runs the `Jet-Anav3` / `Jet-Dijet` / `Jet-JES` binaries (`macros/analysis/`) over the TTree files produced by the `f4a` step.
 
 **Usage:**
 ```bash

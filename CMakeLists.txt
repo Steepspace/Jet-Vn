@@ -23,7 +23,6 @@ set(SPHENIX_INSTALL "$ENV{OFFLINE_MAIN}")
 set(MY_INSTALL "$ENV{MYINSTALL}")
 
 include_directories(
-    "macros"
     "${MY_INSTALL}/include"
     SYSTEM ${ROOT_INCLUDE_DIRS}
     SYSTEM "${SPHENIX_INSTALL}/include"
@@ -64,7 +63,7 @@ set(STANDALONE_MACRO_LIBS
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # --- Fun4All_CaloCheck ---
-add_executable(Fun4All_CaloCheck macros/Fun4All_CaloCheck.C)
+add_executable(Fun4All_CaloCheck macros/fun4all/Fun4All_CaloCheck.C)
 target_link_libraries(Fun4All_CaloCheck PRIVATE
     ROOT::Core # Needs explicit Core for gSystem
     ${ROOT_LIBS}
@@ -73,35 +72,35 @@ target_link_libraries(Fun4All_CaloCheck PRIVATE
 )
 
 # --- checkCDB ---
-add_executable(checkCDB macros/checkCDB.C)
+add_executable(checkCDB macros/cdb/checkCDB.C)
 target_link_libraries(checkCDB PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- checkCDBList ---
-add_executable(checkCDBList macros/checkCDBList.C)
+add_executable(checkCDBList macros/cdb/checkCDBList.C)
 target_link_libraries(checkCDBList PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- checkTree ---
-add_executable(checkTree macros/checkTree.C)
+add_executable(checkTree macros/utils/checkTree.C)
 target_link_libraries(checkTree PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- createGlobalBadTowerMap ---
-add_executable(createGlobalBadTowerMap macros/CDB/createGlobalBadTowerMap.C)
+add_executable(createGlobalBadTowerMap macros/cdb/createGlobalBadTowerMap.C)
 target_link_libraries(createGlobalBadTowerMap PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- Jet Ana v3 ---
-add_executable(Jet-Anav3 macros/Jet-Anav3.C)
+add_executable(Jet-Anav3 macros/analysis/Jet-Anav3.C)
 target_link_libraries(Jet-Anav3 PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- Jet Dijet (clean dijet control sample) ---
-add_executable(Jet-Dijet macros/Jet-Dijet.C)
+add_executable(Jet-Dijet macros/analysis/Jet-Dijet.C)
 target_link_libraries(Jet-Dijet PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- Jet JES (data+MC overlay) ---
-add_executable(Jet-JES macros/Jet-JES.C)
+add_executable(Jet-JES macros/analysis/Jet-JES.C)
 target_link_libraries(Jet-JES PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # --- sEPD QA ---
-add_executable(sEPD-QA macros/sEPD-QA.C)
+add_executable(sEPD-QA macros/analysis/sEPD-QA.C)
 target_link_libraries(sEPD-QA PRIVATE ${STANDALONE_MACRO_LIBS})
 
 # ====================================================================
@@ -112,6 +111,7 @@ if(CPPCHECK_EXECUTABLE)
     add_custom_target(cppcheck
         COMMAND ${CPPCHECK_EXECUTABLE} --std=c++20 --enable=all --force
                 --suppress=missingIncludeSystem --suppress=missingInclude
+                -i macros/deprecated
                 "macros"
         COMMENT "Running Cppcheck static analysis..."
     )
