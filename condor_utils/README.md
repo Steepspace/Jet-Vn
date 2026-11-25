@@ -53,7 +53,7 @@ These commands generate Condor jobs for the core Fun4All analysis.
 python3 utils.py f4a -i files/run3auau/runs.list --calib files/calibrations.txt -o scratch/f4a/
 ```
 **What it does:**
-- Validates the required macros and directories (`src/`, `macros/`, etc.).
+- Validates the required macros and directories (`packages/sepdvalidation/`, `macros/`, etc.).
 - Splits the input file lists into chunks (e.g., 4 DSTs per job).
 - Matches runs with specific calibration configurations from the `--calib` file.
 - Copies all dependencies to the output directory and generates a `jobs.list` and `.sub` file for Condor.

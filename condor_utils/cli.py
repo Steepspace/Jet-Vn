@@ -35,7 +35,7 @@ def get_common_parser():
     parser.add_argument('--node', '--submit-node', type=str, default=None, help='Target submission node (e.g. sphnxuser01). Default: auto-detect best node.')
     parser.add_argument('-u', '--user', type=str, default='anarde', help="Target user ID for submit node ranking. Default: 'anarde'")
 
-    parser.add_argument('-f2', '--src-dir', type=str, default='src', help='Source Files Directory. Default: src')
+    parser.add_argument('-f2', '--src-dir', type=str, default='packages/sepdvalidation', help='Analysis module sources, copied into the submit directory. Default: packages/sepdvalidation')
     parser.add_argument('-f3', '--condor-script', type=str, help='Condor Script.')
     parser.add_argument('-f4', '--common-errors', type=str, default='files/common-errors.txt', help='Common Errors.')
 
