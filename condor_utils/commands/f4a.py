@@ -164,11 +164,11 @@ def write_job_event_lists(manager, run_events, jobs_file_name="jobs.list"):
     manager.logger.info(f"Event list split per job: kept {len(kept)} job(s), dropped {n_dropped} without listed events.")
 
 def create_f4a_jobs(args):
+    if "Fun4All_BkgSub" not in args.f4a_macro:
+        raise ValueError(f"f4a only supports Fun4All_BkgSub, got {args.f4a_macro}")
+
     if getattr(args, 'overlay', False):
         return create_f4a_overlay_jobs(args)
-
-    if "Fun4All_BkgSub" in args.f4a_macro:
-        args.condor_script = 'scripts/genFun4All_BkgSub.sh'
 
     manager = CondorJobManager(args, job_name="F4A")
     manager.add_file_to_check(args.f4a_macro)
@@ -208,15 +208,14 @@ def create_f4a_jobs(args):
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
+        'Source Directory': Path(args.src_dir).resolve(),
+        'Do RCone': bool(getattr(args, 'do_rcone', False)),
+        'Do Mult': bool(getattr(args, 'do_mult', 0)),
+        'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
+        'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
+        'ZS Calib List': zs_calib_list if zs_calib_list else "Not Provided (Using CDB)",
+        'Do EMfrac Calib': bool(getattr(args, 'do_emfrac_calib', 0)),
     }
-    if "Fun4All_BkgSub" in args.f4a_macro:
-        init_log['Do RCone'] = bool(getattr(args, 'do_rcone', False))
-        init_log['Do Mult'] = bool(getattr(args, 'do_mult', 0))
-        init_log['Do Neg Energy Threshold'] = bool(getattr(args, 'do_neg_energy_threshold', 1))
-        init_log['Neg Energy Threshold'] = float(getattr(args, 'neg_energy_threshold', -2.0))
-        init_log['ZS Calib List'] = zs_calib_list if zs_calib_list else "Not Provided (Using CDB)"
-        init_log['Do EMfrac Calib'] = bool(getattr(args, 'do_emfrac_calib', 0))
 
     manager.log_initialization(init_log)
 
@@ -236,17 +235,15 @@ def create_f4a_jobs(args):
 
     calib_map = parse_calib_list(calib_list, manager.logger)
 
-    # ZS cross calib T0 columns (BkgSub only): one file per detector, 'none' falls back to the CDB
-    zs_columns = None
+    # ZS cross calib T0 columns: one file per detector, 'none' falls back to the CDB
     missing_zs_runs = set()
-    if "Fun4All_BkgSub" in args.f4a_macro:
-        zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
+    zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
 
-        def zs_columns(run):
-            entry = zs_map.get(run, {})
-            if not entry:
-                missing_zs_runs.add(run)
-            return ",".join(entry.get(det, 'none') for det in ZS_DETECTORS)
+    def zs_columns(run):
+        entry = zs_map.get(run, {})
+        if not entry:
+            missing_zs_runs.add(run)
+        return ",".join(entry.get(det, 'none') for det in ZS_DETECTORS)
 
     manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map, extra_columns=zs_columns)
 
@@ -254,33 +251,29 @@ def create_f4a_jobs(args):
         runs_str = ", ".join(sorted(missing_zs_runs, key=lambda r: int(r) if r.isdigit() else r))
         manager.logger.warning(f"No ZS cross calib T0 entry for {len(missing_zs_runs)} run(s), passing none (CDB fallback): {runs_str}")
 
-    # run,event list (BkgSub only): each job gets the events of its own segments as a jobs.list column
+    # run,event list: each job gets the events of its own segments as a jobs.list column
     run_events = None
-    if event_list and "Fun4All_BkgSub" in args.f4a_macro:
+    if event_list:
         run_events = parse_run_event_list(event_list, manager.logger)
         if run_events is not None:
             write_job_event_lists(manager, run_events)
 
-    if "Fun4All_BkgSub" in args.f4a_macro:
-        eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
-        if run_events is not None:
-            event_list_val = "$(event_list)"
-        else:
-            event_list_val = (manager.output_dir / event_list.name) if event_list else "none"
-        do_rcone_val = 1 if getattr(args, 'do_rcone', False) else 0
-        do_mult_val = getattr(args, 'do_mult', 0)
-        do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
-        neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-        do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
-        bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
-        queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
-        if run_events is not None:
-            queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout,event_list from jobs.list"
+    eta_calib_val = (manager.output_dir / eta_calib.name) if eta_calib else "none"
+    if run_events is not None:
+        event_list_val = "$(event_list)"
     else:
-        bkgsub_args = ""
-        queue_arg = "input_dst,input_calib from jobs.list"
+        event_list_val = (manager.output_dir / event_list.name) if event_list else "none"
+    do_rcone_val = 1 if getattr(args, 'do_rcone', False) else 0
+    do_mult_val = getattr(args, 'do_mult', 0)
+    do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
+    neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
+    do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
+    bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
+    queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
+    if run_events is not None:
+        queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout,event_list from jobs.list"
 
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
+    arguments =f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
     manager.finalize_submission(queue_arg=queue_arg)
 
@@ -542,26 +535,6 @@ def create_f4a_sepd_calib_jobs(args):
 
 create_f4a_sepdcalib_jobs = create_f4a_sepd_calib_jobs
 
-def create_f4a_mc_jobs(args):
-    manager = CondorJobManager(args, job_name="F4A MC")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_dir_to_check(args.src_dir)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
 MC_JES_TRUTH_LIST = 'dst_truth_jet.list'
 MC_JES_LISTS = ('dst_calo_cluster.list', 'dst_global.list', MC_JES_TRUTH_LIST)
 # optional: G4Hits, read by Fun4All_PP_JES only for the true collision vertex (zvtx_truth)
@@ -684,129 +657,6 @@ def create_f4a_hijing_jes_jobs(args):
     HIJING without truth jets (files/MC/run-31/MB.list)."""
     create_mc_jes_jobs(args, job_name="F4A HIJING JES", allow_no_truth=True)
 
-def create_f4a_data_mc_jobs(args):
-    manager = CondorJobManager(args, job_name="F4A Data MC")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_file_to_check(args.calo_calib_macro)
-    manager.add_file_to_check(args.HIJetReco_macro)
-    manager.add_dir_to_check(args.src_dir)
-
-    calib_list = Path(args.calib).resolve() if args.calib else None
-    if calib_list:
-        manager.add_file_to_check(calib_list)
-
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Calib List': calib_list if calib_list else "Not Provided (Using default)",
-        'Jet pT Min': f"{args.jet_pt_min} GeV",
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
-        'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-
-    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro]
-    if calib_list:
-        extra_files.append(calib_list)
-
-    manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
-
-    calib_map = parse_calib_list(calib_list, manager.logger)
-
-    jobs_file = manager.output_dir / 'jobs.list'
-    jobs_file.unlink(missing_ok=True)
-
-    with open(manager.input_list, mode='r', encoding='utf-8') as file_in, \
-         open(jobs_file, mode='w', encoding='utf-8') as file_out:
-        for line in file_in:
-            line = line.strip()
-            if not line:
-                continue
-
-            if not calib_map:
-                file_out.write(f'{line},default\n')
-            else:
-                line_path = Path(line).resolve()
-                try:
-                    run = line_path.stem.split('-')[3].lstrip('0')
-                    if run in calib_map:
-                        file_out.write(f'{line},{calib_map[run]}\n')
-                    else:
-                        file_out.write(f'{line},default\n')
-                except IndexError:
-                    manager.logger.warning(f"Could not parse run number from {line}. Using default.")
-                    file_out.write(f'{line},default\n')
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst_global) $(input_dst_jet) $(input_dst_g4hit) $(input_dst_calo) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.jet_pt_min} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_calib from jobs.list")
-
-def create_f4a_nobkgsub_jobs(args):
-    manager = CondorJobManager(args, job_name="F4A NoBkgSub")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_file_to_check(args.calo_calib_macro)
-    manager.add_file_to_check(args.NoBkgdSubJetReco_macro)
-    manager.add_dir_to_check(args.src_dir)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
-        'NoBkgdSubJetReco Macro': Path(args.NoBkgdSubJetReco_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    extra_files = [args.f4a_macro, args.calo_calib_macro, args.NoBkgdSubJetReco_macro]
-    manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
-def create_f4a_noise_jobs(args):
-    manager = CondorJobManager(args, job_name="F4A Noise")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_dir_to_check(args.src_dir)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro], extra_dirs=[args.src_dir])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
-def create_f4a_calofittingqa_jobs(args):
-    manager = CondorJobManager(args, job_name="F4A CaloFittingQA")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
 def create_f4a_sepdqa_jobs(args):
     manager = CondorJobManager(args, job_name="F4A sEPDQA")
     manager.add_file_to_check(args.f4a_macro)
@@ -830,13 +680,13 @@ def create_f4a_sepdqa_jobs(args):
     manager.finalize_submission(queue_arg="input_dst from jobs.list")
 
 def setup_f4a_subparsers(subparsers):
-    f4a = subparsers.add_parser('f4a', parents=[get_common_parser()], help='Create condor submission directory.')
+    f4a = subparsers.add_parser('f4a', parents=[get_common_parser()], help='Create condor submission directory for Fun4All_BkgSub (data, or data+MC overlay with --overlay).')
     add_build_args(f4a)
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
     f4a.add_argument('-i4_calib', '--zs-calib', dest='zs_calib', type=str, default=None, help='List of ZS cross calib T0 files (CEMC/HCALIN/HCALOUT per run), used by Fun4All_BkgSub. Runs without an entry fall back to the CDB. (Optional)')
     f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file: one event ID per line (used by every job), or a run,event CSV (header "run,event", Fun4All_BkgSub only) that is split per job by segment = event // 100000, dropping jobs without listed events. (Optional)')
-    f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD.C', help='Fun4All Macro.')
+    f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_BkgSub.C', help='Fun4All Macro.')
     f4a.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
     f4a.add_argument('--do-flow', type=int, default=3, help='Flow modulation configuration for JetReco/QA (default=3)')
@@ -850,7 +700,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut, used with --overlay. Default: 10 GeV.')
     f4a.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut, used with --overlay. Default: 5 GeV.')
     f4a.add_argument('--input-check-macro', type=str, default='macros/check_overlay_inputs.C', help='Input check macro, run by each --overlay job on its DST copies before Fun4All_BkgSub (inputs still being written are logged to failures/failure-log.txt).')
-    f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All.sh', func=create_f4a_jobs)
+    f4a.set_defaults(memory=1.5, condor_script='scripts/genFun4All_BkgSub.sh', func=create_f4a_jobs)
 
     f4a_zdc = subparsers.add_parser('f4a_zdc', parents=[get_common_parser()], help='Create condor submission directory.')
     add_build_args(f4a_zdc, myinstall=False)
@@ -863,11 +713,6 @@ def setup_f4a_subparsers(subparsers):
     f4a_sepd_calib.add_argument('-n3', '--log-interval', type=int, default=5000, help='Logging Event Frequency. Default: 5000.')
     f4a_sepd_calib.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_Calib.C', help='Fun4All Macro.')
     f4a_sepd_calib.set_defaults(memory=0.5, condor_script='scripts/genFun4All_sEPD_Calib.sh', func=create_f4a_sepd_calib_jobs)
-
-    f4a_mc = subparsers.add_parser('f4a_mc', parents=[get_common_parser()], help='Create condor submission directory.')
-    add_build_args(f4a_mc)
-    f4a_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_MC.C', help='Fun4All Macro.')
-    f4a_mc.set_defaults(dbtag='MDC2', dst_per_job=500, memory=0.5, condor_script='scripts/genFun4All_MC.sh', func=create_f4a_mc_jobs)
 
     f4a_pp_jes = subparsers.add_parser('f4a_pp_jes', parents=[get_common_parser()], help='Create condor submission directory for the p+p MC JES (Fun4All_PP_JES).')
     add_build_args(f4a_pp_jes)
@@ -888,32 +733,6 @@ def setup_f4a_subparsers(subparsers):
     f4a_hijing_jes.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut. Default: 10 GeV.')
     f4a_hijing_jes.add_argument('--truth-jet-pt-min', type=float, default=5, help='Truth jet pT min cut. Default: 5 GeV.')
     f4a_hijing_jes.set_defaults(dbtag='MDC2', dst_per_job=10, memory=1.5, condor_script='scripts/genFun4All_PP_JES.sh', func=create_f4a_hijing_jes_jobs)
-
-    f4a_data_mc = subparsers.add_parser('f4a_data_mc', parents=[get_common_parser()], help='Create condor submission directory.')
-    add_build_args(f4a_data_mc)
-    f4a_data_mc.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
-    f4a_data_mc.add_argument('-c', '--jet-pt-min', type=float, default=10, help='Jet pT min cut. Default: 10 GeV.')
-    f4a_data_mc.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_DataMC.C', help='Fun4All Macro.')
-    f4a_data_mc.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
-    f4a_data_mc.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/HIJetReco.C', help='HIJetReco Macro.')
-    f4a_data_mc.set_defaults(memory=0.5, condor_script='scripts/genFun4All_DataMC.sh', func=create_f4a_data_mc_jobs)
-
-    f4a_nobkgsub = subparsers.add_parser('f4a_nobkgsub', parents=[get_common_parser()], help='Create condor submission directory for NoBkgSub.')
-    add_build_args(f4a_nobkgsub)
-    f4a_nobkgsub.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_NoBkgSub.C', help='Fun4All Macro.')
-    f4a_nobkgsub.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
-    f4a_nobkgsub.add_argument('-f6', '--NoBkgdSubJetReco-macro', type=str, default='macros/NoBkgdSubJetReco.C', help='NoBkgdSubJetReco Macro.')
-    f4a_nobkgsub.set_defaults(memory=1.5, condor_script='scripts/genFun4All_NoBkgSub.sh', func=create_f4a_nobkgsub_jobs)
-
-    f4a_noise = subparsers.add_parser('f4a_noise', parents=[get_common_parser()], help='Create condor submission directory for Noise.')
-    add_build_args(f4a_noise)
-    f4a_noise.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_Noise.C', help='Fun4All Macro.')
-    f4a_noise.set_defaults(memory=1.5, condor_script='scripts/genFun4All_Noise.sh', func=create_f4a_noise_jobs)
-
-    f4a_calofittingqa = subparsers.add_parser('f4a_calofittingqa', parents=[get_common_parser()], help='Create condor submission directory for CaloFittingQA.')
-    add_build_args(f4a_calofittingqa)
-    f4a_calofittingqa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_sEPD_CaloFittingQA.C', help='Fun4All Macro.')
-    f4a_calofittingqa.set_defaults(memory=1.5, condor_script='scripts/genFun4All_CaloFittingQA.sh', func=create_f4a_calofittingqa_jobs)
 
     f4a_sepdqa = subparsers.add_parser('f4a_sepdqa', parents=[get_common_parser()], help='Create condor submission directory for sEPDQA.')
     add_build_args(f4a_sepdqa)

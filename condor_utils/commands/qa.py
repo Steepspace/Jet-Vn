@@ -4,28 +4,6 @@ from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list
 from condor_utils.cli import get_common_parser, add_build_args
 
-def create_calo_qa_jobs(args):
-    manager = CondorJobManager(args, job_name="Calo QA")
-    manager.add_file_to_check(args.f4a_macro)
-    manager.add_file_to_check(args.calo_calib_macro)
-    manager.add_dir_to_check(args.src_dir)
-    manager.validate_paths()
-
-    manager.log_initialization({
-        'Fun4All Macro': Path(args.f4a_macro).resolve(),
-        'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
-        'Source Directory': Path(args.src_dir).resolve()
-    })
-
-    files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro], extra_dirs=[args.src_dir])
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
-
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
-    manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
-
 def create_event_qa_jobs(args):
     manager = CondorJobManager(args, job_name="Event QA")
     manager.add_file_to_check(args.f4a_macro)
@@ -118,18 +96,6 @@ def create_sepd_qa_jobs(args):
     manager.finalize_submission(queue_arg=queue_arg, sub_file_name=sub_file_name)
 
 def setup_qa_subparsers(subparsers):
-    # calo_qa
-    calo_qa = subparsers.add_parser('calo_qa', parents=[get_common_parser()], help='Create condor submission directory.')
-    add_build_args(calo_qa)
-    calo_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/Fun4All_CaloQA.C', help='Fun4All Macro.')
-    calo_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/Calo_Calib.C', help='Calo_Calib Macro.')
-    calo_qa.set_defaults(
-        dst_per_job=1,
-        memory=1.5,
-        condor_script='scripts/genFun4All_CaloQA.sh',
-        func=create_calo_qa_jobs
-    )
-
     # event_qa
     event_qa = subparsers.add_parser('event_qa', parents=[get_common_parser()], help='Create condor submission directory for Event QA.')
     add_build_args(event_qa)

@@ -63,45 +63,9 @@ set(STANDALONE_MACRO_LIBS
 # ====================================================================
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
-# --- Fun4All_sEPD ---
-add_executable(Fun4All_sEPD macros/Fun4All_sEPD.C)
-target_link_libraries(Fun4All_sEPD PRIVATE
-    ROOT::Core # Needs explicit Core for gSystem
-    ${ROOT_LIBS}
-    ${SPHENIX_LIBS}
-    ${MY_LIBS}
-)
-
 # --- Fun4All_CaloCheck ---
 add_executable(Fun4All_CaloCheck macros/Fun4All_CaloCheck.C)
 target_link_libraries(Fun4All_CaloCheck PRIVATE
-    ROOT::Core # Needs explicit Core for gSystem
-    ${ROOT_LIBS}
-    ${SPHENIX_LIBS}
-    ${MY_LIBS}
-)
-
-# --- Fun4All_CaloQA ---
-add_executable(Fun4All_CaloQA macros/Fun4All_CaloQA.C)
-target_link_libraries(Fun4All_CaloQA PRIVATE
-    ROOT::Core # Needs explicit Core for gSystem
-    ${ROOT_LIBS}
-    ${SPHENIX_LIBS}
-    ${MY_LIBS}
-)
-
-# --- Fun4All_Jet ---
-add_executable(Fun4All_Jet macros/Fun4All_Jet.C)
-target_link_libraries(Fun4All_Jet PRIVATE
-    ROOT::Core # Needs explicit Core for gSystem
-    ${ROOT_LIBS}
-    ${SPHENIX_LIBS}
-    ${MY_LIBS}
-)
-
-# --- Fun4All_sEPD_DataMC ---
-add_executable(Fun4All_sEPD_DataMC macros/Fun4All_sEPD_DataMC.C)
-target_link_libraries(Fun4All_sEPD_DataMC PRIVATE
     ROOT::Core # Needs explicit Core for gSystem
     ${ROOT_LIBS}
     ${SPHENIX_LIBS}

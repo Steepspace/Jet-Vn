@@ -30,12 +30,11 @@ These commands generate Condor submissions for Fun4All QA tasks.
 
 **Commands:**
 - `event_qa`: Runs Event QA (`macros/Fun4All_EventQA.C`).
-- `calo_qa`: Runs Calorimeter QA (`bin/Fun4All_CaloQA`).
 - `centrality_qa`: Runs Centrality QA (`bin/Fun4All_CentralityQA`).
 
 **Example Usage:**
 ```bash
-python3 utils.py calo_qa -i files/run3auau/<list_file>.list -o scratch/calo_qa/ -n 0
+python3 utils.py event_qa -i files/run3auau/<list_file>.list -o scratch/event_qa/ -n 0
 ```
 *(Use `-n 0` to process all events).*
 
@@ -45,15 +44,13 @@ python3 utils.py calo_qa -i files/run3auau/<list_file>.list -o scratch/calo_qa/ 
 These commands generate Condor jobs for the core Fun4All analysis.
 
 **Commands:**
-- `f4a`: Standard sEPD Fun4All job.
+- `f4a`: Fun4All_BkgSub job (default macro; `--overlay` for data+MC overlay).
 - `f4a_zdc`: ZDC-specific Fun4All job.
 - `f4a_sepd_calib`: sEPD Calibration Fun4All job.
-- `f4a_mc`: Monte Carlo analysis job.
-- `f4a_data_mc`: Data/MC analysis job that utilizes Q Vector Calibrations.
 
-**Example Usage (f4a_data_mc):**
+**Example Usage (f4a):**
 ```bash
-python3 utils.py f4a_data_mc -i files/run3auau/runs.list --calib files/calibrations.txt -o scratch/f4a_data_mc/
+python3 utils.py f4a -i files/run3auau/runs.list --calib files/calibrations.txt -o scratch/f4a/
 ```
 **What it does:**
 - Validates the required macros and directories (`src/`, `macros/`, etc.).
