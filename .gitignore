@@ -62,6 +62,9 @@ packages/**/.cache/
 /.clang-format
 /.claude/settings.local.json
 
+# untracked files in the deprecated/ directories (the tracked ones stay tracked)
+deprecated/
+
 # core/: builds.sh builds from these links; only the two into packages/ are portable
 /core/*
 !/core/sepdvalidation
