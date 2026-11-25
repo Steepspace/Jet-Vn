@@ -60,23 +60,23 @@ python3 utils.py f4a -i files/run3auau/runs.list --calib files/calibrations.txt 
 
 ---
 
-## 4. Jet Analysis (`jetAna`)
-Runs the `Jet-Ana` binary over the TTree files produced by the `f4a` step.
+## 4. Jet Analysis (`jetAnav3`, `jetDijet`, `jetJES`)
+Runs the `Jet-Anav3` / `Jet-Dijet` / `Jet-JES` binaries (`macros/`) over the TTree files produced by the `f4a` step.
 
 **Usage:**
 ```bash
-python3 utils.py jetAna -i lists/f4a_trees.list -i2 lists/f4a_qa.list -o scratch/jetAna/ --jet-pt-min 10
+python3 utils.py jetAnav3 -i lists/f4a_trees.list -i2 lists/calo_mbd.list -o scratch/jetAnav3/ --jet-pt-min 10
 ```
 **What it does:**
-- Groups input TTrees by run ID to ensure no mixing across runs.
+- Groups input TTrees by run ID to ensure no mixing across runs (`jetJES`: by pT-hat sample).
 - Splits the inputs into batches (default: 100 trees per job).
-- Matches inputs against the corresponding QA outputs.
-- Submits Condor jobs to run the `Jet-Ana` binary.
+- Matches inputs against the corresponding Calo-MBD selection files.
+- Submits Condor jobs to run the analysis binary.
 
 ---
 
 ## 5. Merging Output (`hadd`)
-A two-stage Condor procedure for hierarchically merging (`hadd`) the many output ROOT files produced by `f4a` or `jetAna`.
+A two-stage Condor procedure for hierarchically merging (`hadd`) the many output ROOT files produced by `f4a` or the jet analysis.
 
 **Usage:**
 ```bash

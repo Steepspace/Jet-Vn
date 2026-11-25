@@ -88,30 +88,6 @@ target_link_libraries(checkTree PRIVATE ${STANDALONE_MACRO_LIBS})
 add_executable(createGlobalBadTowerMap macros/CDB/createGlobalBadTowerMap.C)
 target_link_libraries(createGlobalBadTowerMap PRIVATE ${STANDALONE_MACRO_LIBS})
 
-# --- displayHotMap ---
-add_executable(displayHotMap macros/displayHotMap.C)
-target_link_libraries(displayHotMap PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- Bad Tower Map Analysis ---
-add_executable(badTowMapAna macros/BadTowerMapsAnalysis.C)
-target_link_libraries(badTowMapAna PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- Q vector Correction ---
-add_executable(Q_vec_corr macros/Q-vector-correction.C)
-target_link_libraries(Q_vec_corr PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- Q vector Correction v2 ---
-add_executable(Q-vec-corrv2 macros/Q-vector-correctionv2.C)
-target_link_libraries(Q-vec-corrv2 PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- Jet Ana ---
-add_executable(Jet-Ana macros/Jet-Ana.C)
-target_link_libraries(Jet-Ana PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- Jet Ana v2 ---
-add_executable(Jet-Anav2 macros/Jet-Anav2.C)
-target_link_libraries(Jet-Anav2 PRIVATE ${STANDALONE_MACRO_LIBS})
-
 # --- Jet Ana v3 ---
 add_executable(Jet-Anav3 macros/Jet-Anav3.C)
 target_link_libraries(Jet-Anav3 PRIVATE ${STANDALONE_MACRO_LIBS})
@@ -124,59 +100,9 @@ target_link_libraries(Jet-Dijet PRIVATE ${STANDALONE_MACRO_LIBS})
 add_executable(Jet-JES macros/Jet-JES.C)
 target_link_libraries(Jet-JES PRIVATE ${STANDALONE_MACRO_LIBS})
 
-# --- Calo Ana ---
-add_executable(Calo-Ana macros/Calo-Ana.C)
-target_link_libraries(Calo-Ana PRIVATE ${STANDALONE_MACRO_LIBS})
-
 # --- sEPD QA ---
 add_executable(sEPD-QA macros/sEPD-QA.C)
 target_link_libraries(sEPD-QA PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display ---
-add_executable(display macros/display.C)
-target_link_libraries(display PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- displayQA ---
-add_executable(displayQA macros/display-QA.C)
-target_link_libraries(displayQA PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- displayv2 ---
-add_executable(displayv2 macros/displayv2.C)
-target_link_libraries(displayv2 PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-Jet-Ana ---
-add_executable(display-Jet-Ana macros/display-Jet-Ana.C)
-target_link_libraries(display-Jet-Ana PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-Jet-Anav3 ---
-add_executable(display-Jet-Anav3 macros/display-Jet-Anav3.C)
-target_link_libraries(display-Jet-Anav3 PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-Jet-Anav6 ---
-add_executable(display-Jet-Anav6 macros/display-Jet-Anav6.C)
-target_link_libraries(display-Jet-Anav6 PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-CentralityQA ---
-add_executable(display-CentralityQA macros/display-CentralityQA.C)
-target_link_libraries(display-CentralityQA PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-DataMC ---
-add_executable(display-DataMC macros/display-DataMC.C)
-target_link_libraries(display-DataMC PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display-SEPD-QA ---
-add_executable(display-sEPD-QA macros/display-sEPD-QA.C)
-target_link_libraries(display-sEPD-QA PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# --- display Q vector correction ---
-add_executable(display-Q-vec macros/display-Q-vec.C)
-target_link_libraries(display-Q-vec PRIVATE ${STANDALONE_MACRO_LIBS})
-
-# ---------------------------------
-# sEPD Performance
-add_executable(display-sEPD-Psi macros/sEPD-Performance/display-sEPD-Psi.C)
-target_link_libraries(display-sEPD-Psi PRIVATE ${STANDALONE_MACRO_LIBS})
-# ---------------------------------
 
 # ====================================================================
 # Optional: Add a Cppcheck Target

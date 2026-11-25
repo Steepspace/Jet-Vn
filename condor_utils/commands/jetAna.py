@@ -59,9 +59,7 @@ def parse_window(text):
 
 def run_jet_jobs(args, version):
     manager = CondorJobManager(args, job_name=version)
-    if version == "jetAna":
-        manager.add_file_to_check(args.f4a_qa_list)
-    elif version == "jetAnav3":
+    if version == "jetAnav3":
         manager.add_file_to_check(args.calo_mbd_list)
         if args.jes_z0_file:
             manager.add_file_to_check(args.jes_z0_file)
@@ -98,22 +96,7 @@ def run_jet_jobs(args, version):
         'Jet Ana Bin': Path(args.jetAna_bin).resolve(),
     }
 
-    if version == "jetAna":
-        jet_radius_type = args.jet_radius_type
-        R_values = {2: 0.2, 3: 0.3}
-        R_value = R_values.get(jet_radius_type)
-        if R_value is not None:
-            jet_eta_max = 1.1 - R_value
-        else:
-            manager.logger.critical(f'Invalid jet_radius_type: {jet_radius_type}')
-            sys.exit(1)
-        init_log['Input F4A QA List'] = Path(args.f4a_qa_list).resolve()
-        init_log['Jet eta Max'] = jet_eta_max
-        init_log['Jet Radius Type'] = jet_radius_type
-    elif version == "jetAnav2":
-        jet_eta_max = args.jet_eta_max
-        init_log['Jet eta Max'] = jet_eta_max
-    elif version == "jetAnav3":
+    if version == "jetAnav3":
         init_log['Calo-MBD List'] = Path(args.calo_mbd_list).resolve()
         init_log['Do Iter'] = args.do_iter
         init_log['Do Mult'] = args.do_mult
@@ -214,12 +197,9 @@ def run_jet_jobs(args, version):
     else:
         groups = [(run_id, run_id, trees, "") for run_id, trees in run_trees.items()]
 
-    if version == "jetAna":
-        run_paths = [Path(l.strip()) for l in Path(args.f4a_qa_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
-        run_map = {p.stem: str(p) for p in run_paths}
-    elif version == "jetJES" and mc_only:
+    if version == "jetJES" and mc_only:
         run_map = {}
-    elif version in ("jetAnav3", "jetDijet", "jetJES"):
+    else:
         run_paths = [Path(l.strip()) for l in Path(args.calo_mbd_list).resolve().read_text(encoding='utf-8').splitlines() if l.strip()]
         run_map = {}
         for p in run_paths:
@@ -232,14 +212,9 @@ def run_jet_jobs(args, version):
 
     with open(jobs_list_file, mode='w', encoding='utf-8') as f_jobs:
         for run_id, tag, trees, extra in groups:
-            if version == "jetAna":
-                if run_id not in run_map:
-                    manager.logger.warning(f"Run {run_id} found in input trees but not in QA list. Skipping.")
-                    continue
-                qa_file = run_map[run_id]
-            elif version == "jetJES" and mc_only:
+            if version == "jetJES" and mc_only:
                 qa_file = "none"
-            elif version in ("jetAnav3", "jetDijet", "jetJES"):
+            else:
                 qa_file = run_map.get(run_id) or run_map.get(run_id.lstrip('0'))
                 if not qa_file:
                     manager.logger.warning(f"Run {run_id} found in input trees but not in Calo-MBD list. Skipping.")
@@ -249,21 +224,12 @@ def run_jet_jobs(args, version):
                 chunk_file = files_dir / f'{tag}_part_{i}.list'
                 chunk_file.write_text("\n".join(chunk) + "\n", encoding='utf-8')
 
-                if version in ("jetAna", "jetAnav3", "jetDijet", "jetJES"):
-                    f_jobs.write(f"{chunk_file},{qa_file}{extra}\n")
-                else:
-                    f_jobs.write(f"{chunk_file}\n")
+                f_jobs.write(f"{chunk_file},{qa_file}{extra}\n")
                 total_jobs += 1
 
     manager.logger.info(f"Total jobs prepared: {total_jobs}")
 
-    if version == "jetAna":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_f4a_qa) {jet_pt_min} {jet_eta_max} {jet_radius_type} {manager.output_dir}/output"
-        queue_arg = "input_tree_list,input_f4a_qa from jobs.list"
-    elif version == "jetAnav2":
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {jet_eta_max} {manager.output_dir}/output"
-        queue_arg = "input_tree_list from jobs.list"
-    elif version == "jetAnav3":
+    if version == "jetAnav3":
         # the timing correction files are read in place by the jobs: pass absolute paths
         timing_files = " ".join(str(Path(f).resolve()) if f else "none" for f in (args.timing_fc_file, args.timing_lines_file))
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {jet_pt_min} {manager.output_dir}/output {args.do_iter} {args.do_mult} {args.do_unsub} {args.do_rcone} {args.lead_jet_pt_threshold} {args.sigma_cut} {args.jes_z0_file or 'none'} {args.iter_is_noflow} {timing_files}"
@@ -276,19 +242,10 @@ def run_jet_jobs(args, version):
     elif version == "jetJES":
         arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) $(input_calo_mbd) {manager.output_dir}/output $(lead_truth_pt_min) $(lead_truth_pt_max) {args.sigma_cut} $(sample) {jes_mode(args)} {args.dump_pt_min}"
         queue_arg = "input_tree_list,input_calo_mbd,lead_truth_pt_min,lead_truth_pt_max,sample from jobs.list"
-    else:
-        arguments = f"{manager.output_dir / Path(args.jetAna_bin).name} $(input_tree_list) {jet_pt_min} {manager.output_dir}/output"
-        queue_arg = "input_tree_list from jobs.list"
 
     sub_file_name = f"{manager.condor_script.stem}.sub"
     manager.write_submit_file(arguments=arguments, sub_file_name=sub_file_name)
     manager.finalize_submission(queue_arg=queue_arg, sub_file_name=sub_file_name)
-
-def jetAna_jobs(args):
-    run_jet_jobs(args, "jetAna")
-
-def jetAnav2_jobs(args):
-    run_jet_jobs(args, "jetAnav2")
 
 def jetAnav3_jobs(args):
     run_jet_jobs(args, "jetAnav3")
@@ -316,19 +273,6 @@ def add_common_args(parser, name_suffix):
     parser.add_argument('-f4', '--common-errors', type=str, default='files/common-errors.txt', help='Common Errors.')
 
 def setup_jetAna_subparsers(subparsers):
-    jetAna = subparsers.add_parser('jetAna', help='jetAna condor jobs.')
-    add_common_args(jetAna, "Ana")
-    add_build_args(jetAna, myinstall=False)
-    jetAna.add_argument('-i2', '--f4a-qa-list', type=str, required=True, help='List of F4A QA.')
-    jetAna.add_argument('-j2', '--jet-radius-type', type=float, default=3, help='Jet Radius Type. Default: 3 (i.e. R = 0.3)')
-    jetAna.set_defaults(func=jetAna_jobs)
-
-    jetAnav2 = subparsers.add_parser('jetAnav2', help='jetAnav2 condor jobs.')
-    add_common_args(jetAnav2, "Anav2")
-    add_build_args(jetAnav2, myinstall=False)
-    jetAnav2.add_argument('-e', '--jet-eta-max', type=float, default=0.9, help='Maximum Jet eta. Default: 0.9')
-    jetAnav2.set_defaults(func=jetAnav2_jobs)
-
     jetAnav3 = subparsers.add_parser('jetAnav3', help='jetAnav3 condor jobs.')
     add_common_args(jetAnav3, "Anav3")
     add_build_args(jetAnav3)
