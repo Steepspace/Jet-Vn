@@ -11,6 +11,35 @@ from concurrent.futures import ThreadPoolExecutor
 from condor_utils.core.logging import setup_logging
 from condor_utils.core.helpers import run_command_and_log, get_line_count, get_best_submit_node
 
+LOCAL_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
+MACRO_SUFFIXES = ('.C', '.h', '.hpp', '.cc', '.cpp')
+
+def with_local_includes(files, logger=None):
+    """
+    The files plus the local macros they #include "..." (e.g. Calo_Calib.C, Provenance.C), recursively,
+    resolved against the including file's directory. The jobs run the macro copies in the submit
+    directory, so these must be copied next to them. Includes that do not exist there (system
+    headers given with quotes) are skipped. Returns resolved paths, each once, in discovery order.
+    """
+    result = []
+    todo = [Path(f).resolve() for f in files if f]
+    while todo:
+        path = todo.pop(0)
+        if path in result:
+            continue
+        result.append(path)
+        if path.suffix not in MACRO_SUFFIXES or not path.is_file():
+            continue
+        for inc in LOCAL_INCLUDE.findall(path.read_text(errors='ignore')):
+            inc_path = (path.parent / inc).resolve()
+            if not inc_path.is_file():
+                continue
+            if '/' in inc and logger:
+                # copied flat: an include through a subdirectory would not resolve in the submit directory
+                logger.warning(f'{path.name} includes "{inc}" from another directory, it is copied flat as {inc_path.name}')
+            todo.append(inc_path)
+    return result
+
 def find_build_dir(build):
     """
     Resolves a build tag (e.g. new, new.20, ana, ana.576) to its release directory, using the same
@@ -297,9 +326,8 @@ class CondorJobManager:
             shutil.copy(self.common_errors, self.output_dir)
 
         if extra_files:
-            for f in extra_files:
-                if f:
-                    shutil.copy(Path(f).resolve(), self.output_dir)
+            for f in with_local_includes(extra_files, self.logger):
+                shutil.copy(f, self.output_dir)
 
         if extra_dirs:
             for d in extra_dirs:
