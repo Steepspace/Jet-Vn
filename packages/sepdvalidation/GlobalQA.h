@@ -83,10 +83,12 @@ class GlobalQA : public SubsysReco
 
   // Event plane detectors (South, North, North+South) and Q vector calibration stages
   static constexpr unsigned int kNEPDet{3};
+  static constexpr std::array<unsigned int, 2> kEPHarmonics{2, 3};  // Q vector harmonics stored in the tree
   static constexpr unsigned int kNQStage{3};      // raw, recentered, recentered + flattened
   static constexpr unsigned int kNQMoment{5};     // Qx, Qy, Qx^2, Qy^2, QxQy
   static constexpr unsigned int kNFlatTerms{4};   // cos/sin(2k Psi_2), k = 1..4
   static constexpr unsigned int kNArm{2};         // sEPD South, North
+  static constexpr std::array<const char *, kNArm> kArmNames{"S", "N"};  // tree branch suffixes
 
   // EventPlaneReco calibrates centralities in [0, m_ep_calib_cent_max) %
   double m_ep_calib_cent_max{80};
@@ -208,14 +210,18 @@ class GlobalQA : public SubsysReco
 
   struct EventData
   {
-    // sEPD - Event Plane
-    double psi2_raw_S{0};
-    double psi2_raw_N{0};
-    double psi2_raw_NS{0};
+    // sEPD - Psi_2 of the calibrated North+South Q vector, as used by the UE subtraction
+    // (DetermineTowerBackground, do_flow = 3: get_shifted_psi(2)); NaN if not filled or Q = (0, 0)
+    double psi2_NS{std::numeric_limits<double>::quiet_NaN()};
 
-    double psi2_S{0};
-    double psi2_N{0};
-    double psi2_NS{0};
+    // sEPD - Q vectors per arm (South, North), each indexed by harmonic (kEPHarmonics: n = 2, 3).
+    // Normalized by the arm's sEPD charge (EventPlaneReco); Psi_n = atan2(qy, qx) / n.
+    // qx/qy: recentered + flattened, equal to the raw Q unless ep_status == EP_CALIBRATED
+    std::array<std::vector<float>, kNArm> qx_raw;
+    std::array<std::vector<float>, kNArm> qy_raw;
+    std::array<std::vector<float>, kNArm> qx;
+    std::array<std::vector<float>, kNArm> qy;
+    int ep_status{-1};  // EPStatus, -1 if not filled
 
     // sEPD - QA
     double sepd_charge_south{0};

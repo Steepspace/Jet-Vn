@@ -52,14 +52,18 @@ int GlobalQA::Init([[maybe_unused]] PHCompositeNode *topNode)
     {
       if (m_do_ep)
       {
-        // sEPD - Event Plane
-        tree->Branch("psi2_raw_S", &m_data.psi2_raw_S);
-        tree->Branch("psi2_raw_N", &m_data.psi2_raw_N);
-        tree->Branch("psi2_raw_NS", &m_data.psi2_raw_NS);
-
-        tree->Branch("psi2_S", &m_data.psi2_S);
-        tree->Branch("psi2_N", &m_data.psi2_N);
+        // sEPD - Event Plane: Psi_2 used by the UE subtraction, Q vectors per arm (n = 2, 3 per entry)
+        // and calibration status
         tree->Branch("psi2_NS", &m_data.psi2_NS);
+        for (unsigned int arm = 0; arm < kNArm; ++arm)
+        {
+          const std::string arm_name = kArmNames[arm];
+          tree->Branch(("qx_raw_" + arm_name).c_str(), &m_data.qx_raw[arm]);
+          tree->Branch(("qy_raw_" + arm_name).c_str(), &m_data.qy_raw[arm]);
+          tree->Branch(("qx_" + arm_name).c_str(), &m_data.qx[arm]);
+          tree->Branch(("qy_" + arm_name).c_str(), &m_data.qy[arm]);
+        }
+        tree->Branch("ep_status", &m_data.ep_status);
       }
 
       if (m_do_sepd)
@@ -384,15 +388,24 @@ int GlobalQA::process_event_plane(PHCompositeNode *topNode)
   double _2psi2_N = 2*epd_N->GetPsi(Q_N_2.first, Q_N_2.second, 2);
   double _2psi2_NS = 2*epd_NS->GetPsi(Q_NS_2.first, Q_NS_2.second, 2);
 
-  m_data.psi2_raw_S = _2psi2_raw_S;
-  m_data.psi2_raw_N = _2psi2_raw_N;
-  m_data.psi2_raw_NS = _2psi2_raw_NS;
-
-  m_data.psi2_S = _2psi2_S;
-  m_data.psi2_N = _2psi2_N;
-  m_data.psi2_NS = _2psi2_NS;
-
   EPStatus status = get_ep_status(epd_S, epd_N, epd_NS);
+  m_data.ep_status = status;
+  m_data.psi2_NS = epd_NS->get_shifted_psi(2);
+
+  // Q vectors of all harmonics per arm, raw and calibrated
+  const std::array<const Eventplaneinfo *, kNArm> ep_arms = {epd_S, epd_N};
+  for (unsigned int arm = 0; arm < kNArm; ++arm)
+  {
+    for (unsigned int n : kEPHarmonics)
+    {
+      const auto [qx_raw, qy_raw] = ep_arms[arm]->get_qvector_raw(n);
+      const auto [qx, qy] = ep_arms[arm]->get_qvector(n);
+      m_data.qx_raw[arm].push_back(static_cast<float>(qx_raw));
+      m_data.qy_raw[arm].push_back(static_cast<float>(qy_raw));
+      m_data.qx[arm].push_back(static_cast<float>(qx));
+      m_data.qy[arm].push_back(static_cast<float>(qy));
+    }
+  }
 
   if (m_do_hist)
   {
@@ -482,8 +495,8 @@ int GlobalQA::process_event_plane(PHCompositeNode *topNode)
   if (Verbosity() > 0)
   {
     std::cout << "GlobalQA::process_event_plane - [Event " << event_id << "] "
-              << "psi2_raw (S/N/NS): " << m_data.psi2_raw_S << " / " << m_data.psi2_raw_N << " / " << m_data.psi2_raw_NS
-              << " | psi2 (S/N/NS): " << m_data.psi2_S << " / " << m_data.psi2_N << " / " << m_data.psi2_NS
+              << "2psi2_raw (S/N/NS): " << _2psi2_raw_S << " / " << _2psi2_raw_N << " / " << _2psi2_raw_NS
+              << " | 2psi2 (S/N/NS): " << _2psi2_S << " / " << _2psi2_N << " / " << _2psi2_NS
               << std::endl;
   }
   if (Verbosity() > 1)
@@ -706,13 +719,15 @@ int GlobalQA::process_mbd(PHCompositeNode *topNode)
 int GlobalQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
 {
   // sEPD - Event Plane
-  m_data.psi2_raw_S = 0;
-  m_data.psi2_raw_N = 0;
-  m_data.psi2_raw_NS = 0;
-
-  m_data.psi2_S = 0;
-  m_data.psi2_N = 0;
-  m_data.psi2_NS = 0;
+  for (unsigned int arm = 0; arm < kNArm; ++arm)
+  {
+    m_data.qx_raw[arm].clear();
+    m_data.qy_raw[arm].clear();
+    m_data.qx[arm].clear();
+    m_data.qy[arm].clear();
+  }
+  m_data.ep_status = -1;
+  m_data.psi2_NS = std::numeric_limits<double>::quiet_NaN();
 
   // sEPD - QA
   m_data.sepd_charge_south = 0;
