@@ -38,6 +38,7 @@
 #include <sepdvalidation/CaloQA.h>
 
 #include "Calo_Calib.C"
+#include "EventPlane_Reco.C"
 #include "Provenance.C"
 
 R__LOAD_LIBRARY(libg4detectors_io.so)
@@ -47,6 +48,7 @@ R__LOAD_LIBRARY(libsEPDValidation.so)
 void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                      const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                      const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
+                     const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/11-25-26-combined/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144.root",
                      const std::string& output = "test.root",
                      int nEvents = 100,
                      const std::string& dbtag = "newcdbtag",
@@ -83,11 +85,19 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
     infile_stream.close();
   }
 
+  // the Q vector calibration must match the run ("default": CDB)
+  if (!CheckEventPlaneCalibRun(input_QVecCalib, runnumber))
+  {
+    return;
+  }
+
   std::cout << "########################" << std::endl;
   std::cout << "Run Parameters" << std::endl;
   std::cout << "input calofit: " << flist_dst_calofit << std::endl;
   std::cout << "input zdc: " << flist_dst_zdc << std::endl;
   std::cout << "input sepd: " << flist_dst_sepd << std::endl;
+  std::cout << "Run: " << runnumber << std::endl;
+  std::cout << "QVec Calib: " << input_QVecCalib << std::endl;
   std::cout << "output: " << output << std::endl;
   std::cout << "nEvents: " << nEvents << std::endl;
   std::cout << "dbtag: " << dbtag << std::endl;
@@ -172,10 +182,13 @@ void Fun4All_EventQA(const std::string &flist_dst_calofit = "DST_CALOFITTING_run
   event_qa->set_zvtx_max(10);
   se->registerSubsystem(event_qa);
 
+  // sEPD Event Plane, on the events EventQA keeps
+  Process_EventPlane_Reco(input_QVecCalib);
+
   // Global QA
   GlobalQA* global_qa = new GlobalQA();
   global_qa->set_do_tree(false);
-  global_qa->set_do_ep(false);
+  global_qa->set_do_ep(true);
   global_qa->set_do_sepd(true);
   global_qa->set_do_mbd(true);
   global_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);

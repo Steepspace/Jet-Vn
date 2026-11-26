@@ -1,31 +1,50 @@
 import math
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.core.helpers import chunk_list
+from condor_utils.core.helpers import chunk_list, parse_calib_list
 from condor_utils.cli import get_common_parser, add_build_args
 
 def create_event_qa_jobs(args):
     manager = CondorJobManager(args, job_name="Event QA")
     manager.add_file_to_check(args.f4a_macro)
     manager.add_file_to_check(args.calo_calib_macro)
+    manager.add_file_to_check(args.ep_reco_macro)
     manager.add_dir_to_check(args.src_dir)
+
+    calib_list = Path(args.calib).resolve() if args.calib else None
+    if calib_list:
+        manager.add_file_to_check(calib_list)
+
     manager.validate_paths()
 
     manager.log_initialization({
+        'Calib List': calib_list if calib_list else "Not Provided (Using CDB)",
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
+        'Event Plane Reco Macro': Path(args.ep_reco_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve(),
         'DST Per Job': args.dst_per_job
     })
 
     files_dir = manager.prepare_directories()
-    manager.copy_dependencies(extra_files=[args.f4a_macro, args.calo_calib_macro], extra_dirs=[args.src_dir])
+    extra_files = [args.f4a_macro, args.calo_calib_macro, args.ep_reco_macro]
+    if calib_list:
+        extra_files.append(calib_list)
+    manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir)
+    # Q vector calibration per run ('default': CDB). Without --calib every job uses the CDB.
+    calib_map = parse_calib_list(calib_list, manager.logger)
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map)
 
-    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
+    if calib_list:
+        jobs = [l for l in (manager.output_dir / 'jobs.list').read_text(encoding='utf-8').splitlines() if l.strip()]
+        n_default = sum(1 for l in jobs if l.rsplit(',', 1)[-1] == 'default')
+        if n_default:
+            manager.logger.warning(f"{n_default} of {len(jobs)} job(s) have no Q vector calib entry for their run, using the CDB")
+
+    arguments = f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
-    manager.finalize_submission(queue_arg="input_dst from jobs.list")
+    manager.finalize_submission(queue_arg="input_dst,input_calib from jobs.list")
 
 
 def create_sepd_qa_jobs(args):
@@ -101,6 +120,8 @@ def setup_qa_subparsers(subparsers):
     add_build_args(event_qa)
     event_qa.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_EventQA.C', help='Fun4All Macro.')
     event_qa.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/fun4all/Calo_Calib.C', help='Calo_Calib Macro.')
+    event_qa.add_argument('-f7', '--ep-reco-macro', type=str, default='macros/fun4all/EventPlane_Reco.C', help='EventPlane_Reco Macro (sEPD event plane, included by Fun4All_EventQA).')
+    event_qa.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations, one file per run (e.g. files/calib/sEPD-EventPlaneCalib.list). Runs without an entry use the CDB. (Optional)')
     event_qa.set_defaults(
         dst_per_job=5,
         memory=1,

@@ -18,15 +18,23 @@ fi
 
 f4a_macro=${1}
 input=${2}
-output=${3}
-nEvents=${4}
-dbtag=${5}
-submitDir=${6}
+input_calib=${3}
+output=${4}
+nEvents=${5}
+dbtag=${6}
+submitDir=${7}
 
 # extract runnumber from file name
 file=$(basename "$input")
 IFS='-' read -r p1 p2 p3 <<< "$file"
 run=$(echo "$p2" | sed 's/^0*//') # Remove leading zeros using sed
+
+# Q vector calibration: a path (copied to scratch) or "default" (CDB)
+if [[ -z "$input_calib" || "$input_calib" == "default" ]]; then
+    calib_file="default"
+else
+    calib_file=$(basename "$input_calib")
+fi
 
 if [[ -n "$_CONDOR_SCRATCH_DIR" && -d "$_CONDOR_SCRATCH_DIR" ]]
 then
@@ -108,6 +116,14 @@ then
         exit 1
     fi
 
+    if [[ "$calib_file" != "default" ]]; then
+        if ! cp -v "$input_calib" .; then
+            echo "Error: Failed to copy Q vector calib $input_calib for $file at $(date) on $(hostname)" >&2
+            echo "copy failure (qvec_calib) for $input_calib in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
+            exit 1
+        fi
+    fi
+
     ls -lah
 else
     echo "condor scratch NOT set" >&2
@@ -120,7 +136,7 @@ printenv
 mkdir -p "$run"
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$run/$output\", $nEvents, \"$dbtag\")"
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/$output\", $nEvents, \"$dbtag\")"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then
