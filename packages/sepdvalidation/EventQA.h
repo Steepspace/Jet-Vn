@@ -173,7 +173,8 @@ class EventQA : public SubsysReco
     int event{0};
     double zvtx{9999};
     double centrality{9999};
-    float t0{std::numeric_limits<float>::quiet_NaN()};  // MBD t0 - main-bunch offset [ns]
+    float t0{std::numeric_limits<float>::quiet_NaN()};      // t0_mbd - MinimumBiasClassifier residual offset [ns]
+    float t0_mbd{std::numeric_limits<float>::quiet_NaN()};  // MBD vertex t0 (MBD t0corr applied), before the residual offset [ns]
   };
 
   EventData m_data;

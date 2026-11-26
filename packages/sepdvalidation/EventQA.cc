@@ -159,6 +159,7 @@ int EventQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       tree->Branch("zvtx", &m_data.zvtx);
       tree->Branch("centrality", &m_data.centrality);
       tree->Branch("t0", &m_data.t0);
+      tree->Branch("t0_mbd", &m_data.t0_mbd);
     }
   }
 
@@ -246,6 +247,14 @@ int EventQA::process_event_check(PHCompositeNode *topNode)
     {
       hEvent->Fill(static_cast<std::uint8_t>(EventType::ZVTX));
     }
+  }
+
+  // MBD vertex t0 (MBD t0corr applied), before the MinimumBiasClassifier residual offset;
+  // same MBD vertex as the classifier uses
+  std::vector<GlobalVertex *> mbd_vtxs = vertexmap->get_gvtxs_with_type({GlobalVertex::VTXTYPE::MBD});
+  if (!mbd_vtxs.empty() && mbd_vtxs.front()->isValid())
+  {
+    m_data.t0_mbd = mbd_vtxs.front()->get_t();
   }
 
   if (m_do_hist)
@@ -673,6 +682,7 @@ int EventQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   m_data.zvtx = 9999;
   m_data.centrality = 9999;
   m_data.t0 = std::numeric_limits<float>::quiet_NaN();
+  m_data.t0_mbd = std::numeric_limits<float>::quiet_NaN();
 
   m_pass_MB = false;
   m_pass_Zvtx = false;
