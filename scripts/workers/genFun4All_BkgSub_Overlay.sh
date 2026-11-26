@@ -32,12 +32,10 @@ dbtag=${12}
 do_flow=${13}
 eta_calib_path=${14}
 do_rcone=${15:-0}
-do_neg_energy_threshold=${16:-1}
-neg_energy_threshold=${17:--2.0}
-jet_pt_min=${18:-10}
-truth_jet_pt_min=${19:-5}
-submitDir=${20}
-input_check_macro=${21} # macros/utils/check_overlay_inputs.C: checks the input copies before the f4a macro
+jet_pt_min=${16:-10}
+truth_jet_pt_min=${17:-5}
+submitDir=${18}
+input_check_macro=${19} # macros/utils/check_overlay_inputs.C: checks the input copies before the f4a macro
 
 # the data-only DST_CALOFITTING (event aligned with the overlay DSTs) sits next to them
 input_calofit=$(ls "$(dirname "$input_global")"/DST_CALOFITTING-*.root 2>/dev/null)
@@ -123,7 +121,7 @@ mkdir -p "$outdir/hist" "$outdir/tree"
 
 # mult is off in overlay mode
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"$file_calofit\", \"$file_zdc\", \"$file_sepd\", \"$calib_file\", \"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"\", $do_rcone, 0, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"$file_calo\", \"$file_jet\", $jet_pt_min, $truth_jet_pt_min)"
+root -b -l -q "$f4a_macro(\"$file_calofit\", \"$file_zdc\", \"$file_sepd\", \"$calib_file\", \"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"\", $do_rcone, 0, \"\", \"$file_calo\", \"$file_jet\", $jet_pt_min, $truth_jet_pt_min)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then

@@ -69,8 +69,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     bool do_rcone = false,
                     bool do_mult = false,
                     const std::string &output_dst = "",
-                    bool do_neg_energy_threshold = true,
-                    float neg_energy_threshold = -2.0F,
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -230,8 +228,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "eta_calib_direct_path: " << eta_calib_direct_path << std::endl;
   std::cout << "do_rcone: " << do_rcone << std::endl;
   std::cout << "do_mult: " << do_mult << std::endl;
-  std::cout << "do_neg_energy_threshold: " << do_neg_energy_threshold << std::endl;
-  std::cout << "neg_energy_threshold: " << neg_energy_threshold << std::endl;
   std::cout << "jet_pt_min: " << jet_pt_min << std::endl;
   if (is_overlay)
   {
@@ -267,9 +263,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   evtSkip->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(evtSkip);
 
-  // Calibrate Towers
-  CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
-  CaloCalib::neg_energy_threshold = neg_energy_threshold;
+  // Calibrate Towers (negative energy threshold: Calo_Calib defaults, on at -2 GeV)
   Process_Calo_Calib();
 
   // Truth Jets (overlay only), on the MC top node: checks that each MC event matches the data
@@ -542,8 +536,6 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     bool do_rcone,
                     bool do_mult,
                     const std::string &output_dst,
-                    bool do_neg_energy_threshold = true,
-                    float neg_energy_threshold = -2.0F,
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -552,6 +544,5 @@ void Fun4All_BkgSub(const std::string &input_dst,
   Fun4All_BkgSub(input_dst, /*flist_dst_zdc=*/"", /*flist_dst_sepd=*/"",
                  input_QVecCalib, output, output_tree, do_flow, nEvents, nSkip, event_id,
                  dbtag, eta_calib_direct_path, event_list, do_rcone, do_mult, output_dst,
-                 do_neg_energy_threshold, neg_energy_threshold,
                  overlay_dst_calo, overlay_dst_truth_jet, jet_pt_min, truth_jet_pt_min);
 }

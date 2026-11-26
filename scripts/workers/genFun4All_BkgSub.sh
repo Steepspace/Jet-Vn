@@ -28,9 +28,7 @@ eta_calib_path=${9}
 event_list_path=${10}
 do_rcone=${11:-0}
 do_mult=${12:-1}
-do_neg_energy_threshold=${13:-1}
-neg_energy_threshold=${14:--2.0}
-submitDir=${15}
+submitDir=${13}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -172,7 +170,7 @@ if [[ -n "$event_list_file" ]]; then
 fi
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"$output_dst\", $do_neg_energy_threshold, $neg_energy_threshold)"
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"$output_dst\")"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then
