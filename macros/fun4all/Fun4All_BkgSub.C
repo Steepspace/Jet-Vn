@@ -77,8 +77,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &zs_calib_cemc = "",
                     const std::string &zs_calib_hcalin = "",
                     const std::string &zs_calib_hcalout = "",
-                    bool do_emfrac_calib = false,
-                    const std::string &emfrac_calib_path = "",
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -272,8 +270,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "zs_calib_cemc: " << zs_calib_cemc << std::endl;
   std::cout << "zs_calib_hcalin: " << zs_calib_hcalin << std::endl;
   std::cout << "zs_calib_hcalout: " << zs_calib_hcalout << std::endl;
-  std::cout << "do_emfrac_calib: " << do_emfrac_calib << std::endl;
-  std::cout << "emfrac_calib_path: " << (emfrac_calib_path.empty() ? "CDB" : emfrac_calib_path) << std::endl;
   std::cout << "jet_pt_min: " << jet_pt_min << std::endl;
   if (is_overlay)
   {
@@ -397,9 +393,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // with do_flow == 0 the default iterative/mult chains are already no-flow
   Enable::HIJETS_TOWER_NOFLOW = (do_flow != 0);
   Enable::HIJETS_TOWER_MULTSUB_NOFLOW = do_mult && (do_flow != 0);
-  // side-by-side EMfrac JES (legacy calib nodes are unchanged)
-  Enable::HIJETS_TOWER_CALIB_EMFRAC = do_emfrac_calib;
-  HIJETS::emfrac_calib_direct_path = emfrac_calib_path;
   HIJetReco();
 
   // Calo QA
@@ -427,7 +420,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   jet_validation->set_do_iter_noflow(Enable::HIJETS_TOWER_NOFLOW);
   jet_validation->set_do_mult_noflow(Enable::HIJETS_TOWER_MULTSUB_NOFLOW);
   jet_validation->set_do_detailed(do_detailed);
-  jet_validation->set_do_emfrac(do_emfrac_calib);
   jet_validation->set_do_timing(true);
   jet_validation->set_do_lead_constituent(true);
   jet_validation->set_jet_pt_min(jet_pt_min);
@@ -595,8 +587,6 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     const std::string &zs_calib_cemc = "",
                     const std::string &zs_calib_hcalin = "",
                     const std::string &zs_calib_hcalout = "",
-                    bool do_emfrac_calib = false,
-                    const std::string &emfrac_calib_path = "",
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -607,6 +597,5 @@ void Fun4All_BkgSub(const std::string &input_dst,
                  dbtag, eta_calib_direct_path, event_list, do_rcone, do_mult, output_dst,
                  do_neg_energy_threshold, neg_energy_threshold,
                  zs_calib_cemc, zs_calib_hcalin, zs_calib_hcalout,
-                 do_emfrac_calib, emfrac_calib_path,
                  overlay_dst_calo, overlay_dst_truth_jet, jet_pt_min, truth_jet_pt_min);
 }

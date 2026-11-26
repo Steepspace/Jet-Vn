@@ -172,7 +172,6 @@ def create_f4a_jobs(args):
         'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
         'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
         'ZS Calib List': zs_calib_list if zs_calib_list else "Not Provided (Using CDB)",
-        'Do EMfrac Calib': bool(getattr(args, 'do_emfrac_calib', 0)),
     }
 
     manager.log_initialization(init_log)
@@ -225,8 +224,7 @@ def create_f4a_jobs(args):
     do_mult_val = getattr(args, 'do_mult', 0)
     do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
     neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-    do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
-    bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
+    bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
     queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
     if run_events is not None:
         queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout,event_list from jobs.list"
@@ -323,7 +321,6 @@ def create_f4a_overlay_jobs(args):
         'Do RCone': bool(getattr(args, 'do_rcone', False)),
         'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
         'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
-        'Do EMfrac Calib': bool(getattr(args, 'do_emfrac_calib', 0)),
         'Jet pT Min': f"{args.jet_pt_min} GeV",
         'Truth Jet pT Min': f"{args.truth_jet_pt_min} GeV",
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
@@ -396,11 +393,10 @@ def create_f4a_overlay_jobs(args):
     do_rcone_val = 1 if getattr(args, 'do_rcone', False) else 0
     do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
     neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-    do_emfrac_calib_val = getattr(args, 'do_emfrac_calib', 0)
 
     arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst_global) $(input_dst_jet) $(input_dst_g4hit) $(input_dst_calo) $(input_dst_zdc) $(input_dst_sepd) $(input_calib) "
                  f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {args.do_flow} {eta_calib_val} "
-                 f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) {do_emfrac_calib_val} "
+                 f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
                  f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output "
                  f"{manager.output_dir / Path(args.input_check_macro).name}")
     # inputs not ready (still being produced) exit with OVERLAY_INPUT_NOT_READY: no retry, resubmit from the failure log
@@ -655,7 +651,6 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('--do-mult', type=int, default=None, choices=[0, 1], help='Enable multiplicity subtraction (default: 1 if --eta-calib-path is given, else 0).')
     f4a.add_argument('--do-neg-energy-threshold', type=int, default=1, choices=[0, 1], help='Enable negative energy threshold rejection (default=1).')
     f4a.add_argument('--neg-energy-threshold', type=float, default=-2.0, help='Negative energy threshold cut in GeV (default=-2.0).')
-    f4a.add_argument('--do-emfrac-calib', type=int, default=0, choices=[0, 1], help='Also apply the EMfrac JES alongside the legacy one and store pt_calib_emfrac / calo fractions (default=0).')
     f4a.add_argument('--overlay', action='store_true', default=False, help='Data+MC overlay mode of Fun4All_BkgSub: -i is an overlay list (DST_GLOBAL,DST_TRUTH_JET,DST_TRUTH_G4HIT,DST_CALO per line), one job per line. Only the iterative jets plus truth jets are stored: with and without flow (iter, iternf) for --do-flow != 0; only iter (no flow, no event plane, --calib not needed) for --do-flow 0. Needs --data-list.')
     f4a.add_argument('--data-list', dest='data_list', type=str, default=None, help='Data list(s) with calofit,zdc,sepd per line (e.g. dst_calofitting_zdc_sepd-00068144.list, or a list of such lists), used with --overlay for the ZDC/sEPD DSTs of each segment.')
     f4a.add_argument('--jet-pt-min', type=float, default=10, help='Reco jet calibrated pT min cut, used with --overlay. Default: 10 GeV.')
