@@ -59,7 +59,7 @@ R__LOAD_LIBRARY(libTreeFiller.so)
 void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                     const std::string &flist_dst_zdc = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/ZDC/68144/DST_ZDC_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
                     const std::string &flist_dst_sepd = "/direct/sphenix+tg+tg01/jets/anarde/run3auau/sEPD/68144/DST_SEPD_CALIB_run3auau_pro001_pcdb001_v001-00068144-00000.root",
-                    const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/10-04-26-v2/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144v2.root",
+                    const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/11-25-26-combined/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144.root",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
                     int do_flow = 0,
