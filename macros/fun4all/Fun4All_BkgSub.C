@@ -59,7 +59,7 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &input_QVecCalib = "/sphenix/user/anarde/sEPD-Calib/run3auau/11-25-26-combined/CDB/68144/SEPD_EventPlaneCalib-pro001_pcdb001_v001-68144.root",
                     const std::string &output = "test.root",
                     const std::string &output_tree = "tree.root",
-                    int do_flow = 0,
+                    int do_flow = 3,
                     int nEvents = 100,
                     int nSkip = 0,
                     int event_id = 0,
@@ -348,7 +348,8 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     HIJETS::eta_calib_direct_path = eta_calib_direct_path;
   }
   Enable::HIJETS_TOWER_MULTSUB = do_mult;
-  Enable::HIJETS_TOWER_NOBKG = !is_overlay;
+  // jets: iterative with flow modulation and, for do_flow != 0, without (iternf); no unsubtracted jets
+  Enable::HIJETS_TOWER_NOBKG = false;
   // with do_flow == 0 the default iterative/mult chains are already no-flow
   Enable::HIJETS_TOWER_NOFLOW = (do_flow != 0);
   Enable::HIJETS_TOWER_MULTSUB_NOFLOW = do_mult && (do_flow != 0);
