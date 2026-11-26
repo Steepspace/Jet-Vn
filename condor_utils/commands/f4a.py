@@ -7,48 +7,6 @@ from condor_utils.core.manager import CondorJobManager
 from condor_utils.core.helpers import chunk_list, parse_calib_list
 from condor_utils.cli import get_common_parser, add_build_args
 
-ZS_DETECTORS = ('CEMC', 'HCALIN', 'HCALOUT')
-
-def parse_zs_calib_list(zs_list, logger=None):
-    """
-    Parses a ZS cross calib T0 list file (<DET>_ZSCrossCalibT0_..._<run>.root, one file per line)
-    and returns a mapping from run number (str, leading zeros stripped) to {detector: path}.
-    """
-    zs_map = {}
-    if not zs_list:
-        return zs_map
-
-    zs_path = Path(zs_list)
-    if not zs_path.is_file():
-        if logger:
-            logger.warning(f"ZS calib list file does not exist: {zs_list}")
-        return zs_map
-
-    pattern = re.compile(rf"^({'|'.join(ZS_DETECTORS)})_ZSCrossCalibT0_.*_(\d+)\.root$")
-    for line in zs_path.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-
-        match = pattern.match(Path(line).name)
-        if not match:
-            if logger:
-                logger.warning(f'Could not parse detector/run from ZS calib entry: {line}')
-            continue
-
-        det, run = match.group(1), match.group(2).lstrip('0')
-        zs_map.setdefault(run, {})[det] = line
-
-    for run, entry in sorted(zs_map.items(), key=lambda kv: int(kv[0])):
-        missing = [det for det in ZS_DETECTORS if det not in entry]
-        if missing and logger:
-            logger.warning(f"Run {run} ZS calib list is missing {', '.join(missing)}; passing none for those")
-
-    if logger:
-        logger.info(f'Loaded ZS cross calib T0 entries for {len(zs_map)} runs from {zs_path.name}')
-
-    return zs_map
-
 EVENTS_PER_SEGMENT = 100000
 
 def parse_run_event_list(event_list, logger=None):
@@ -152,10 +110,6 @@ def create_f4a_jobs(args):
     if event_list:
         manager.add_file_to_check(event_list)
 
-    zs_calib_list = Path(args.zs_calib).resolve() if getattr(args, 'zs_calib', None) else None
-    if zs_calib_list:
-        manager.add_file_to_check(zs_calib_list)
-
     manager.validate_paths()
 
     init_log = {
@@ -171,7 +125,6 @@ def create_f4a_jobs(args):
         'Do Mult': bool(getattr(args, 'do_mult', 0)),
         'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
         'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
-        'ZS Calib List': zs_calib_list if zs_calib_list else "Not Provided (Using CDB)",
     }
 
     manager.log_initialization(init_log)
@@ -185,28 +138,12 @@ def create_f4a_jobs(args):
         extra_files.append(eta_calib)
     if event_list:
         extra_files.append(event_list)
-    if zs_calib_list:
-        extra_files.append(zs_calib_list)
 
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
     calib_map = parse_calib_list(calib_list, manager.logger)
 
-    # ZS cross calib T0 columns: one file per detector, 'none' falls back to the CDB
-    missing_zs_runs = set()
-    zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
-
-    def zs_columns(run):
-        entry = zs_map.get(run, {})
-        if not entry:
-            missing_zs_runs.add(run)
-        return ",".join(entry.get(det, 'none') for det in ZS_DETECTORS)
-
-    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map, extra_columns=zs_columns)
-
-    if zs_calib_list and missing_zs_runs:
-        runs_str = ", ".join(sorted(missing_zs_runs, key=lambda r: int(r) if r.isdigit() else r))
-        manager.logger.warning(f"No ZS cross calib T0 entry for {len(missing_zs_runs)} run(s), passing none (CDB fallback): {runs_str}")
+    manager.prepare_job_lists(dst_per_job=args.dst_per_job, files_dir=files_dir, calib_map=calib_map)
 
     # run,event list: each job gets the events of its own segments as a jobs.list column
     run_events = None
@@ -224,10 +161,10 @@ def create_f4a_jobs(args):
     do_mult_val = getattr(args, 'do_mult', 0)
     do_neg_energy_threshold_val = getattr(args, 'do_neg_energy_threshold', 1)
     neg_energy_threshold_val = getattr(args, 'neg_energy_threshold', -2.0)
-    bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
-    queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list"
+    bkgsub_args = f"{args.do_flow} {eta_calib_val} {event_list_val} {do_rcone_val} {do_mult_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} "
+    queue_arg = "input_dst,input_calib from jobs.list"
     if run_events is not None:
-        queue_arg = "input_dst,input_calib,zs_cemc,zs_hcalin,zs_hcalout,event_list from jobs.list"
+        queue_arg = "input_dst,input_calib,event_list from jobs.list"
 
     arguments =f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst) $(input_calib) test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {bkgsub_args}{manager.output_dir}/output"
     manager.write_submit_file(arguments=arguments)
@@ -307,17 +244,12 @@ def create_f4a_overlay_jobs(args):
     if eta_calib:
         manager.add_file_to_check(eta_calib)
 
-    zs_calib_list = Path(args.zs_calib).resolve() if getattr(args, 'zs_calib', None) else None
-    if zs_calib_list:
-        manager.add_file_to_check(zs_calib_list)
-
     manager.validate_paths()
 
     manager.log_initialization({
         'Data List (ZDC/sEPD)': data_list,
         'Calib List': calib_list if calib_list else "Not Provided (Using default)",
         'Eta Calib': eta_calib if eta_calib else "Not Provided (Using default/empty)",
-        'ZS Calib List': zs_calib_list if zs_calib_list else "Not Provided (Using CDB)",
         'Do RCone': bool(getattr(args, 'do_rcone', False)),
         'Do Neg Energy Threshold': bool(getattr(args, 'do_neg_energy_threshold', 1)),
         'Neg Energy Threshold': float(getattr(args, 'neg_energy_threshold', -2.0)),
@@ -338,13 +270,10 @@ def create_f4a_overlay_jobs(args):
         extra_files.append(calib_list)
     if eta_calib:
         extra_files.append(eta_calib)
-    if zs_calib_list:
-        extra_files.append(zs_calib_list)
 
     manager.copy_dependencies(extra_files=extra_files, extra_dirs=[args.src_dir])
 
     calib_map = parse_calib_list(calib_list, manager.logger)
-    zs_map = parse_zs_calib_list(zs_calib_list, manager.logger)
     data_map = parse_data_zdc_sepd_list(data_list, manager.logger)
 
     jobs_file = manager.output_dir / 'jobs.list'
@@ -380,9 +309,7 @@ def create_f4a_overlay_jobs(args):
 
             zdc, sepd = data_map[(run, segment)]
             calib = calib_map.get(run, 'default')
-            zs_entry = zs_map.get(run, {})
-            zs_columns = ",".join(zs_entry.get(det, 'none') for det in ZS_DETECTORS)
-            file_out.write(f'{line},{zdc},{sepd},{calib},{zs_columns}\n')
+            file_out.write(f'{line},{zdc},{sepd},{calib}\n')
             total_jobs += 1
 
     if missing_segments:
@@ -396,12 +323,12 @@ def create_f4a_overlay_jobs(args):
 
     arguments = (f"{manager.output_dir / Path(args.f4a_macro).name} $(input_dst_global) $(input_dst_jet) $(input_dst_g4hit) $(input_dst_calo) $(input_dst_zdc) $(input_dst_sepd) $(input_calib) "
                  f"test-$(ClusterId)-$(Process).root tree-$(ClusterId)-$(Process).root {args.events} {args.dbtag} {args.do_flow} {eta_calib_val} "
-                 f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} $(zs_cemc) $(zs_hcalin) $(zs_hcalout) "
+                 f"{do_rcone_val} {do_neg_energy_threshold_val} {neg_energy_threshold_val} "
                  f"{args.jet_pt_min} {args.truth_jet_pt_min} {manager.output_dir}/output "
                  f"{manager.output_dir / Path(args.input_check_macro).name}")
     # inputs not ready (still being produced) exit with OVERLAY_INPUT_NOT_READY: no retry, resubmit from the failure log
     manager.write_submit_file(arguments=arguments, retry_until=OVERLAY_INPUT_NOT_READY)
-    manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_dst_zdc,input_dst_sepd,input_calib,zs_cemc,zs_hcalin,zs_hcalout from jobs.list")
+    manager.finalize_submission(queue_arg="input_dst_global,input_dst_jet,input_dst_g4hit,input_dst_calo,input_dst_zdc,input_dst_sepd,input_calib from jobs.list")
 
 def create_f4a_zdc_jobs(args):
     manager = CondorJobManager(args, job_name="F4A ZDC")
@@ -640,7 +567,6 @@ def setup_f4a_subparsers(subparsers):
     add_build_args(f4a)
     f4a.add_argument('-i2_calib', '--calib', type=str, default=None, help='Q Vector Calibrations. (Optional)')
     f4a.add_argument('-i3_calib', '--eta-calib-path', '--eta-calib-direct-path', dest='eta_calib_path', type=str, default=None, help='Direct path to eta-shape calibration file. (Optional)')
-    f4a.add_argument('-i4_calib', '--zs-calib', dest='zs_calib', type=str, default=None, help='List of ZS cross calib T0 files (CEMC/HCALIN/HCALOUT per run), used by Fun4All_BkgSub. Runs without an entry fall back to the CDB. (Optional)')
     f4a.add_argument('-el', '--event-list', dest='event_list', type=str, default=None, help='Direct path to event list file: one event ID per line (used by every job), or a run,event CSV (header "run,event", Fun4All_BkgSub only) that is split per job by segment = event // 100000, dropping jobs without listed events. (Optional)')
     f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_BkgSub.C', help='Fun4All Macro.')
     f4a.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/fun4all/Calo_Calib.C', help='Calo_Calib Macro.')

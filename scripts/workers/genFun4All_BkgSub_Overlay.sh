@@ -34,13 +34,10 @@ eta_calib_path=${14}
 do_rcone=${15:-0}
 do_neg_energy_threshold=${16:-1}
 neg_energy_threshold=${17:--2.0}
-zs_calib_cemc=${18:-none}
-zs_calib_hcalin=${19:-none}
-zs_calib_hcalout=${20:-none}
-jet_pt_min=${21:-10}
-truth_jet_pt_min=${22:-5}
-submitDir=${23}
-input_check_macro=${24} # macros/utils/check_overlay_inputs.C: checks the input copies before the f4a macro
+jet_pt_min=${18:-10}
+truth_jet_pt_min=${19:-5}
+submitDir=${20}
+input_check_macro=${21} # macros/utils/check_overlay_inputs.C: checks the input copies before the f4a macro
 
 # the data-only DST_CALOFITTING (event aligned with the overlay DSTs) sits next to them
 input_calofit=$(ls "$(dirname "$input_global")"/DST_CALOFITTING-*.root 2>/dev/null)
@@ -78,16 +75,6 @@ else
     eta_calib_file=$(basename "$eta_calib_path")
 fi
 
-# ZS cross calib T0 files: "none" means use the CDB
-zs_calib_files=()
-for zs_calib_path in "$zs_calib_cemc" "$zs_calib_hcalin" "$zs_calib_hcalout"; do
-    if [[ -z "$zs_calib_path" || "$zs_calib_path" == "none" || "$zs_calib_path" == "default" ]]; then
-        zs_calib_files+=("none")
-    else
-        zs_calib_files+=("$(basename "$zs_calib_path")")
-    fi
-done
-
 if [[ -n "$_CONDOR_SCRATCH_DIR" && -d "$_CONDOR_SCRATCH_DIR" ]]
 then
     cd "$_CONDOR_SCRATCH_DIR" || { echo "Failed to cd to $_CONDOR_SCRATCH_DIR" >&2; exit 1; }
@@ -107,15 +94,6 @@ then
     if [[ -n "$eta_calib_path" && "$eta_calib_path" != "none" && "$eta_calib_path" != "default" ]]; then
         test -e "$eta_calib_path" && cp -v "$eta_calib_path" .
     fi
-    for zs_calib_path in "$zs_calib_cemc" "$zs_calib_hcalin" "$zs_calib_hcalout"; do
-        if [[ -n "$zs_calib_path" && "$zs_calib_path" != "none" && "$zs_calib_path" != "default" ]]; then
-            if ! cp -v "$zs_calib_path" .; then
-                echo "Error: Failed to copy ZS calib file $zs_calib_path for $file_calo at $(date) on $(hostname)" >&2
-                echo "copy failure (zs_calib) for $zs_calib_path in $file_calo on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
-                exit 1
-            fi
-        fi
-    done
     ls -lah
 else
     echo "condor scratch NOT set" >&2
@@ -145,7 +123,7 @@ mkdir -p "$outdir/hist" "$outdir/tree"
 
 # mult is off in overlay mode
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"$file_calofit\", \"$file_zdc\", \"$file_sepd\", \"$calib_file\", \"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"\", $do_rcone, 0, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\", \"\", \"$file_calo\", \"$file_jet\", $jet_pt_min, $truth_jet_pt_min)"
+root -b -l -q "$f4a_macro(\"$file_calofit\", \"$file_zdc\", \"$file_sepd\", \"$calib_file\", \"$outdir/hist/$output\", \"$outdir/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"\", $do_rcone, 0, \"\", $do_neg_energy_threshold, $neg_energy_threshold, \"$file_calo\", \"$file_jet\", $jet_pt_min, $truth_jet_pt_min)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then

@@ -1,9 +1,6 @@
 // c++ includes --
-#include <algorithm>
-#include <map>
 #include <string>
 #include <iostream>
-#include <filesystem>
 #include <vector>
 #include <format>
 #include <fstream>
@@ -74,9 +71,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
                     const std::string &output_dst = "",
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
-                    const std::string &zs_calib_cemc = "",
-                    const std::string &zs_calib_hcalin = "",
-                    const std::string &zs_calib_hcalout = "",
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -195,35 +189,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     do_mult = false;
   }
 
-  // ZS cross calib T0 files must also match the run (the defaults are for run 68144)
-  // "none" or empty: no direct URL, CaloTowerCalib falls back to the CDB
-  const std::vector<std::pair<std::string, std::string>> zs_calibs = {
-      {"CEMC", zs_calib_cemc},
-      {"HCALIN", zs_calib_hcalin},
-      {"HCALOUT", zs_calib_hcalout}};
-
-  std::map<std::string, std::string> zs_urls;
-  for (const auto& [name, path] : zs_calibs)
-  {
-    if (path.empty() || path == "none")
-    {
-      std::cout << "No ZS cross calib T0 for " << name << ", using CDB" << std::endl;
-      continue;
-    }
-
-    // file names end in _<run>.root
-    std::string stem = std::filesystem::path(path).stem().string();
-    std::string run_str = stem.substr(stem.find_last_of('_') + 1);
-    int calib_run = (!run_str.empty() && std::all_of(run_str.begin(), run_str.end(), ::isdigit)) ? std::stoi(run_str) : -1;
-    if (calib_run != runnumber)
-    {
-      std::cout << "Error: " << name << " ZS cross calib T0 run " << calib_run
-                << " does not match calofit run " << runnumber << ": " << path << std::endl;
-      return;
-    }
-    zs_urls[name] = path;
-  }
-
   // the Q vector calibration (sEPD event plane, do_flow == 3) must also match the run
   if (do_flow == 3 && !CheckEventPlaneCalibRun(input_QVecCalib, runnumber))
   {
@@ -267,9 +232,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   std::cout << "do_mult: " << do_mult << std::endl;
   std::cout << "do_neg_energy_threshold: " << do_neg_energy_threshold << std::endl;
   std::cout << "neg_energy_threshold: " << neg_energy_threshold << std::endl;
-  std::cout << "zs_calib_cemc: " << zs_calib_cemc << std::endl;
-  std::cout << "zs_calib_hcalin: " << zs_calib_hcalin << std::endl;
-  std::cout << "zs_calib_hcalout: " << zs_calib_hcalout << std::endl;
   std::cout << "jet_pt_min: " << jet_pt_min << std::endl;
   if (is_overlay)
   {
@@ -308,9 +270,6 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   // Calibrate Towers
   CaloCalib::do_neg_energy_threshold = do_neg_energy_threshold;
   CaloCalib::neg_energy_threshold = neg_energy_threshold;
-  CaloCalib::cemc_ZScrosscalibT0_url = zs_urls["CEMC"];
-  CaloCalib::hcalin_ZScrosscalibT0_url = zs_urls["HCALIN"];
-  CaloCalib::hcalout_ZScrosscalibT0_url = zs_urls["HCALOUT"];
   Process_Calo_Calib();
 
   // Truth Jets (overlay only), on the MC top node: checks that each MC event matches the data
@@ -584,9 +543,6 @@ void Fun4All_BkgSub(const std::string &input_dst,
                     const std::string &output_dst,
                     bool do_neg_energy_threshold = true,
                     float neg_energy_threshold = -2.0F,
-                    const std::string &zs_calib_cemc = "",
-                    const std::string &zs_calib_hcalin = "",
-                    const std::string &zs_calib_hcalout = "",
                     const std::string &overlay_dst_calo = "",
                     const std::string &overlay_dst_truth_jet = "",
                     float jet_pt_min = 10.0F,
@@ -596,6 +552,5 @@ void Fun4All_BkgSub(const std::string &input_dst,
                  input_QVecCalib, output, output_tree, do_flow, nEvents, nSkip, event_id,
                  dbtag, eta_calib_direct_path, event_list, do_rcone, do_mult, output_dst,
                  do_neg_energy_threshold, neg_energy_threshold,
-                 zs_calib_cemc, zs_calib_hcalin, zs_calib_hcalout,
                  overlay_dst_calo, overlay_dst_truth_jet, jet_pt_min, truth_jet_pt_min);
 }

@@ -30,10 +30,7 @@ do_rcone=${11:-0}
 do_mult=${12:-1}
 do_neg_energy_threshold=${13:-1}
 neg_energy_threshold=${14:--2.0}
-zs_calib_cemc=${15:-none}
-zs_calib_hcalin=${16:-none}
-zs_calib_hcalout=${17:-none}
-submitDir=${18}
+submitDir=${15}
 
 # extract runnumber from file name
 file=$(basename "$input")
@@ -60,16 +57,6 @@ if [[ -z "$event_list_path" || "$event_list_path" == "none" || "$event_list_path
 else
     event_list_file=$(basename "$event_list_path")
 fi
-
-# ZS cross calib T0 files: "none" means use the CDB
-zs_calib_files=()
-for zs_calib_path in "$zs_calib_cemc" "$zs_calib_hcalin" "$zs_calib_hcalout"; do
-    if [[ -z "$zs_calib_path" || "$zs_calib_path" == "none" || "$zs_calib_path" == "default" ]]; then
-        zs_calib_files+=("none")
-    else
-        zs_calib_files+=("$(basename "$zs_calib_path")")
-    fi
-done
 
 if [[ -n "$_CONDOR_SCRATCH_DIR" && -d "$_CONDOR_SCRATCH_DIR" ]]
 then
@@ -158,15 +145,6 @@ then
     if [[ -n "$event_list_path" && "$event_list_path" != "none" && "$event_list_path" != "default" ]]; then
         test -e "$event_list_path" && cp -v "$event_list_path" .
     fi
-    for zs_calib_path in "$zs_calib_cemc" "$zs_calib_hcalin" "$zs_calib_hcalout"; do
-        if [[ -n "$zs_calib_path" && "$zs_calib_path" != "none" && "$zs_calib_path" != "default" ]]; then
-            if ! cp -v "$zs_calib_path" .; then
-                echo "Error: Failed to copy ZS calib file $zs_calib_path for $file at $(date) on $(hostname)" >&2
-                echo "copy failure (zs_calib) for $zs_calib_path in $file on $(hostname) at $(date)" >> "$submitDir/failures/failure-log.txt"
-                exit 1
-            fi
-        fi
-    done
     ls -lah
 else
     echo "condor scratch NOT set" >&2
@@ -194,7 +172,7 @@ if [[ -n "$event_list_file" ]]; then
 fi
 
 echo "Starting ROOT macro at $(date) on $(hostname)"
-root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"$output_dst\", $do_neg_energy_threshold, $neg_energy_threshold, \"${zs_calib_files[0]}\", \"${zs_calib_files[1]}\", \"${zs_calib_files[2]}\")"
+root -b -l -q "$f4a_macro(\"dst_calofit.list\", \"dst_zdc.list\", \"dst_sepd.list\", \"$calib_file\", \"$run/hist/$output\", \"$run/tree/$output_tree\", $do_flow, $nEvents, 0, 0, \"$dbtag\", \"$eta_calib_file\", \"$event_list_file\", $do_rcone, $do_mult, \"$output_dst\", $do_neg_energy_threshold, $neg_energy_threshold)"
 
 root_exit=$?
 if [ $root_exit -ne 0 ]; then
