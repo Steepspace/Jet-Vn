@@ -4,7 +4,9 @@
 
 #include <fun4all/SubsysReco.h>
 
+#include <array>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
@@ -12,9 +14,11 @@
 #include <vector>
 
 class PHCompositeNode;
+class Eventplaneinfo;
 class TH1;
 class TH2;
 class TProfile;
+class TProfile2D;
 
 class GlobalQA : public SubsysReco
 {
@@ -61,6 +65,32 @@ class GlobalQA : public SubsysReco
   int process_sepd(PHCompositeNode *topNode);
   int process_mbd(PHCompositeNode *topNode);
 
+  // Event plane calibration status of the event, as applied by EventPlaneReco.
+  // EventPlaneReco stores the raw Q vector in place of the calibrated one (and a zero
+  // recentered Q vector) when it skips the calibration.
+  enum EPStatus : int
+  {
+    EP_CALIBRATED = 0,
+    EP_ZERO_CHARGE = 1,     // zero sEPD charge in an arm: raw Q = (0, 0)
+    EP_CENT_OUT_RANGE = 2,  // centrality invalid or >= m_ep_calib_cent_max: raw Q used
+    EP_NO_CALIB = 3,        // no calibration loaded for the run: raw Q used
+    EP_NON_FINITE = 4,      // NaN / inf Q vector (e.g. a non-finite sEPD channel charge in EventPlaneReco)
+    EP_NSTATUS = 5
+  };
+  EPStatus get_ep_status(const Eventplaneinfo *epd_S, const Eventplaneinfo *epd_N, const Eventplaneinfo *epd_NS) const;
+
+  bool has_valid_cent() const;
+
+  // Event plane detectors (South, North, North+South) and Q vector calibration stages
+  static constexpr unsigned int kNEPDet{3};
+  static constexpr unsigned int kNQStage{3};      // raw, recentered, recentered + flattened
+  static constexpr unsigned int kNQMoment{5};     // Qx, Qy, Qx^2, Qy^2, QxQy
+  static constexpr unsigned int kNFlatTerms{4};   // cos/sin(2k Psi_2), k = 1..4
+  static constexpr unsigned int kNArm{2};         // sEPD South, North
+
+  // EventPlaneReco calibrates centralities in [0, m_ep_calib_cent_max) %
+  double m_ep_calib_cent_max{80};
+
   struct HistConfig
   {
     // sEPD charge
@@ -88,6 +118,10 @@ class GlobalQA : public SubsysReco
     unsigned int bins_sepd_rings{16};
     double sepd_ring_low{-0.5};
     double sepd_ring_high{15.5};
+    // phi bins: 24 for rings 1-15, 12 for ring 0
+    unsigned int bins_sepd_phi{24};
+    double sepd_phi_low{-0.5};
+    double sepd_phi_high{23.5};
 
     // MBD charge (total charge > 2100 excluded by MB classifier)
     unsigned int bins_mbd_charge{210};
@@ -119,8 +153,18 @@ class GlobalQA : public SubsysReco
     TH2 *h2SEPD_Hits_South_North{nullptr};
     TH2 *h2SEPD_Channel_Charge{nullptr};
     TProfile *pSEPD_Channel_Charge{nullptr};
+    TH1 *hSEPD_Channel_NonFinite{nullptr};  // channels skipped for NaN / inf charge
     TProfile *pSEPD_Ring_Charge_South{nullptr};
     TProfile *pSEPD_Ring_Charge_North{nullptr};
+
+    // sEPD (ring, phi) maps per arm [0 = South, 1 = North]: hit counts (charge above threshold)
+    // and mean charge of the hits. Occupancy = hits / hSEPD_NEvents.
+    TH1 *hSEPD_NEvents{nullptr};
+    std::array<TH2 *, kNArm> h2SEPD_RingPhi_Hits{};
+    std::array<TProfile2D *, kNArm> pSEPD_RingPhi_Charge{};
+
+    // sEPD total charge vs centrality
+    TH2 *h2SEPD_Charge_Centrality{nullptr};
 
     // MBD QA (Individual South/North distributions available via 2D projection)
     TH1 *hMBD_Charge_Total{nullptr};
@@ -143,6 +187,21 @@ class GlobalQA : public SubsysReco
     TH2 *h2Psi2_N{nullptr};
     TH2 *h2Psi2_NS{nullptr};
     TProfile *pCos2DeltaPsi2_Cent{nullptr};
+
+    // Event Plane - calibration status (EPStatus)
+    TH1 *hEP_Status{nullptr};
+
+    // Event Plane - Q_2 moments vs centrality [stage][det][moment], calibrated events
+    // (recentering: <Qx> = <Qy> = 0; flattening: <Qx^2> = <Qy^2>, <QxQy> = 0)
+    std::array<std::array<std::array<TProfile *, kNQMoment>, kNEPDet>, kNQStage> pQ2_Moment{};
+
+    // Event Plane - Fourier flatness vs centrality [det][k-1]: <cos(2k Psi_2)>, <sin(2k Psi_2)>, calibrated events
+    std::array<std::array<TProfile *, kNFlatTerms>, kNEPDet> pFlat_Cos{};
+    std::array<std::array<TProfile *, kNFlatTerms>, kNEPDet> pFlat_Sin{};
+
+    // Event Plane - extra sub-event checks: <sin(2 dPsi_2)> = 0, n = 3 resolution
+    TProfile *pSin2DeltaPsi2_Cent{nullptr};
+    TProfile *pCos3DeltaPsi3_Cent{nullptr};
   };
 
   AnalysisHists m_hists;
@@ -165,6 +224,9 @@ class GlobalQA : public SubsysReco
     // MBD - QA
     double mbd_charge_south{0};
     double mbd_charge_north{0};
+
+    // Centrality [%] (mbd_NS), NaN if CentralityInfo is missing
+    double cent{std::numeric_limits<double>::quiet_NaN()};
   };
 
   EventData m_data;

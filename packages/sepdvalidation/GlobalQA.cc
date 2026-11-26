@@ -27,6 +27,7 @@
 #include <TH1F.h>
 #include <TH2F.h>
 #include <TProfile.h>
+#include <TProfile2D.h>
 #include <TTree.h>
 
 #include <treefiller/TreeFiller.h>
@@ -34,6 +35,7 @@
 #include <cmath>
 #include <format>
 #include <iostream>
+#include <limits>
 #include <numbers>
 
 GlobalQA::GlobalQA(const std::string &name)
@@ -109,6 +111,10 @@ int GlobalQA::Init([[maybe_unused]] PHCompositeNode *topNode)
                                                  m_hist_config.bins_sepd_channels, m_hist_config.sepd_channel_low, m_hist_config.sepd_channel_high);
       se->registerHisto(m_hists.pSEPD_Channel_Charge);
 
+      m_hists.hSEPD_Channel_NonFinite = new TH1F("hSEPD_Channel_NonFinite", "sEPD Non-finite Channel Charge (skipped); Channel Index; Counts",
+                                                 m_hist_config.bins_sepd_channels, m_hist_config.sepd_channel_low, m_hist_config.sepd_channel_high);
+      se->registerHisto(m_hists.hSEPD_Channel_NonFinite);
+
       m_hists.pSEPD_Ring_Charge_South = new TProfile("pSEPD_Ring_Charge_South", "sEPD South Mean Charge per Ring; Radial Bin; #LTCharge#GT [MIP]",
                                                      m_hist_config.bins_sepd_rings, m_hist_config.sepd_ring_low, m_hist_config.sepd_ring_high);
       se->registerHisto(m_hists.pSEPD_Ring_Charge_South);
@@ -116,6 +122,33 @@ int GlobalQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       m_hists.pSEPD_Ring_Charge_North = new TProfile("pSEPD_Ring_Charge_North", "sEPD North Mean Charge per Ring; Radial Bin; #LTCharge#GT [MIP]",
                                                      m_hist_config.bins_sepd_rings, m_hist_config.sepd_ring_low, m_hist_config.sepd_ring_high);
       se->registerHisto(m_hists.pSEPD_Ring_Charge_North);
+
+      // (ring, phi) maps per arm: dead/hot channel check
+      m_hists.hSEPD_NEvents = new TH1F("hSEPD_NEvents", "sEPD Events Processed (occupancy normalization); ; Events", 1, 0, 1);
+      se->registerHisto(m_hists.hSEPD_NEvents);
+
+      const std::array<std::string, kNArm> arm_names = {"South", "North"};
+      for (unsigned int arm = 0; arm < kNArm; ++arm)
+      {
+        const std::string &arm_name = arm_names[arm];
+
+        m_hists.h2SEPD_RingPhi_Hits[arm] = new TH2F(std::format("h2SEPD_RingPhi_Hits_{}", arm_name).c_str(),
+                                                    std::format("sEPD {} Hits (charge #geq threshold); Ring; #phi Bin; Hits", arm_name).c_str(),
+                                                    m_hist_config.bins_sepd_rings, m_hist_config.sepd_ring_low, m_hist_config.sepd_ring_high,
+                                                    m_hist_config.bins_sepd_phi, m_hist_config.sepd_phi_low, m_hist_config.sepd_phi_high);
+        se->registerHisto(m_hists.h2SEPD_RingPhi_Hits[arm]);
+
+        m_hists.pSEPD_RingPhi_Charge[arm] = new TProfile2D(std::format("pSEPD_RingPhi_Charge_{}", arm_name).c_str(),
+                                                           std::format("sEPD {} Mean Hit Charge; Ring; #phi Bin; #LTCharge#GT [MIP]", arm_name).c_str(),
+                                                           m_hist_config.bins_sepd_rings, m_hist_config.sepd_ring_low, m_hist_config.sepd_ring_high,
+                                                           m_hist_config.bins_sepd_phi, m_hist_config.sepd_phi_low, m_hist_config.sepd_phi_high);
+        se->registerHisto(m_hists.pSEPD_RingPhi_Charge[arm]);
+      }
+
+      m_hists.h2SEPD_Charge_Centrality = new TH2F("h2SEPD_Charge_Centrality", "sEPD Total Charge vs Centrality; Centrality [%]; sEPD Total Charge [MIP]",
+                                                  m_hist_config.bins_cent, m_hist_config.cent_low, m_hist_config.cent_high,
+                                                  m_hist_config.bins_sepd_charge, m_hist_config.sepd_charge_total_low, m_hist_config.sepd_charge_total_high);
+      se->registerHisto(m_hists.h2SEPD_Charge_Centrality);
     }
 
     if (m_do_mbd)
@@ -194,6 +227,62 @@ int GlobalQA::Init([[maybe_unused]] PHCompositeNode *topNode)
       m_hists.pCos2DeltaPsi2_Cent = new TProfile("pCos2DeltaPsi2_Cent", "sEPD Sub-event Resolution vs Centrality; Centrality [%]; #LTcos(2#Delta#Psi_{2})#GT",
                                                 m_hist_config.bins_cent_profile, m_hist_config.cent_low, m_hist_config.cent_high);
       se->registerHisto(m_hists.pCos2DeltaPsi2_Cent);
+
+      m_hists.pSin2DeltaPsi2_Cent = new TProfile("pSin2DeltaPsi2_Cent", "sEPD #LTsin(2#Delta#Psi_{2})#GT vs Centrality (expect 0); Centrality [%]; #LTsin(2(#Psi_{2}^{S} - #Psi_{2}^{N}))#GT",
+                                                 m_hist_config.bins_cent_profile, m_hist_config.cent_low, m_hist_config.cent_high);
+      se->registerHisto(m_hists.pSin2DeltaPsi2_Cent);
+
+      m_hists.pCos3DeltaPsi3_Cent = new TProfile("pCos3DeltaPsi3_Cent", "sEPD n = 3 Sub-event Resolution vs Centrality; Centrality [%]; #LTcos(3(#Psi_{3}^{S} - #Psi_{3}^{N}))#GT",
+                                                 m_hist_config.bins_cent_profile, m_hist_config.cent_low, m_hist_config.cent_high);
+      se->registerHisto(m_hists.pCos3DeltaPsi3_Cent);
+
+      // calibration status: the Psi_2 histograms above (except the raw ones) hold calibrated events only
+      m_hists.hEP_Status = new TH1F("hEP_Status", "sEPD Event Plane Calibration Status; ; Events", EP_NSTATUS, -0.5, static_cast<double>(EP_NSTATUS) - 0.5);
+      m_hists.hEP_Status->GetXaxis()->SetBinLabel(EP_CALIBRATED + 1, "Calibrated");
+      m_hists.hEP_Status->GetXaxis()->SetBinLabel(EP_ZERO_CHARGE + 1, "Zero Charge");
+      m_hists.hEP_Status->GetXaxis()->SetBinLabel(EP_CENT_OUT_RANGE + 1, std::format("Cent #notin [0, {:.0f})", m_ep_calib_cent_max).c_str());
+      m_hists.hEP_Status->GetXaxis()->SetBinLabel(EP_NO_CALIB + 1, "No Calib");
+      m_hists.hEP_Status->GetXaxis()->SetBinLabel(EP_NON_FINITE + 1, "Non-finite Q");
+      se->registerHisto(m_hists.hEP_Status);
+
+      // Q_2 moments per calibration stage, 1% centrality bins as in the calibration
+      const std::array<std::string, kNEPDet> det_names = {"S", "N", "NS"};
+      const std::array<std::string, kNQStage> stage_names = {"raw", "rec", "flat"};
+      const std::array<std::string, kNQStage> stage_titles = {"Raw", "Recentered", "Flattened"};
+      const std::array<std::string, kNQMoment> moment_names = {"x", "y", "xx", "yy", "xy"};
+      const std::array<std::string, kNQMoment> moment_titles = {"Q_{x}", "Q_{y}", "Q_{x}^{2}", "Q_{y}^{2}", "Q_{x}Q_{y}"};
+
+      for (unsigned int stage = 0; stage < kNQStage; ++stage)
+      {
+        for (unsigned int det = 0; det < kNEPDet; ++det)
+        {
+          for (unsigned int mom = 0; mom < kNQMoment; ++mom)
+          {
+            auto *&prof = m_hists.pQ2_Moment[stage][det][mom];
+            prof = new TProfile(std::format("pQ2_{}_{}_{}", moment_names[mom], stage_names[stage], det_names[det]).c_str(),
+                                std::format("sEPD {} {} n = 2; Centrality [%]; #LT{}#GT", det_names[det], stage_titles[stage], moment_titles[mom]).c_str(),
+                                m_hist_config.bins_cent, m_hist_config.cent_low, m_hist_config.cent_high);
+            se->registerHisto(prof);
+          }
+        }
+      }
+
+      // Fourier flatness of the calibrated Psi_2
+      for (unsigned int det = 0; det < kNEPDet; ++det)
+      {
+        for (unsigned int k = 1; k <= kNFlatTerms; ++k)
+        {
+          m_hists.pFlat_Cos[det][k - 1] = new TProfile(std::format("pFlat_Cos{}Psi2_{}", 2 * k, det_names[det]).c_str(),
+                                                       std::format("sEPD {} Calibrated Flatness (expect 0); Centrality [%]; #LTcos({}#Psi_{{2}})#GT", det_names[det], 2 * k).c_str(),
+                                                       m_hist_config.bins_cent, m_hist_config.cent_low, m_hist_config.cent_high);
+          se->registerHisto(m_hists.pFlat_Cos[det][k - 1]);
+
+          m_hists.pFlat_Sin[det][k - 1] = new TProfile(std::format("pFlat_Sin{}Psi2_{}", 2 * k, det_names[det]).c_str(),
+                                                       std::format("sEPD {} Calibrated Flatness (expect 0); Centrality [%]; #LTsin({}#Psi_{{2}})#GT", det_names[det], 2 * k).c_str(),
+                                                       m_hist_config.bins_cent, m_hist_config.cent_low, m_hist_config.cent_high);
+          se->registerHisto(m_hists.pFlat_Sin[det][k - 1]);
+        }
+      }
     }
   }
 
@@ -204,6 +293,12 @@ int GlobalQA::Init([[maybe_unused]] PHCompositeNode *topNode)
 int GlobalQA::process_event(PHCompositeNode *topNode)
 {
   int ret = Fun4AllReturnCodes::EVENT_OK;
+
+  CentralityInfo *centInfo = findNode::getClass<CentralityInfo>(topNode, "CentralityInfo");
+  if (centInfo)
+  {
+    m_data.cent = centInfo->get_centile(CentralityInfo::PROP::mbd_NS) * 100.0;
+  }
 
   if (m_do_ep)
   {
@@ -297,75 +392,88 @@ int GlobalQA::process_event_plane(PHCompositeNode *topNode)
   m_data.psi2_N = _2psi2_N;
   m_data.psi2_NS = _2psi2_NS;
 
+  EPStatus status = get_ep_status(epd_S, epd_N, epd_NS);
+
   if (m_do_hist)
   {
-    // 2D South vs North correlations (projections give South/North 1D angles)
-    if (m_hists.h2Psi2_raw_SN)
+    m_hists.hEP_Status->Fill(status);
+
+    const bool valid_cent = has_valid_cent();
+    const double cent = m_data.cent;
+
+    // raw angles: all events with sEPD charge in both arms (zero charge gives Q = (0, 0)) and finite Q
+    if (status != EP_ZERO_CHARGE && status != EP_NON_FINITE)
     {
       m_hists.h2Psi2_raw_SN->Fill(_2psi2_raw_S, _2psi2_raw_N);
-    }
-    if (m_hists.h2Psi2_SN)
-    {
-      m_hists.h2Psi2_SN->Fill(_2psi2_S, _2psi2_N);
-    }
 
-    // Delta Psi2 wrapped to [-pi, pi]
-    constexpr double pi = std::numbers::pi;
-    double dpsi = _2psi2_S - _2psi2_N;
-    while (dpsi > pi)
-    {
-      dpsi -= 2 * pi;
-    }
-    while (dpsi < -pi)
-    {
-      dpsi += 2 * pi;
-    }
-    if (m_hists.hDeltaPsi2_SN)
-    {
-      m_hists.hDeltaPsi2_SN->Fill(dpsi);
-    }
-
-    double cos_2dpsi = std::cos(dpsi);
-    if (m_hists.hCos2DeltaPsi2)
-    {
-      m_hists.hCos2DeltaPsi2->Fill(cos_2dpsi);
-    }
-
-    CentralityInfo *centInfo = findNode::getClass<CentralityInfo>(topNode, "CentralityInfo");
-    if (centInfo)
-    {
-      double cent = centInfo->get_centile(CentralityInfo::PROP::mbd_NS) * 100.0;
-      if (std::isfinite(cent) && cent >= 0.0 && cent <= 100.0)
+      if (valid_cent)
       {
-        if (m_hists.h2Psi2_S_raw)
+        m_hists.h2Psi2_S_raw->Fill(_2psi2_raw_S, cent);
+        m_hists.h2Psi2_N_raw->Fill(_2psi2_raw_N, cent);
+        m_hists.h2Psi2_NS_raw->Fill(_2psi2_raw_NS, cent);
+      }
+    }
+
+    // calibrated angles: calibrated events only, otherwise the "calibrated" Q is the raw one.
+    // Calibrated implies a valid centrality in [0, m_ep_calib_cent_max).
+    if (status == EP_CALIBRATED && valid_cent)
+    {
+      // 2D South vs North correlation (projections give South/North 1D angles)
+      m_hists.h2Psi2_SN->Fill(_2psi2_S, _2psi2_N);
+
+      // Delta Psi2 wrapped to [-pi, pi]
+      constexpr double pi = std::numbers::pi;
+      double dpsi = _2psi2_S - _2psi2_N;
+      while (dpsi > pi)
+      {
+        dpsi -= 2 * pi;
+      }
+      while (dpsi < -pi)
+      {
+        dpsi += 2 * pi;
+      }
+      m_hists.hDeltaPsi2_SN->Fill(dpsi);
+
+      double cos_2dpsi = std::cos(dpsi);
+      m_hists.hCos2DeltaPsi2->Fill(cos_2dpsi);
+
+      m_hists.h2Psi2_S->Fill(_2psi2_S, cent);
+      m_hists.h2Psi2_N->Fill(_2psi2_N, cent);
+      m_hists.h2Psi2_NS->Fill(_2psi2_NS, cent);
+
+      m_hists.pCos2DeltaPsi2_Cent->Fill(cent, cos_2dpsi);
+      m_hists.pSin2DeltaPsi2_Cent->Fill(cent, std::sin(dpsi));
+
+      // n = 3 sub-event resolution (periodic in 3 Psi_3, no wrapping needed)
+      std::pair<double, double> Q_S_3 = epd_S->get_qvector(3);
+      std::pair<double, double> Q_N_3 = epd_N->get_qvector(3);
+      double psi3_S = epd_S->GetPsi(Q_S_3.first, Q_S_3.second, 3);
+      double psi3_N = epd_N->GetPsi(Q_N_3.first, Q_N_3.second, 3);
+      m_hists.pCos3DeltaPsi3_Cent->Fill(cent, std::cos(3 * (psi3_S - psi3_N)));
+
+      // Q_2 moments per calibration stage and Fourier flatness of the calibrated Psi_2
+      const std::array<const Eventplaneinfo *, kNEPDet> eps = {epd_S, epd_N, epd_NS};
+      const std::array<double, kNEPDet> two_psi2 = {_2psi2_S, _2psi2_N, _2psi2_NS};
+
+      for (unsigned int det = 0; det < kNEPDet; ++det)
+      {
+        const std::array<std::pair<double, double>, kNQStage> qs = {eps[det]->get_qvector_raw(2),
+                                                                     eps[det]->get_qvector_recentered(2),
+                                                                     eps[det]->get_qvector(2)};
+        for (unsigned int stage = 0; stage < kNQStage; ++stage)
         {
-          m_hists.h2Psi2_S_raw->Fill(_2psi2_raw_S, cent);
-        }
-        if (m_hists.h2Psi2_N_raw)
-        {
-          m_hists.h2Psi2_N_raw->Fill(_2psi2_raw_N, cent);
-        }
-        if (m_hists.h2Psi2_NS_raw)
-        {
-          m_hists.h2Psi2_NS_raw->Fill(_2psi2_raw_NS, cent);
+          const auto &[qx, qy] = qs[stage];
+          const std::array<double, kNQMoment> moments = {qx, qy, qx * qx, qy * qy, qx * qy};
+          for (unsigned int mom = 0; mom < kNQMoment; ++mom)
+          {
+            m_hists.pQ2_Moment[stage][det][mom]->Fill(cent, moments[mom]);
+          }
         }
 
-        if (m_hists.h2Psi2_S)
+        for (unsigned int k = 1; k <= kNFlatTerms; ++k)
         {
-          m_hists.h2Psi2_S->Fill(_2psi2_S, cent);
-        }
-        if (m_hists.h2Psi2_N)
-        {
-          m_hists.h2Psi2_N->Fill(_2psi2_N, cent);
-        }
-        if (m_hists.h2Psi2_NS)
-        {
-          m_hists.h2Psi2_NS->Fill(_2psi2_NS, cent);
-        }
-
-        if (m_hists.pCos2DeltaPsi2_Cent)
-        {
-          m_hists.pCos2DeltaPsi2_Cent->Fill(cent, cos_2dpsi);
+          m_hists.pFlat_Cos[det][k - 1]->Fill(cent, std::cos(k * two_psi2[det]));
+          m_hists.pFlat_Sin[det][k - 1]->Fill(cent, std::sin(k * two_psi2[det]));
         }
       }
     }
@@ -404,6 +512,11 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
     return Fun4AllReturnCodes::ABORTRUN;
   }
 
+  if (m_do_hist)
+  {
+    m_hists.hSEPD_NEvents->Fill(0.5);
+  }
+
   // sepd
   unsigned int nchannels_epd = towerinfosEPD->size();
 
@@ -432,6 +545,21 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
 
     double charge = tower->get_energy();
 
+    // skip non-finite charge (NaN passes every comparison below, inf would dominate the sums)
+    if (!std::isfinite(charge))
+    {
+      if (m_do_hist)
+      {
+        m_hists.hSEPD_Channel_NonFinite->Fill(channel);
+      }
+      if (Verbosity() > 0)
+      {
+        std::cout << "GlobalQA::process_sepd - [Event " << event_id << "] non-finite charge " << charge
+                  << " in channel " << channel << ", skipped" << std::endl;
+      }
+      continue;
+    }
+
     unsigned int arm = TowerInfoDefs::get_epd_arm(key);
 
     // skip charge below minimum threshold
@@ -449,6 +577,12 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
       if (m_hists.pSEPD_Channel_Charge)
       {
         m_hists.pSEPD_Channel_Charge->Fill(channel, charge);
+      }
+      if (arm < kNArm)
+      {
+        int phibin = TowerInfoDefs::get_epd_phibin(key);
+        m_hists.h2SEPD_RingPhi_Hits[arm]->Fill(rbin, phibin);
+        m_hists.pSEPD_RingPhi_Charge[arm]->Fill(rbin, phibin, charge);
       }
       if (arm == 0)
       {
@@ -501,6 +635,10 @@ int GlobalQA::process_sepd(PHCompositeNode *topNode)
     if (m_hists.h2SEPD_Hits_South_North)
     {
       m_hists.h2SEPD_Hits_South_North->Fill(nhits_south, nhits_north);
+    }
+    if (has_valid_cent())
+    {
+      m_hists.h2SEPD_Charge_Centrality->Fill(m_data.cent, sepd_total_charge);
     }
   }
 
@@ -584,7 +722,55 @@ int GlobalQA::ResetEvent([[maybe_unused]] PHCompositeNode *topNode)
   m_data.mbd_charge_south = 0;
   m_data.mbd_charge_north = 0;
 
+  m_data.cent = std::numeric_limits<double>::quiet_NaN();
+
   return Fun4AllReturnCodes::EVENT_OK;
+}
+
+//____________________________________________________________________________..
+bool GlobalQA::has_valid_cent() const
+{
+  return std::isfinite(m_data.cent) && m_data.cent >= 0.0 && m_data.cent <= 100.0;
+}
+
+//____________________________________________________________________________..
+GlobalQA::EPStatus GlobalQA::get_ep_status(const Eventplaneinfo *epd_S, const Eventplaneinfo *epd_N, const Eventplaneinfo *epd_NS) const
+{
+  // EventPlaneReco resets all Q vectors to exactly (0, 0) each event and only sets the
+  // recentered ones when it calibrates; zero charge in an arm leaves the raw ones at (0, 0)
+  auto is_zero = [](const std::pair<double, double> &q)
+  { return q.first == 0.0 && q.second == 0.0; };
+  auto is_finite = [](const std::pair<double, double> &q)
+  { return std::isfinite(q.first) && std::isfinite(q.second); };
+
+  // every Q vector the histograms use (raw, recentered, calibrated; n = 2 and 3)
+  for (const Eventplaneinfo *ep : {epd_S, epd_N, epd_NS})
+  {
+    for (unsigned int n : {2U, 3U})
+    {
+      if (!is_finite(ep->get_qvector_raw(n)) || !is_finite(ep->get_qvector_recentered(n)) || !is_finite(ep->get_qvector(n)))
+      {
+        return EP_NON_FINITE;
+      }
+    }
+  }
+
+  if (is_zero(epd_S->get_qvector_raw(2)) || is_zero(epd_N->get_qvector_raw(2)))
+  {
+    return EP_ZERO_CHARGE;
+  }
+
+  if (is_zero(epd_S->get_qvector_recentered(2)) && is_zero(epd_N->get_qvector_recentered(2)))
+  {
+    // same centrality definition and range as EventPlaneReco
+    if (!std::isfinite(m_data.cent) || m_data.cent < 0.0 || m_data.cent >= m_ep_calib_cent_max)
+    {
+      return EP_CENT_OUT_RANGE;
+    }
+    return EP_NO_CALIB;
+  }
+
+  return EP_CALIBRATED;
 }
 
 int GlobalQA::End([[maybe_unused]] PHCompositeNode *topNode)
