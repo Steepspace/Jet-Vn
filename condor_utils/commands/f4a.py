@@ -4,52 +4,8 @@ import shutil
 import sys
 from pathlib import Path
 from condor_utils.core.manager import CondorJobManager
-from condor_utils.core.helpers import chunk_list
+from condor_utils.core.helpers import chunk_list, parse_calib_list
 from condor_utils.cli import get_common_parser, add_build_args
-
-def parse_calib_list(calib_list, logger=None):
-    """
-    Parses a calibration list file and returns a mapping from run number (str) to calibration line/path.
-    Extracts run number from directory or filename, normalizes by stripping leading zeros,
-    and ignores empty or commented lines.
-    """
-    calib_map = {}
-    if not calib_list:
-        return calib_map
-
-    calib_path = Path(calib_list)
-    if not calib_path.is_file():
-        if logger:
-            logger.warning(f"Calib list file does not exist: {calib_list}")
-        return calib_map
-
-    for line in calib_path.read_text(encoding='utf-8').splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-
-        raw_path = line.split(',')[0].strip()
-        path_obj = Path(raw_path)
-
-        # Prefer parent directory if numeric (e.g. /CDB/<run>/<file>); fallback to filename pattern (e.g. -<run>v2.root or -<run>.root)
-        if len(path_obj.parts) >= 2 and path_obj.parts[-2].isdigit():
-            run = path_obj.parts[-2].lstrip('0')
-        else:
-            match = re.search(r'-(\d+)(?:v\d+)?\.root$', path_obj.name)
-            run = match.group(1).lstrip('0') if match else None
-
-        if run:
-            if logger:
-                logger.debug(f'Processing Calib: {line}, run: {run}')
-            calib_map[run] = line
-        else:
-            if logger:
-                logger.warning(f'Could not parse run number from calib entry: {line}')
-
-    if logger:
-        logger.info(f'Loaded {len(calib_map)} calibration entries from {calib_path.name}')
-
-    return calib_map
 
 ZS_DETECTORS = ('CEMC', 'HCALIN', 'HCALOUT')
 
@@ -174,6 +130,7 @@ def create_f4a_jobs(args):
     manager.add_file_to_check(args.f4a_macro)
     manager.add_file_to_check(args.calo_calib_macro)
     manager.add_file_to_check(args.HIJetReco_macro)
+    manager.add_file_to_check(args.ep_reco_macro)
     manager.add_dir_to_check(args.src_dir)
 
     # the eta calib is only used by the mult subtraction, so it implies --do-mult 1
@@ -208,6 +165,7 @@ def create_f4a_jobs(args):
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
+        'Event Plane Reco Macro': Path(args.ep_reco_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve(),
         'Do RCone': bool(getattr(args, 'do_rcone', False)),
         'Do Mult': bool(getattr(args, 'do_mult', 0)),
@@ -221,7 +179,7 @@ def create_f4a_jobs(args):
 
     files_dir = manager.prepare_directories()
 
-    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro]
+    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, args.ep_reco_macro]
     if calib_list:
         extra_files.append(calib_list)
     if eta_calib:
@@ -340,6 +298,7 @@ def create_f4a_overlay_jobs(args):
     manager.add_file_to_check(data_list)
     manager.add_file_to_check(args.calo_calib_macro)
     manager.add_file_to_check(args.HIJetReco_macro)
+    manager.add_file_to_check(args.ep_reco_macro)
     manager.add_dir_to_check(args.src_dir)
 
     calib_list = Path(args.calib).resolve() if args.calib else None
@@ -370,13 +329,14 @@ def create_f4a_overlay_jobs(args):
         'Fun4All Macro': Path(args.f4a_macro).resolve(),
         'Calo Calib Macro': Path(args.calo_calib_macro).resolve(),
         'HIJetReco Macro': Path(args.HIJetReco_macro).resolve(),
+        'Event Plane Reco Macro': Path(args.ep_reco_macro).resolve(),
         'Input Check Macro': Path(args.input_check_macro).resolve(),
         'Source Directory': Path(args.src_dir).resolve()
     })
 
     manager.prepare_directories()
 
-    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, data_list, args.input_check_macro]
+    extra_files = [args.f4a_macro, args.calo_calib_macro, args.HIJetReco_macro, args.ep_reco_macro, data_list, args.input_check_macro]
     if calib_list:
         extra_files.append(calib_list)
     if eta_calib:
@@ -689,6 +649,7 @@ def setup_f4a_subparsers(subparsers):
     f4a.add_argument('-f', '--f4a-macro', type=str, default='macros/fun4all/Fun4All_BkgSub.C', help='Fun4All Macro.')
     f4a.add_argument('-f5', '--calo-calib-macro', type=str, default='macros/fun4all/Calo_Calib.C', help='Calo_Calib Macro.')
     f4a.add_argument('-f6', '--HIJetReco-macro', type=str, default='macros/fun4all/HIJetReco.C', help='HIJetReco Macro.')
+    f4a.add_argument('-f7', '--ep-reco-macro', type=str, default='macros/fun4all/EventPlane_Reco.C', help='EventPlane_Reco Macro (sEPD event plane, included by Fun4All_BkgSub).')
     f4a.add_argument('--do-flow', type=int, default=3, help='Flow modulation configuration for JetReco/QA (default=3)')
     f4a.add_argument('--do-rcone', action='store_true', default=False, help='Enable random cone validation.')
     f4a.add_argument('--do-mult', type=int, default=None, choices=[0, 1], help='Enable multiplicity subtraction (default: 1 if --eta-calib-path is given, else 0).')

@@ -26,7 +26,6 @@
 
 #include <particleflowreco/ParticleFlowJetInput.h>
 
-#include <eventplaneinfo/EventPlaneReco.h>
 #include <eventplaneinfo/Eventplaneinfo.h>
 
 #include <fun4all/Fun4AllServer.h>
@@ -73,10 +72,9 @@ namespace HIJETS
   // do_flow = 3 --psi2 derived from sEPD
   int do_flow = 0;
 
-  ///! Configures event plane reco
-  std::string eventplane_node_input = "TOWERINFO_CALIB_SEPD";
+  ///! Event plane map read by the flow-modulated background (made by EventPlaneReco,
+  ///! registered by the calling macro, see EventPlane_Reco.C)
   std::string eventplane_node_output = "EventplaneinfoMap";
-  std::string eventplane_custom_calib = "default";
 
   ///! sets direct path to eta-shape calibration file (optional)
   std::string eta_calib_direct_path = "";
@@ -220,17 +218,8 @@ void HIJetRecoCommon()
   unsigned int verbosity = static_cast<unsigned int>(std::max(Enable::VERBOSITY, Enable::HIJETS_VERBOSITY));
   Fun4AllServer *se = Fun4AllServer::instance();
 
-  if (HIJETS::do_flow == 3)
-  {
-    EventPlaneReco *epreco = new EventPlaneReco();
-    if (HIJETS::eventplane_custom_calib != "default")
-    {
-      epreco->set_directURL_EventPlaneCalib(HIJETS::eventplane_custom_calib);
-    }
-    epreco->set_inputNode(HIJETS::eventplane_node_input);
-    epreco->set_EventPlaneInfoNodeName(HIJETS::eventplane_node_output);
-    se->registerSubsystem(epreco);
-  }
+  // do_flow == 3 (sEPD Psi_2) needs the event plane map: the calling macro registers
+  // EventPlaneReco (EventPlane_Reco.C) before HIJetReco()
 
   RetowerCEMC *rcemc = new RetowerCEMC();
   rcemc->Verbosity(verbosity);

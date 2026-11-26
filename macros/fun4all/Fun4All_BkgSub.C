@@ -48,6 +48,7 @@
 #include <treefiller/TreeFiller.h>
 
 #include "Calo_Calib.C"
+#include "EventPlane_Reco.C"
 #include "HIJetReco.C"
 #include "Provenance.C"
 
@@ -225,6 +226,12 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
     zs_urls[name] = path;
   }
 
+  // the Q vector calibration (sEPD event plane, do_flow == 3) must also match the run
+  if (do_flow == 3 && !CheckEventPlaneCalibRun(input_QVecCalib, runnumber))
+  {
+    return;
+  }
+
   std::cout << "########################" << std::endl;
   std::cout << "Run Parameters" << std::endl;
   if (is_overlay)
@@ -372,9 +379,14 @@ void Fun4All_BkgSub(const std::string &flist_dst_calofit = "DST_CALOFITTING_run3
   event_qa->Verbosity(Fun4AllBase::VERBOSITY_QUIET);
   se->registerSubsystem(event_qa);
 
+  // sEPD Event Plane (do_flow == 3: Psi_2 for the flow-modulated background)
+  if (do_flow == 3)
+  {
+    Process_EventPlane_Reco(input_QVecCalib);
+  }
+
   // Jet Reco
   // Enable::HIJETS_VERBOSITY = 10;
-  HIJETS::eventplane_custom_calib = input_QVecCalib;
   HIJETS::do_flow = do_flow;
   if (eta_calib_direct_path != "none" && !eta_calib_direct_path.empty())
   {
