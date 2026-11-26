@@ -29,6 +29,7 @@ def get_common_parser():
     parser.add_argument('--retry-memory-step', type=float, default=0.5, help='Memory in GB to add each time job is evicted for exceeding memory. Default: 0.5 GB. Set to 0 to disable.')
     parser.add_argument('--retry-memory-max', type=float, default=6.0, help='Ceiling / max memory in GB for automatic memory retries. Default: 6.0 GB.')
     parser.add_argument('--retry-request-memory', type=str, default=None, help='Explicit retry_request_memory setting (e.g. "1.0GB, 2.0GB, 4.0GB"). If None, stepped automatically from memory + retry_memory_step up to retry_memory_max.')
+    parser.add_argument('--priority', type=int, default=0, help='Condor job priority, passed as condor_submit -a "priority = N" (higher runs first among your jobs). Default: 0.')
     parser.add_argument('-m', '--max-retries', type=int, default=3, help='Max Condor job retries on failure. Default: 3.')
     parser.add_argument('-l', '--condor-log-dir', type=str, default='/tmp/anarde/dump', help='Condor Log Directory.')
     parser.add_argument('-e', '--email', type=str, default=None, help='Recipient email for job notifications.')

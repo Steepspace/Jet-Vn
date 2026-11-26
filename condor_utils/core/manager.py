@@ -553,9 +553,13 @@ class CondorJobManager:
         log_dir = self.condor_log_dir or (self.output_dir / 'logs')
         prep_cmd = f"rm -rf {log_dir} && mkdir -p {log_dir} && " if clean_log_dir else ""
 
+        # job priority (condor default 0): only passed when set
+        priority = getattr(self.args, 'priority', 0) or 0
+        priority_opt = f' -a "priority = {priority}"' if priority else ""
+
         for i, sf in enumerate(split_files):
             current_queue_arg = queue_arg.replace(list_file, sf.name)
-            base_cmd = f'{prep_cmd}cd {self.output_dir} && condor_submit {sub_file_name} -queue "{current_queue_arg}"'
+            base_cmd = f'{prep_cmd}cd {self.output_dir} && condor_submit {sub_file_name}{priority_opt} -queue "{current_queue_arg}"'
             if use_ssh:
                 target_node = ranked_nodes[i % len(ranked_nodes)]
                 command = f"ssh {target_node} '{base_cmd}'"
