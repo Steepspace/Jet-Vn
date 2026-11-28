@@ -2,7 +2,7 @@
 """
 Jet energy scale (JES) and resolution (JER) from the Jet-JES outputs, differential in the 4 eta bins of the legacy
 eta-dependent JES, to compare mid-rapidity with forward jets. --mode picks the sample:
-  overlay: data+MC overlay (embed_reboot, run 68145, Jet10 / Jet20) made with --do-flow 0 (iternf); the default
+  overlay: data+MC overlay (embed_reboot, run 72955, Jet10 / Jet20) made with --do-flow 0 (iternf); the default
   pp:      pure PYTHIA8 p+p MC (unsub / iternf); --pp is a shortcut
   hijing:  PYTHIA8 embedded in HIJING (iternf)
 
@@ -56,6 +56,9 @@ CALIBS = {
 # mid / forward: Jet-JES eta bins (legacy JES bins, truth eta) and the matching eta_regions label key
 REGIONS = {"mid": {"eta_bins": (1, 2), "key": "inside"}, "fwd": {"eta_bins": (0, 3), "key": "outside"}}
 N_ETA_BINS = 4
+# eta inclusive (all 4 bins, mid + fwd): fitted and written to jes_table.csv as region "incl" (for plot_jet_jes_compare.py),
+# not drawn in the mid / forward plots here
+INCL_REGION = {"incl": {"eta_bins": tuple(range(N_ETA_BINS)), "key": "all"}}
 
 # Truth-pT bins of the response fits, on the 2 GeV grid of the Jet-JES histograms
 PT_BINS = np.array([10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 46, 52, 60])
@@ -66,7 +69,7 @@ MIN_N_EFF = 50  # minimum effective entries for a fit
 XSEC_WIKI_RUN28 = {"Jet12": 1.4903e+06, "Jet20": 6.2623e+04, "Jet30": 2.5298e+03, "Jet40": 1.3553e+02}
 # run 31: the same factors for the pure PYTHIA8 (-nop) and the HIJING embedded (-embed -nobkg) samples
 XSEC_WIKI_RUN31 = {"Jet10": 3.997e+06, "Jet20": 6.218e+04, "Jet30": 2.502e+03}
-# overlay (embed_reboot, run 68145): Jet20 is the run-28 sample; the run-28 table has no 10 GeV sample, so Jet10 takes the run-31 Jet10 value
+# overlay (embed_reboot; runs 68145 and 72955 use the same MC samples): Jet20 is the run-28 sample; the run-28 table has no 10 GeV sample, so Jet10 takes the run-31 Jet10 value
 # (min-bias config, where the overlay one is HardQCD 10GeV_JS), which is 0.8% below the overlay's own PHGenIntegral cross section (4.031e6 pb)
 XSEC_WIKI_OVERLAY = {"Jet10": XSEC_WIKI_RUN31["Jet10"], "Jet20": XSEC_WIKI_RUN28["Jet20"]}
 
@@ -85,16 +88,19 @@ MODES = {
         "methods": ["iternf"],
         "sample_text": "Data + PYTHIA8 Overlay (Jet10–20)",
         "selection_text": NOFLOW_OVERLAY_TEXT,
-        "all_events_text": "All events in the trees (before Jet-JES selection)",
+        # the trees only hold events passing EventQA (|z| < 10 cm, MB, centrality < 80%); no calo-MBD cut or window yet
+        "all_events_text": r"Events with $|z| < 10$ cm, MB, centrality 0–80%",
         "truth_headroom": 1e6,  # y range above the truth-jet spectra, for the legend and text
         "weights": "wiki",
         "xsec_wiki": XSEC_WIKI_OVERLAY,
         "norm": {},
-        "run": 68145,
-        # Jet-JES windows Jet10 [10, 25), Jet20 [25, inf); trees from data segments 0-28 (EMCal sector lost from segment 28)
-        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-22-26-overlay-noflow/test.list",
-        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/11-22-26-overlay-68145-seg0-28/test.list",
-        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay_68145",
+        "run": 72955,
+        # Jet-JES windows Jet10 [10, 25), Jet20 [25, inf); all 10 000 OutDirs per sample (run 72955 has no lost EMCal sector).
+        # The previous sample, run 68145 segments 0-28: jetAna_JES/11-22-26-overlay-noflow, f4a_bkgsub/11-22-26-overlay-68145-seg0-28,
+        # plots/Jet-Ana/jes_overlay_68145
+        "input_list": "/sphenix/user/anarde/sEPD-Study/jetAna_JES/11-27-26-overlay-72955-noflow/test.list",
+        "gen_list": "/sphenix/user/anarde/sEPD-Study/f4a_bkgsub/11-27-26-overlay-72955/test.list",
+        "output_dir": "/sphenix/user/anarde/sEPD-Study/plots/Jet-Ana/jes_overlay_72955",
     },
     "pp": {
         "cent_classes": [(0, 100)],
@@ -808,12 +814,13 @@ def plot_eta_dist(hists, r_tag, ue, run, mode, pt_min, out_path, save_pdf):
 
 
 def fit_group(hists, r_tag, ue, mode, n_sigma):
-    """Fits per pT bin for every calib x (mid, fwd, eta0-3 in all classes; mid, fwd per centrality class if there are several)."""
+    """Fits per pT bin for every calib x (mid, fwd, incl, eta0-3 in all classes; mid, fwd, incl per centrality class if there are several)."""
     cent_all = mode["cent_all"]
-    selections = [(region, meta["eta_bins"], cent_all) for region, meta in REGIONS.items()]
+    regions = {**REGIONS, **INCL_REGION}
+    selections = [(region, meta["eta_bins"], cent_all) for region, meta in regions.items()]
     selections += [(f"eta{ieta}", (ieta,), cent_all) for ieta in range(N_ETA_BINS)]
     if len(mode["cent_classes"]) > 1:
-        selections += [(region, meta["eta_bins"], f"{lo}_{hi}") for lo, hi in mode["cent_classes"] for region, meta in REGIONS.items()]
+        selections += [(region, meta["eta_bins"], f"{lo}_{hi}") for lo, hi in mode["cent_classes"] for region, meta in regions.items()]
     results = {}
     for calib in CALIBS:
         for region, eta_bins, cent in selections:
@@ -1116,7 +1123,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="JES / JER from the Jet-JES outputs (data+MC overlay, p+p MC or HIJING embedded MC), mid-rapidity vs forward eta.")
     parser.add_argument("--mode", choices=list(MODES), default="overlay",
-                        help="Sample: overlay (run 68145 Jet10 / Jet20, --do-flow 0, iternf), pp (unsub / iternf), hijing (iternf). Default: overlay")
+                        help="Sample: overlay (run 72955 Jet10 / Jet20, --do-flow 0, iternf), pp (unsub / iternf), hijing (iternf). Default: overlay")
     parser.add_argument("--pp", action="store_true", help="Shortcut for --mode pp")
     parser.add_argument("-i", "--input-list", type=Path, help="List of merged Jet-JES ROOT files, one per sample (JetNN or jetNN in the path)"
                         f" (default {per_mode('input_list')})")

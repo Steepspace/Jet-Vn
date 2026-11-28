@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 Compares the jet energy scale (JES) and resolution (JER) of three samples, one set of plots per jet radius:
-  overlay: data + PYTHIA8 overlay made with --do-flow 0 (run 68145, Jet10 / Jet20, 0-60%)
+  overlay: data + PYTHIA8 overlay made with --do-flow 0 (run 72955, Jet10 / Jet20, 0-60%)
   hijing:  PYTHIA8 embedded in HIJING (run 31, 0-60%)
   pp:      pure PYTHIA8 p+p MC (run 28)
 All with the iterative no-flow subtraction (iternf; --ue).
 
 It reads the jes_table.csv written by plot_jet_jes_overlay.py for each sample (--mode overlay / hijing / pp), so it
 uses the same fits: JES = Gaussian mean of pT_reco / pT_truth, JER = sigma / mean, in truth-pT bins, raw pT and the stored
-pt_calib (eta-binned legacy JES), mid-rapidity and forward (legacy JES eta bins in truth eta). The ratio panels are each
-sample over the reference sample (--ref, default the p+p MC).
+pt_calib (eta-binned legacy JES), mid-rapidity, forward (legacy JES eta bins in truth eta) and eta inclusive (incl: mid + forward,
+the most statistics). The ratio panels are each sample over the reference sample (--ref, default the p+p MC).
 
 Per R (in <output>/r02 and <output>/r03):
-  jes_<calib>_<region>.png, jer_<calib>_<region>.png: the three samples, with the ratio to the reference
+  jes_<calib>_<region>.png, jer_<calib>_<region>.png: the three samples, with the ratio to the reference (region: mid, fwd, incl)
   jes_<calib>_fwd_over_mid.png: forward / mid JES of each sample, with the ratio to the reference
   jes_<calib>_<region>_cent.png: overlay vs HIJING in each centrality class, with p+p (all events) in every panel
 and a summary of the mean JES over --avg-range (inverse-variance weighted), printed and saved to jes_compare_summary.csv.
@@ -33,7 +33,7 @@ import mplhep as hep
 from plot_jet_bkgsub_compare import save_fig, setup_ratio_panel
 from plot_jet_noflow_compare import STYLES_WITH_UNSUB as METHODS
 from plot_jet_jes_z0_compare import eta_regions
-from plot_jet_jes_overlay import (MODES, RADII, CALIBS, REGIONS, PT_BINS, JES_YLABEL, JER_YLABEL, TRUTH_PT_LABEL, RECO_JET_TEXT,
+from plot_jet_jes_overlay import (MODES, RADII, CALIBS, REGIONS, INCL_REGION, PT_BINS, JES_YLABEL, JER_YLABEL, TRUTH_PT_LABEL, RECO_JET_TEXT,
                                   jer, field, draw_points, draw_ratio, set_jes_ylim, shade_low_pt, legend_after_band)
 
 # Samples: the plot_jet_jes_overlay.py mode whose output they are, and their style
@@ -45,6 +45,8 @@ SAMPLES = {
 OFFSETS = {"overlay": 0.0, "hijing": -0.35, "pp": 0.35}  # x offsets [GeV] so the error bars don't overlap
 FLOAT_COLUMNS = ["pt_lo", "pt_hi", "mu", "mu_err", "sigma", "sigma_err", "mean", "mean_err", "n_eff"]
 KINDS = {"jes": JES_YLABEL, "jer": JER_YLABEL}
+# mid, fwd and the eta-inclusive incl (mid + fwd) rows of jes_table.csv
+ALL_REGIONS = {**REGIONS, **INCL_REGION}
 
 
 def sample_label(sample, with_run=True):
@@ -165,7 +167,7 @@ def plot_cent_grid(tables, r_jet, ue, calib, region, pt_trust_min, out_path, sav
         ax.set_ylabel(JES_YLABEL, fontsize=14)
     axes[0, 0].legend(loc="lower right", frameon=False, fontsize=11)
     labels, _ = eta_regions(r_jet)
-    axes[0, 0].text(0.0, 1.01, f"{CALIBS[calib]['label']}, {labels[REGIONS[region]['key']]}", transform=axes[0, 0].transAxes,
+    axes[0, 0].text(0.0, 1.01, f"{CALIBS[calib]['label']}, {labels[ALL_REGIONS[region]['key']]}", transform=axes[0, 0].transAxes,
                     ha="left", va="bottom", fontsize=14)
     header(axes[0, 2], r_jet, ue)
     plt.subplots_adjust(left=0.07, right=0.98, bottom=0.08, top=0.95, wspace=0.05, hspace=0.05)
@@ -215,7 +217,7 @@ def main():
         labels, _ = eta_regions(r_jet)
         for calib in CALIBS:
             region_pts = {}
-            for region, meta in REGIONS.items():
+            for region, meta in ALL_REGIONS.items():
                 rows = {s: tables[s][(r_jet, args.ue, calib, region, cents[s])] for s in order}
                 info = [f"{CALIBS[calib]['label']}, {RECO_JET_TEXT}", rf"$\eta^{{\mathrm{{truth}}}}$: {labels[meta['key']]}"]
                 for kind, ylabel in KINDS.items():
@@ -237,11 +239,12 @@ def main():
 
             for s in order:
                 row = {"R": r_jet, "ue": args.ue, "calib": calib, "sample": s, "cent": cents[s]}
-                for name, pts in (("mid", region_pts["mid"][s]), ("fwd", region_pts["fwd"][s]), ("fwd_over_mid", fwd_mid[s])):
+                for name, pts in (("incl", region_pts["incl"][s]), ("mid", region_pts["mid"][s]), ("fwd", region_pts["fwd"][s]),
+                                  ("fwd_over_mid", fwd_mid[s])):
                     row[name], row[f"{name}_err"] = weighted_mean(pts, lo, hi)
                 # ratio to the reference: mean of the per-bin ratios (the ratio panels), not the ratio of the two means, which
                 # depends on how each sample's errors spread over pT (the response rises with pT)
-                for region in REGIONS:
+                for region in ALL_REGIONS:
                     if s == args.ref:
                         row[f"{region}_over_ref"], row[f"{region}_over_ref_err"] = 1.0, 0.0
                     else:
@@ -250,9 +253,9 @@ def main():
                 summary.append(row)
 
     print(f"\nMean JES ({args.ue}, truth pT {lo:g}-{hi:g} GeV, inverse-variance weighted); ratios to {ref_label} (mean of the per-bin ratios)")
-    print(f"{'R':<5}{'calib':<7}{'sample':<9}" + "".join(f"{k:>18}" for k in ("mid", "fwd", "fwd/mid", "mid/ref", "fwd/ref")))
+    print(f"{'R':<5}{'calib':<7}{'sample':<9}" + "".join(f"{k:>18}" for k in ("incl", "mid", "fwd", "fwd/mid", "incl/ref", "mid/ref", "fwd/ref")))
     for r in summary:
-        cells = [f"{r[k]:.4f} +- {r[f'{k}_err']:.4f}" for k in ("mid", "fwd", "fwd_over_mid", "mid_over_ref", "fwd_over_ref")]
+        cells = [f"{r[k]:.4f} +- {r[f'{k}_err']:.4f}" for k in ("incl", "mid", "fwd", "fwd_over_mid", "incl_over_ref", "mid_over_ref", "fwd_over_ref")]
         print(f"{r['R']:<5g}{r['calib']:<7}{r['sample']:<9}" + "".join(f"{c:>18}" for c in cells))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     table_path = args.output_dir / "jes_compare_summary.csv"
